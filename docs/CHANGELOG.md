@@ -5,6 +5,82 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.12.0] — 2026-09-11 — OD23, OD24, OD25 KAPATILDI (mimari karar; kod yok)
+
+Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:
+`git status` yalnızca `.md` gösterir).
+
+### Kapatılan kararlar
+
+- **OD23 — Denetim kaydında platform aktörü.** `actor_kind` **zorunlu** ve kapalı
+  küme (`tenant_user`, `platform_user`, `service`, `system`); `user_id` yalnızca
+  tenant kullanıcısı için; platform aktörü **FK'sız** `platform_actor_id` +
+  `actor_label` (snapshot) ile temsil edilir; `purpose` ve `access_grant_ref`
+  platform aktöründe **DB `CHECK` ile zorunlu** (gerekçesiz/onaysız platform erişimi
+  kayıt dışı kalamaz). `source`/`changed_fields` **eklenmez** (sadeleştirme);
+  `user` FK `SET_NULL` → **`PROTECT`** (append-only korunur). Kiracısız olaylar
+  `platform.audit_logs`'a gider.
+- **OD24 — Organizasyon ağacı DB modeli.** Adjacency list (`departments.parent_id`)
+  + **özyinelemeli CTE**; materialized path/nested set/closure **v1'de yok**.
+  Döngü ve derinlik (≤ 20) **veritabanı tetikleyicisiyle** engellenir; kiracı dışı
+  ilişki mevcut guard ile yasak; bir çalışanın **tek birincil yöneticisi** olur
+  (`employee_manager` + kısmi benzersizlik); **ağaç yetki mirası üretmez** (RBAC ayrı).
+  Ölçek değerlendirmesi ve geri dönüş tetikleyicileri yazıldı.
+- **OD25 — Tenant slug ve public ID prefix ilişkisi.** Yeni **immutable**
+  `tenants.public_id_prefix` (tam UNIQUE, soft-deleted tenant'ta bile yeniden
+  tahsis edilmez, DB tetikleyicisiyle değiştirilemez); `users.public_id` =
+  `<prefix>-<8×Crockford>` ve **immutable**; public ID **yetki sınırı değildir**,
+  kimlikle arama yapıldığında RLS aynen geçerlidir.
+
+### Yeni SECURITY FINDING
+
+- **F9 (Orta) — Denetim satırı `SET_NULL` ile güncellenebiliyor.** `AuditLog.user`
+  ilişkisi `SET_NULL`; kullanıcı silinirse denetim satırına UPDATE yazılır ve bu,
+  "denetim kaydı değiştirilemez" kuralıyla çelişir. Bugün fail-closed davranıyor
+  (uygulama rolünün UPDATE yetkisi yok → silme hata verir), ama yetki gevşetilirse
+  denetim geçmişi sessizce yeniden yazılır. Kapatma: `on_delete` → `PROTECT`
+  (OD23 kararı).
+
+### Yeni OPEN DECISION'lar
+
+- **OD27 — Kiracı içinde birden fazla tüzel şirket (`companies`).** v1'de olacak mı?
+  Öneri: v1 tek tüzel kişilik; `companies` ihtiyaç doğduğunda eklenir. **Kod
+  yazımından önce netleştirilmeli** (kapsam çözümleyiciyi etkiler).
+- **OD28 — Yeniden markalama sonrası `public_id_prefix` istisnası.** Öneri: v1'de
+  istisna yok; sözleşmesel zorunlulukta denetimli "prefix göçü" (mevcut public ID'ler
+  değişmez).
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/AUTHORIZATION.md` | OD23/OD24/OD25 **KAPALI** (karar, gerekçe, şema/migration etkisi, güvenlik etkisi, mevcut kodla çakışma, seçenekler); OD27 ve OD28 eklendi; durum ve özet sayıları (kapalı 11, açık 17) |
+| `docs/DATABASE.md` | `audit_logs` hedef alanları + **F9 notu**; `tenants.public_id_prefix` (B.3, M5, M27, F1, E); `audit_logs` indeks planı; **M20** (audit genişletme + `CHECK` + `PROTECT`) ve **M11** (döngü/derinlik tetikleyicileri, path/closure **yok**) güncellendi; M9 bağımlılığı (M10) düzeltildi; bölüm I'de OD23/24/25 kapalı + OD27/OD28 |
+| `docs/SECURITY.md` | §5.1'e **F9** bulgusu; §10 denetim bölümüne aktör modeli, platform aktörü kanıt zorunluluğu, `PROTECT` ve kiracısız olay kuralı |
+| `docs/ORGANIZATION.md` | **Baştan yazıldı**: hedef şema (v1) + kişisel veri ayrımı, hiyerarşi modeli (OD24), döngü/tutarlılık garantileri tablosu, kapsam ve rol görünürlüğü (güncel rol kodları), birincil yönetici ve ek ilişkiler, yaşam döngüsü (OD21), referans tasarımdan bilinçli farklar, OD27 notu |
+| `docs/ARCHITECTURE.md` | **K27, K28, K29** karar kayıtları |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Doğrulanan / doğrulanmayan
+
+- **Doğrulandı (kaynak okuma + ölçüm):** `apps/audit/models.py` (alanlar,
+  `SET_NULL`), `apps/audit/services.py` (`log_action` imzası, `tenant_id` zorunluluğu),
+  `apps/tenancy/models.py` (`slug` SlugField unique, `public_id_prefix` yok),
+  `hr.audit_logs` kısıtları (FK `NO ACTION`, uygulama rolünde yalnızca INSERT/SELECT),
+  `hr.tenants` kolonları (`slug`/`domain`/`status`/`deleted_at`), mevcut tam benzersiz
+  indeks listesi, `docs/ORGANIZATION.md` referans içeriği.
+- **Doğrulanmadı (kasıtlı):** hiçbir kod/migration/DB değişikliği yapılmadı; ağaç
+  performansı ve kapsam sorgu süreleri **ölçülmedi** (uygulama sonrası ölçülecek —
+  geri dönüş tetikleyicileri OD24'te tanımlı).
+
+### Kalan
+
+`docs/DATABASE.md` M10/M11 (org ağacı + döngü garantileri), M20 (audit genişletme),
+M5/M27 (prefix + public ID); M25–M28 (F7 kapatma). Açık kararlar: OD27 (v1 kapsamı
+için kritik), OD28, OD26.
+
+---
+
 ## [0.11.0] — 2026-09-11 — OD20, OD21, OD22 KAPATILDI (mimari karar; kod yok)
 
 Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:

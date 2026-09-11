@@ -219,6 +219,16 @@ olduğu için **iptal edildiği kanıtlanamaz**. Platform token'ları OD22 ile
 sınırlandırıldı; tenant tarafı **OD26** kararına bağlandı. Geriye dönük uyumlu ara
 adım: `revoked_at` eklemek (kapsam kararı ayrı) (T21).
 
+**F9 — Denetim satırı `SET_NULL` ile güncellenebiliyor (Orta, açık).** Ölçüm:
+`apps/audit/models.py` içinde `AuditLog.user` ilişkisi `on_delete=SET_NULL`'dır ve
+veritabanındaki FK `NO ACTION`'dır. `SET_NULL` davranışı kullanıcı silindiğinde
+denetim satırına **UPDATE** yazar; bu, "denetim kaydı değiştirilemez" kuralıyla
+çelişir. Bugün etki: uygulama rolünün `audit_logs` üzerinde UPDATE yetkisi
+olmadığı için kullanıcı silme **hata ile durur** (fail-closed, iyi); ancak yetki
+bir gün gevşetilirse denetim geçmişi sessizce yeniden yazılır. **Kapatma yolu
+(OD23 kararı):** `on_delete` → **`PROTECT`**; kullanıcılar zaten fiziksel olarak
+silinmez (OD21: soft delete).
+
 ---
 
 ## 6. Ayrıcalıklı erişim güvenliği (platform ve destek)
@@ -342,8 +352,20 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
   (kimlik doğrulama, yetki değişikliği, kullanıcı yaşam döngüsü, veri
   görüntüleme, veri değiştirme, onay/red, evrak işlemleri, platform erişimi,
   yapılandırma).
-- Eklenecek alanlar 🔜: `purpose` (gerekçe), `grant_id` (onay kaydı),
-  `changed_fields` (değer değil, alan adı), `access_scope`, `source`.
+- Eklenecek alanlar 🔜: `actor_kind` (`tenant_user`/`platform_user`/`service`/`system`,
+  **zorunlu**), `platform_actor_id` + `actor_label` (FK'sız referans + snapshot),
+  `access_grant_ref` (onay kaydı referansı), `purpose` (gerekçe) — OD23 (kapalı).
+  **Karar:** ayrı `source`/`changed_fields` kolonları eklenmez (`actor_kind` +
+  mevcut `changes` yeterlidir).
+- **Platform aktörü için zorunlu kanıt 🔜:** `actor_kind='platform_user'` olan her
+  satırda `purpose` ve `access_grant_ref` **zorunludur**; bu, veritabanı `CHECK`
+  kısıtıyla dayatılır → gerekçesiz/onaysız platform erişimi kayıt dışı kalamaz.
+- **Actor silinse bile kayıt anlamlı kalır:** platform aktörü tenant tablosuna FK
+  ile bağlanmaz; `actor_label` (genel kimlik + rol kodu) snapshot olarak saklanır.
+- **`user` FK davranışı `SET_NULL` → `PROTECT` 🔜 (F9):** denetim satırı hiçbir
+  durumda UPDATE edilmez; kullanıcı fiziksel olarak silinmez (OD21).
+- **Kiracısız olaylar** bu tabloya yazılmaz; platform/system olayları
+  `platform.audit_logs`'a gider (K22).
 - **Bütünlük 🔜:** kayıtlar zincirlenir (önceki kaydın özeti); zincir kırılırsa
   tespit edilir ❓OD13.
 - **Fail-closed 🔜:** güvenlik açısından kritik işlemlerde denetim kaydı

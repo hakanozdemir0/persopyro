@@ -1,95 +1,173 @@
 # Organizasyon Yapısı — Persopyro
 
-Şirket içi hiyerarşi ve çalışan yapısının modellenmesi. Mevcut veritabanı
-tasarımındaki `03_org_structure.sql` tabloları esas alınır.
+Şirket içi hiyerarşinin ve çalışan yapısının modellenmesi. Bu belge **hedef şemayı**
+tanımlar; bağlayıcı kararlar `docs/AUTHORIZATION.md` (OD5, OD24, OD27) ve
+`docs/DATABASE.md` (bölüm B.4, M10–M13) içindedir.
 
-## 1. Nesne hiyerarşisi
+**İşaretler:** ✅ mevcut ve doğrulandı · 🔜 tasarlandı, uygulanmadı · ❓ OPEN DECISION
+
+**Kapsam notu:** `~/hrsaas_db/` referans tasarımı (13 SQL dosyası, ~90 tablo) girdi
+olarak kullanılmıştır ama **birebir uygulanmaz**. Aşağıdaki "Referans tasarımdan
+farklar" bölümü hangi tabloların v1 kapsamına girmediğini açıkça listeler.
+
+---
+
+## 1. Nesne hiyerarşisi (v1)
 
 ```
-tenant (kiracı = müşteri şirket)
-└── company (tüzel kişilik / şirket kaydı)
-    └── department (departman, hiyerarşik: parent_id)
-        └── position (pozisyon / kadro)
-            └── employee (çalışan)
-                ├── employment_history (görev/ücret/pozisyon geçmişi)
-                └── emergency_contacts (acil durum kişileri)
+tenant (kiracı = müşteri şirket)                ← hr.tenants (canonical)
+└── department (birim ağacı, parent_id)         ← hr.departments
+    ├── position (unvan/kadro)                  ← hr.positions
+    └── employee (çalışan)                      ← hr.employees
+        ├── employee_personal_data (K2/K3)      ← ayrı tablo, maskeli/şifreli
+        └── employee_manager (yönetici ilişkisi) ← hr.employee_manager
 ```
 
-Ek yapılar:
+**Hiyerarşi iki katmanda ifade edilir:**
 
-- `work_schedules` — çalışma düzeni / vardiya şablonları
-- `projects` — çalışanların görevlendirildiği projeler
-
-## 2. Tablolar ve sorumlulukları
-
-| Tablo | Sorumluluk |
-|---|---|
-| `companies` | Kiracı içindeki şirket kaydı; tüzel unvan, vergi bilgisi, adres |
-| `departments` | Departman ağacı; `parent_id` ile hiyerarşi |
-| `positions` | Pozisyon/kadro tanımı; unvan ve seviye |
-| `employees` | Çalışan ana kaydı; kişisel bilgi, işe giriş, durum |
-| `employment_history` | Pozisyon, departman, ücret değişimlerinin tarihçesi |
-| `emergency_contacts` | Çalışanın acil durumda aranacak kişileri |
-| `work_schedules` | Haftalık çalışma düzeni ve vardiya şablonu |
-| `projects` | Proje kayıtları ve görevlendirmeler |
-
-`employees` tablosundaki `work_shift_type` enum'u vardiya tipini tanımlar.
-
-## 3. Kurallar
-
-1. Bir departman, kendi alt departmanı olamaz (döngü yasak). Departman
-   taşınırken döngü kontrolü zorunludur.
-2. Departman silinmeden önce içindeki çalışanların ve pozisyonların durumu
-   kontrol edilir; boş olmayan departman arşivlenir, silinmez.
-3. Tüm organizasyon kayıtları `tenant_id` taşır; kiracılar arası hiyerarşi
-   kurulamaz.
-4. Çalışan kaydı bir kiracıya ve bir şirkete aittir; kiracı değiştirilemez.
-5. Departman/pozisyon/ücret değişiklikleri geçmişe yazılır
-   (`employment_history`); geçmiş kaydı silinmez, düzeltme yeni kayıtla yapılır.
-6. Her departmanın en fazla bir sorumlusu olur; sorumlu ataması yetki gerektirir
-   ve audit log'a yazılır.
-7. Aynı çalışan numarası (employee number) bir kiracı içinde tekildir.
-8. Çalışan kaydı silinmez, durumu `inactive`/`archived` yapılır (soft delete).
-
-## 4. Çalışanın yaşam döngüsü
-
-| Durum | Anlamı | Yapılabilecekler |
+| Katman | Tablo | Ne anlatır |
 |---|---|---|
-| Aday (`candidates`) | İşe alım sürecinde | Mülakat, teklif |
-| İşe giriş (`employee` oluşur) | Aktif çalışan | İzin, vardiya, evrak, değerlendirme |
-| İzinli/ayrılış sürecinde | Askıda | Kısıtlı erişim |
-| Ayrıldı (`inactive`) | İlişki bitti | Kayıt arşivde, veri saklama politikası işler |
-| Arşiv (`archived`) | Uzun süreli saklama | Raporlama için okunabilir |
+| **Birim ağacı** | `departments.parent_id` | Organizasyon şeması (GM → Deputy GM → Departman → Alt departman) |
+| **Kişi zinciri** | `employee_manager` | Kim kime bağlı (çalışan → birincil yönetici; ikincil/delege ilişkiler) |
 
-Aday → çalışan geçişi, aday kaydını silmez; yeni çalışan kaydı adayla
-ilişkilendirilebilir. Bu geçiş audit log'a yazılır.
+Birim sorumlusu ayrıca `departments.manager_employee_id` ile tutulur (onay
+yönlendirmesi için); bu, `employee_manager` ile **aynı şey değildir** ve çift kayıt
+oluşturmaz (biri "birimin sorumlusu", diğeri "kim kime raporluyor").
 
-## 5. Vardiya ve çalışma düzeni
+## 2. Tablolar ve sorumluluklar (hedef, v1) 🔜
 
-- Çalışma düzeni (`work_schedules`) haftanın günleri, günlük süre ve vardiya
-  tipini tanımlar.
-- Vardiya tipleri: sabit gündüz, gece, dönüşümlü, esnek (tasarımda
-  `work_shift_type` enum'u ile modellenir).
-- Devam kayıtları (`attendance_records`, `attendance_events`) fiili çalışmayı
-  tutar; vardiya planı ile karşılaştırılarak gecikme/fazla mesai hesaplanır.
-- Vardiya değişikliği, etkilenen çalışanlara bildirilir ve audit log'a yazılır.
-- Fazla mesai ve izin, vardiya planıyla çakışma açısından kontrol edilir.
+| Tablo | Sorumluluk | Tenant izolasyonu |
+|---|---|---|
+| `departments` | Birim ağacı (`parent_id`), kod, ad, birim sorumlusu, durum | `tenant_id` + RLS + FORCE + guard (`parent_id`, `manager_employee_id`) |
+| `positions` | Unvan/kadro tanımı (kod, ad, seviye) | `tenant_id` + RLS + FORCE |
+| `employees` | Çalışanın **iş** kaydı (birim, unvan, giriş/çıkış, durum, çalışan no) | `tenant_id` + RLS + FORCE + guard (`department_id`, `position_id`, `user_id`) |
+| `employee_personal_data` | Kişisel veri (K2) ve özel nitelikli veri (K3, şifreli) — 1:1 | `tenant_id` + RLS + FORCE + guard |
+| `employee_manager` | Yönetici/raporlama ilişkisi (birincil/ikincil/delege, tarihli) | `tenant_id` + RLS + FORCE + guard |
+| `leave_*`, `approval_steps` | İzin ve onay akışı (birim/yönetici zincirini kullanır) | `tenant_id` + RLS + FORCE |
+| `shifts`, `shift_assignments`, `attendance_records` | Vardiya ve devam kaydı | `tenant_id` + RLS + FORCE |
+| `documents`, `document_access` | Evrak ve erişim politikası | `tenant_id` + RLS + FORCE |
 
-## 6. Organizasyon görünürlüğü ve yetki
+**Kişisel veri ayrımı (OD21 + AUTHORIZATION bölüm 7):** `employees` tablosu PII
+**içermez**; ad, iletişim, kimlik ve sağlık verisi `employee_personal_data` içinde
+tutulur. Böylece "kim bu birimde çalışıyor" sorusu (K0/K1) ile "bu kişinin TCKN'si
+ne" sorusu (K2/K3) **farklı izinlerle** yanıtlanır.
 
-- `employee` rolü yalnızca kendi kaydını ve kendi departmanının genel
-  bilgilerini görür.
-- `manager` rolü kendi departmanı (ve alt departmanları) kapsamındaki çalışanları
-  görür.
-- `hr_manager` ve `tenant_admin` kiracının tamamını görür.
-- Organizasyon şeması görüntülemesi (ağaç) kişisel veri içermez; yalnızca ad,
-  unvan, departman gösterilir.
+## 3. Hiyerarşi modeli — adjacency list + özyinelemeli CTE ✅ KARAR (OD24 kapalı)
 
-## 7. Çok şirketli kiracı durumu
+- **Model:** `departments.parent_id` ile **adjacency list**; ağaç **PostgreSQL
+  özyinelemeli CTE** (`WITH RECURSIVE`) ile çözülür.
+- **v1'de eklenmeyecek:** materialized path, nested set, closure tablosu.
+  Gerekçe: birim taşıma tek satırlık güncellemedir; türetilmiş yapıların bakımı ve
+  tutarsız kalma riski bu ölçekte gereksizdir.
+- **Sorgu deseni:** her zaman `(tenant_id, parent_id)` indeksiyle başlar; CTE
+  **derinlik sınırlıdır** (bozuk/veri dışı döngüye karşı son savunma).
+- **Önbellek:** bir kullanıcının kapsam sonucu (birim alt ağacı) DB cache'te kısa
+  TTL ile tutulur; birim taşıma veya yönetici değişiminde **geçersiz kılınır**.
+- **Geri dönüş tetikleyicileri:** derinlik > 20, kiracı başına birim > 5.000 veya
+  kapsam sorgusu p95 > 50 ms → closure tablosu ayrı bir kararla değerlendirilir.
 
-- Bir kiracı birden fazla tüzel şirket barındırabilir (`companies`).
-- Departman ve çalışan kayıtları şirketle ilişkilendirilir.
-- Şirketler arası veri görünürlüğü kiracı yöneticisi tarafından ayrıca
-  kısıtlanabilir; bu kısıt uygulama katmanında uygulanır ve varsayılan olarak
-  kapalıdır (yani tüm şirketler tenant_admin'e görünür, diğer roller yalnızca
-  kendi şirketini görür).
+## 4. Döngü ve tutarlılık kuralları (veritabanı garantileri)
+
+| Kural | Nasıl zorlanır |
+|---|---|
+| Departman kendi atası olamaz (derin döngü) | `BEFORE INSERT OR UPDATE` tetikleyicisi ata zincirini yürür ve döngüde **hata verir** (fail-closed); yürüyüş 20 adımla sınırlıdır |
+| Departman kendi ebeveyni olamaz | `CHECK (parent_id IS DISTINCT FROM id)` |
+| Çalışan kendisinin yöneticisi olamaz | `CHECK (employee_id <> manager_employee_id)` + `employee_manager` için döngü tetikleyicisi |
+| Kiracı dışı ilişki kurulamaz | Mevcut `hr.ensure_same_tenant_ref()` guard'ı (`parent_id`, `manager_employee_id`, `department_id`, `position_id`, `user_id`) |
+| Bir çalışanın **tek birincil** yöneticisi olur | Kısmi benzersiz indeks: `(employee_id) WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL` |
+| Maksimum derinlik | Tetikleyici + CTE sınırı: **20 seviye** |
+| Referans bütünlüğü | `employees.department_id` zorunlu (v1: her çalışan bir birimde); birim boşaltılmadan arşivlenmez |
+
+Döngü kontrolü **yalnızca uygulama katmanına bırakılmaz**: döngü, kapsam
+çözümlemesini bozarak yetki sınırlarını kaydırabileceği için veritabanında
+zorunludur. Uygulama katmanındaki kontrol **ikinci savunma**dır (daha anlaşılır hata
+mesajı için).
+
+## 5. Kapsam ve yetki
+
+- **Ağaç yetki mirası üretmez.** Bir üst birimin yöneticisi olmak, alt birimlerin
+  yetkilerini otomatik **vermez**; kapsam yalnızca *hangi kayıtları görebileceğini*
+  belirler. Yetki kararı **her zaman** RBAC'ten gelir (izin kodu + kapsam + koşul).
+- Kapsam kodları: `TENANT` (tüm kiracı), `UNIT` (kendi birimi ve alt ağacı),
+  `UNIT_DIRECT` (yalnızca kendi birimi), `ASSIGNED` (atanan kayıt), `SELF`.
+- Rol bazlı görünürlük (güncel rol kodlarıyla):
+
+| Rol | Organizasyon görünürlüğü |
+|---|---|
+| `tenant_admin` | Kiracının tamamı |
+| `tenant_officer` | Yetkilendirildiği modüller (şirket geneli, izin bazlı) |
+| `dept_manager` | Kendi birimi **ve alt birimleri** (kapsam: `UNIT`) ❓OD5 |
+| `employee` | Kendi kaydı + kendi biriminin **genel** bilgileri (ad, unvan, birim) |
+
+- Organizasyon şeması görünümü (ağaç) **kişisel veri içermez**: ad yerine **genel
+  kullanıcı kimliği** (OD2/OD25), unvan ve birim gösterilir.
+- Onay yönlendirmesi: `approval_steps` adımları ya bir **kişiye** (`approver_user_id`)
+  ya da bir **role/kapsama** (`approver_role_code` + `UNIT` kapsamı) bağlanır; onaylayan
+  kendi talebini onaylayamaz (`SEPARATE_ACTOR`).
+
+## 6. Birincil yönetici ve ek ilişkiler
+
+- `employee_manager.relation_type` ∈ {`primary`, `secondary`, `delegate`}.
+- **Birincil** yönetici zorunlu değildir (ör. genel müdürün yöneticisi yoktur) ama
+  varsa **tektir** (kısmi benzersizlik).
+- İlişkiler tarihlidir (`effective_from`/`effective_to`): yönetici değişikliği eski
+  satırı **kapatır**, yenisini açar → geçmiş korunur (OD21).
+- Yetki devri (delege) ayrı bir türdür ve **sürelidir**; süre bitince ilişki
+  kendiliğinden geçersiz olur.
+- Yönetici ataması **yetki etkisi taşıdığı için** denetim kaydına yazılır.
+
+## 7. Çalışanın yaşam döngüsü
+
+| Durum | Anlamı | Silme davranışı |
+|---|---|---|
+| Aktif (`active`) | Çalışıyor | — |
+| Askıda (`suspended`) | İzinli/ayrılış sürecinde, kısıtlı erişim | — |
+| Ayrıldı (`terminated`) | İlişki bitti (`termination_date` dolu) | Kayıt **arşivde**, kişisel veri saklama politikasına tabi |
+| Arşiv (`archived`) | Uzun süreli saklama, raporlama için okunabilir | — |
+
+Kurallar (OD21): çalışan kaydı **fiziksel silinmez**; `deleted_at` + `status`
+kullanılır. Soft-delete edilmiş kaydın yeniden açılması açık bir `*.restore` izni ve
+denetim kaydı gerektirir (**sessiz yeniden etkinleştirme yasak**). Benzersizlikler
+kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`.
+
+## 8. Vardiya, devam ve evrak (hedef şema)
+
+- `shifts` + `shift_assignments`: vardiya tanımı ve ataması (kapsam: `UNIT`).
+- `attendance_records`: fiili çalışma; düzeltmeler **gerekçeli** ve onaylı
+  (`attendance.correct.approve`), her düzeltme denetim kaydına yazılır.
+- `documents` + `document_access`: evrak sınıflandırması (`classification`) ve
+  **"kişisel veri içeriyor mu?"** işareti (`contains_personal_data`) zorunludur;
+  "emin değilim" = **en kısıtlayıcı** politika (AUTHORIZATION bölüm 9).
+- "Birim ağacının yetki mirası üretmemesi" bu modüllerde de geçerlidir: vardiya/evrak
+  yetkisi izin kodundan gelir, unvandan değil.
+
+## 9. Çok şirketli kiracı durumu ❓OD27
+
+Referans tasarım bir kiracı içinde **birden fazla tüzel kişilik** (`companies`)
+öngörüyor. OD24 v1 kapsamı bunu **dışarıda bıraktı**; OD27 açık: v1'de tek tüzel
+kişilik (kiracı = şirket) varsayılır, `companies` ihtiyaç doğduğunda eklenir
+(nullable `company_id` → backfill → zorunlu sırasıyla, geri dönüşü kolay).
+
+**Karar verilmeden `companies` tablosu yazılmaz.** Kapsam çözümleyici bu karara
+bağlıdır (`TENANT`/`UNIT` yeterli mi, yoksa `COMPANY` kapsamı da gerekli mi).
+
+## 10. Referans tasarımdan farklar (bilinçli)
+
+| Referans tasarım | v1 kararı | Gerekçe |
+|---|---|---|
+| `companies` (çok tüzel kişilik) | ❓OD27 — v1'de yok | KOBİ hedefi; kapsam çözümlemesini sadeleştirir |
+| `employment_history` | v1'de yok; geçmiş `employee_manager` tarihleri + denetim kaydıyla tutulur | Ayrı tarihçe tablosu, henüz tanımlı olmayan raporlama ihtiyacı için erken maliyet |
+| `emergency_contacts` | v1'de `employee_personal_data` kapsamında değerlendirilir (ayrı tablo ertelendi) | K2 sınıfı; erişim politikası aynı |
+| `work_schedules` | v1'de `shifts` ile karşılanır | Aynı işlevin iki tabloya bölünmesi gereksiz |
+| `projects` | v1 kapsamı dışında | Yetkilendirme modelini etkilemiyor |
+| Enum tipleri (16 adet) | `CHECK` kısıtlı metin alanları (Django `TextChoices`) | Taşıma ve raporlama kolaylığı (ARCHITECTURE 5.4) |
+| Departman hiyerarşisi için nested set/materialized path önerileri | **Adjacency list + recursive CTE** (OD24) | Bakımı en sade, bozulma riski en düşük |
+
+## 11. Açık noktalar
+
+| # | Konu | Durum |
+|---|---|---|
+| **OD5** | Departman yöneticisinin kapsamı: alt ağaç mı, yalnızca doğrudan birim mi? | Açık (öneri: alt ağaç) |
+| **OD27** | Kiracı içinde birden fazla tüzel şirket (`companies`) | Açık — v1 kapsamını belirler |
+| **OD24** | Ağaç mekanizması ve döngü garantileri | **Kapalı** (2026-09-11) |
+| — | Organizasyon ağacı için gerçek ölçüm (derinlik, birim sayısı, kapsam sorgu süresi) | Uygulama sonrası ölçülecek (geri dönüş tetikleyicileri bölüm 3'te) |

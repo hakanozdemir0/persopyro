@@ -839,8 +839,8 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1, OD2, OD3, OD4, OD19, OD20, OD21 ve OD22 KAPATILDI.**
-Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
+**Durum (2026-09-11):** **OD1–OD4 ve OD19–OD25 KAPATILDI** (11 karar). Kararlar
+aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
 
@@ -1237,38 +1237,152 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   → **(A) seçildi; (B) mevcut RLS/FK varsayımlarını zayıflattığı için reddedildi;
   (C) servis entegrasyonları için yetersiz.**
 
-### OD23 — Denetim kaydında platform aktörünün temsili 🆕
+### OD23 — Denetim kaydında platform aktörünün temsili — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** `hr.audit_logs.user_id → users.id` (kiracı kullanıcısı). Platform
-  kullanıcısı bu tabloda yoktur; ama platform erişiminin kiracı akışına da
-  yazılması gerekiyor (şeffaflık, K22).
-- **Seçenekler:** (A) `user_id` NULL + `actor_kind` (`tenant_user`/`platform_user`/
-  `system`) + `actor_public_id`. (B) Ayrı `hr.platform_actor` tablosu ve FK.
-  (C) Platform erişimini yalnızca platform akışına yaz.
-- **Öneri:** (A). (C) şeffaflık şartını karşılamaz; (B) gereksiz karmaşıklık.
-- **Etki:** `docs/DATABASE.md` B.3/M20/F8, `docs/SECURITY.md` bölüm 10.
+- **KARAR:**
+  1. `hr.audit_logs.actor_kind` **zorunlu** ve **kapalı küme**: `tenant_user`,
+     `platform_user`, `service`, `system` (`NOT NULL DEFAULT 'tenant_user'` + DB `CHECK`).
+  2. `user_id` (mevcut `user` FK) **yalnızca `tenant_user`** için kullanılır; diğer
+     aktör türlerinde **NULL** kalır.
+  3. Platform aktörü için **tenant tablosuna FK kurulmaz**: `platform_actor_id uuid`
+     (FK'sız) + `actor_label` (snapshot: genel kimlik + rol kodu) tutulur. Böylece
+     tenant yazma yolu platform şemasına **sıkı bağlanmaz** ve aktör silinse/yeniden
+     adlandırılsa bile kayıt anlamlı kalır.
+  4. Platform erişimli her olayda zorunlu alanlar: `actor_kind='platform_user'`,
+     `platform_actor_id`, `actor_label`, **`access_grant_ref`** (onay kaydı
+     referansı, FK'sız), **`purpose`** (gerekçe), `tenant_id` (**hedef kiracı**),
+     `action`, `created_at`. DB kısıtı:
+     `CHECK (actor_kind <> 'platform_user' OR (purpose IS NOT NULL AND access_grant_ref IS NOT NULL))`
+     → onaysız/gerekçesiz platform erişimi **kayıt dışı kalamaz**.
+  5. **Sadeleştirme:** ayrı `source` ve `changed_fields` kolonları **eklenmez**;
+     aktör türü `actor_kind` içinde, alan düzeyi bilgi mevcut `changes` (jsonb,
+     maskeli) içinde yaşar.
+  6. **Append-only korunur:** `AuditLog.user` ilişkisi `SET_NULL` yerine **`PROTECT`**
+     olur (denetim satırı hiçbir durumda güncellenmez; kullanıcı fiziksel silinmez — OD21).
+  7. **Kiracısız olaylar bu tabloya yazılmaz**; onların evi `platform.audit_logs`'tur
+     (K22). `service`/`system` aktörleri, **kiracı verisini değiştiren otomasyon**
+     için tenant akışında kullanılır (ör. kuyruk işi).
+- **Gerekçe:** Tek tabloda hem kiracı kullanıcısını hem kontrollü platform erişimini
+  izlemek gerekir; ancak platform şemasına FK, tenant yazma yolunu kırılgan yapar ve
+  aktör silindiğinde kaydı anlamsızlaştırır. FK'sız referans + snapshot etiket +
+  DB `CHECK`, kaydı hem **bağımsız** hem **kanıtlanabilir** kılar.
+- **Şema/migration etkisi:** `hr.audit_logs`'a `actor_kind` (NOT NULL, default),
+  `platform_actor_id`, `actor_label`, `access_grant_ref`, `purpose` kolonları +
+  1 `CHECK` kısıtı; `user_id` FK davranışı `SET_NULL` → `PROTECT` (yeni migration;
+  uygulanmış migration'lar değiştirilmez). M20 güncellenir; F8 geri doldurma:
+  mevcut satırlar `actor_kind='tenant_user'` (user_id doluysa) / `'system'`.
+- **Güvenlik etkisi:** Platform erişiminin **gerekçe + onay referansı olmadan**
+  kaydedilmesi veritabanı seviyesinde imkânsızlaşır (T12/T15 savunması); denetim
+  satırının UPDATE edilmesi yolunu kapatan `PROTECT` kararı **F9** bulgusunu kapatır.
+- **Mevcut kodla çakışma:** `apps/audit/models.py` yalnızca `tenant/user/action/...`
+  taşır; `platform_actor_id`/`purpose`/`grant` alanları **yok**; `user` ilişkisi
+  `SET_NULL` (append-only ile çelişki → bulgu **F9**). `log_action(...)` imzası yeni
+  alanları alacak şekilde genişletilecek (kod yazılmadı).
+- **Seçenekler (kayıt için):** (A) `user_id` NULL + `actor_kind` + FK'sız platform
+  referansı. (B) Ayrı `hr.platform_actor` tablosu + FK. (C) Yalnızca platform
+  akışına yaz. → **(A) seçildi** (kullanıcının önerisiyle uyumlu; (B) tenant↔platform
+  sıkı bağı kurar, (C) şeffaflık şartını karşılamaz).
 
-### OD24 — Organizasyon ağacı mekanizması 🆕
+### OD24 — Organizasyon ağacı DB modeli — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** `UNIT` kapsamı (departman ve alt birimleri) her istekte
-  çözülecek; mekanizma seçimi hem güvenliği (kapsam doğruluğu) hem performansı
-  belirler. OD5 (kapsamın alt ağaç mı, doğrudan birim mi olduğu) hâlâ açık.
-- **Seçenekler:** (A) `parent_id` + özyinelemeli CTE. (B) Materialized path
-  (`path` kolonu, `text_pattern_ops` indeks). (C) Closure tablosu.
-- **Öneri:** (A) ile başla; ölçülen yavaşlama veya ağaç derinliği > 6 olduğunda
-  (C)'ye geç. Gerekçe: erken optimizasyon yerine ölçüm.
-- **Etki:** `docs/DATABASE.md` M11/E/H9; kapsam çözümleyicisi.
+- **KARAR:**
+  1. **Temel kaynak (v1):** `hr.departments` (birim ağacı, `parent_id` ile
+     **adjacency list**), `hr.positions`, `hr.employees`, `hr.employee_manager`
+     (kişi bazlı yönetici/raporlama ilişkisi).
+  2. **Hiyerarşi çözümü:** yalnızca **özyinelemeli CTE** (PostgreSQL `WITH RECURSIVE`).
+     **Materialized path, nested set ve closure table v1'de EKLENMEZ.**
+  3. **Kapsam kullanımı:** birim ağacı `UNIT` kapsamını (birim + alt birimler)
+     hesaplar; `employee_manager` kişi bazlı zinciri (kendi ekibi, birincil yönetici)
+     verir. **Ağaç yetki mirası üretmez** — RBAC ayrı kalır; ağaç yalnızca
+     **yönetim/scope hesaplaması** için kullanılır.
+  4. **Birincil yönetici:** tek kaynak `hr.employee_manager`; `relation_type`
+     (`primary` | `secondary` | `delegate`) + kısmi benzersiz indeks
+     (`WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL`)
+     → çalışanın **tek birincil** yöneticisi olur, ikincil/tarihsel ilişkiler açıktır.
+     `hr.departments.manager_employee_id` ise **birim sorumlusudur** (onay
+     yönlendirmesi); ikisi farklı anlam taşır, çift kayıt oluşturmaz.
+  5. **Döngü yasağı (DB garantisi):** `CHECK (parent_id IS DISTINCT FROM id)` +
+     `BEFORE INSERT OR UPDATE` tetikleyicisi, aynı kiracı içinde ata zincirini
+     yürüyerek (derinlik sınırı 20) döngüyü **hata ile reddeder**; `employee_manager`
+     için `CHECK (employee_id <> manager_employee_id)` + aynı tetikleyici deseni.
+     Çözümleyici CTE'ler de **derinlik sınırlı** yazılır (bozuk veriye karşı son savunma).
+  6. **Kiracı sınırı:** `parent_id`, `manager_employee_id`, `department_id` vb. her
+     kiracı-içi FK mevcut `ensure_same_tenant_ref` guard'ına bağlanır (tenant dışı
+     ilişki yasak).
+  7. **Derinlik sınırı:** varsayılan en fazla **20 seviye** (tetikleyici + CTE
+     sınırı); bu sınıra yaklaşan ağaçlar raporlanır.
+  8. **Performans:** sorgular `(tenant_id, parent_id)` indeksiyle çalışır; kapsam
+     sonucu DB cache'te (K17) **kısa TTL** ile tutulur ve organizasyon değişiminde
+     (birim taşıma, yönetici değişimi) **geçersiz kılınır**.
+- **Gerekçe (ölçek/bakım değerlendirmesi):** Kiracı başına birim sayısı KOBİ–orta
+  ölçekte binlerle, derinlik tek haneli/20 ile sınırlıdır; bu ölçekte özyinelemeli CTE
+  milisaniye düzeyinde kalır. Adjacency list **en sade ve en az bozulan** modeldir
+  (taşıma = tek satır `parent_id` güncellemesi; path/closure bakımı ve tutarsızlık
+  riski yoktur). Erken optimizasyon yerine ölçüm: **geri dönüş tetikleyicileri**
+  aşağıdadır.
+- **Fikri değiştirme tetikleyicileri:** (a) derinlik > 20 veya kiracı başına birim
+  > 5.000, (b) kapsam sorgusu p95 > 50 ms (ölçüm), (c) kapsam çözümü istek başına
+  birden çok kez ve toplu (N+1) yapılıyor. Bunlardan biri gerçekleşirse closure
+  tablosu (C) değerlendirilir.
+- **Şema/migration etkisi:** `departments`/`employee_manager` tabloları + RLS + guard
+  + kısmi benzersizlik + **döngü önleme tetikleyicileri**; `path`/closure kolonu
+  **eklenmez**. M10/M11 güncellenir.
+- **Güvenlik etkisi:** Döngü, kapsam çözümlemesini sonsuz döngüye/Kaynak tüketimine
+  sokabilir ve **yetki kapsamını bozabilir**; bu yüzden döngü engeli yalnızca
+  uygulama katmanında değil **veritabanında** zorunludur (fail-closed). Ağacın yetki
+  mirası üretmemesi, "yönetici oldum → üst birimin yetkilerini aldım" yanılgısını
+  baştan engeller (RBAC ayrı).
+- **Mevcut kodla çıkışma:** `departments`/`employees`/`employee_manager` modelleri
+  **henüz yok** (hedef şema, `docs/DATABASE.md` B.4) → çakışma yok. `docs/ORGANIZATION.md`
+  referans tasarımı (companies, employment_history, nested set vb.) bu kararla
+  hizalanacak şekilde güncellendi.
+- **Seçenekler (kayıt için):** (A) `parent_id` + özyinelemeli CTE. (B) Materialized
+  path. (C) Closure tablosu. → **(A) seçildi** (kullanıcının önerisiyle uyumlu);
+  (B)/(C) v1 için gereksiz karmaşıklık, tetikleyicilerle ertelendi.
 
-### OD25 — Kiracı `slug` değişince genel kimlik ön eki 🆕
+### OD25 — Tenant slug ve public user ID prefix ilişkisi — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** OD2 biçimi kiracı slug'ını ön ek olarak kullanır; slug tekil ve
-  güncellenebilir bir alandır.
-- **Seçenekler:** (A) Ön ek sabit kalır (kimlik değişmez; eski ön ek görülebilir).
-  (B) Slug değişince tüm kimlikler yeniden üretilir. (C) Ön ek yerine kiracı
-  kimliğinin kısa özeti kullanılır.
-- **Öneri:** (A). Gerekçe: kimlik **değişmez** olmalıdır (denetim izi ve dış
-  referanslar kopmasın); (B) denetim bütünlüğünü bozar.
-- **Etki:** `docs/DATABASE.md` B.3/F1; kiracı yeniden adlandırma akışı.
+- **KARAR:**
+  1. Public ID ön eki **canlı `slug` değerine bağlı değildir**: `hr.tenants`'a
+     **immutable `public_id_prefix`** kolonu eklenir ve kiracı oluşturulurken bir kez
+     üretilip sabitlenir.
+  2. Biçim: `public_id_prefix` ∈ `[a-z0-9]`, 3–20 karakter (slug'tan türetilir,
+     uygunsa kısaltılır) + çakışma halinde kısa rastgele sonek. **Tenant başına
+     benzersiz** ve **tekrar kullanılamaz** (tam `UNIQUE`, kısmi değil).
+  3. `users.public_id` = `<public_id_prefix>-<8×Crockford Base32>` ve **immutable**;
+     slug sonradan değişse bile mevcut public ID'ler **değişmez** (yeni kullanıcılar
+     yeni slug'ı değil, yine **sabit prefix**i kullanır).
+  4. **Soft-deleted tenant'ın prefix'i yeniden tahsis edilmez** (tam UNIQUE; OD21'in
+     "kalıcı rezerve" istisnasıyla aynı çizgi).
+  5. **Kullanıcı tarafından keyfi değiştirilemez:** prefix'i değiştiren bir uç nokta
+     yoktur; `BEFORE UPDATE` tetikleyicisi prefix değişimini **hata ile reddeder**
+     (değişmezlik DB'de zorlanır, yalnızca uygulama disiplinine bırakılmaz).
+  6. **Public ID bir güvenlik sınırı değildir:** authorization/erişim kararı için
+     **kullanılmaz**; yalnızca kişisel veriyi gizleyen bir **referanstır**. Kimlikle
+     kayıt arama yapıldığında **kiracı izolasyonu + RLS** aynen geçerlidir (bir
+     kiracı, başka kiracının prefix'iyle bile satır göremez).
+- **Gerekçe:** Slug, işletme gereği değişebilen bir alandır; public ID'yi slug'a
+  bağlamak, kimliğin (ve denetim izinin) slug her değiştiğinde kayması anlamına
+  gelir. Sabit prefix + immutable public ID, dış referansları (destek talepleri,
+  entegrasyonlar, denetim kayıtları) kırar ve "eski ID hangi kiracıya aitti?"
+  sorusunu yanıtsız bırakır.
+- **Şema/migration etkisi:** `hr.tenants.public_id_prefix varchar(20) NOT NULL UNIQUE`
+  (nullable eklenir → geri doldurulur → NOT NULL) + değişmezlik tetikleyicisi;
+  `users.public_id` üretimi **registry/slug'dan değil**, kiracının
+  `public_id_prefix`'inden beslenir. M5/M27 ve F1 güncellenir; mevcut tek kiracı
+  (`demo`) için geri doldurma değeri `demo`.
+- **Güvenlik etkisi:** Kimlik, kimlik doğrulama ya da yetkilendirme girdisi
+  **değildir**; yalnızca gösterim/referans katmanıdır → numaralandırma saldırısı
+  yetki kazandırmaz. Immutability, denetim kaydı ile kullanıcı kaydı arasındaki
+  bağın kopmamasını sağlar (F7/OD13 ile aynı çizgi).
+- **Mevcut kodla çakışma:** `Tenant.slug` `SlugField(unique=True)` olarak var;
+  `public_id_prefix` **yok**; `users.public_id` **yok** → çakışma yok, ekleme
+  gerekiyor. `apps/tenancy/models.py` içinde prefix üretimi/değişmezliği **kod
+  yazılmadı**; karar M5/M27'ye işlendi.
+- **Seçenekler (kayıt için):** (A) Sabit, immutable prefix kolonu. (B) Ön eki canlı
+  slug'dan türet. (C) Ön ek yerine kiracı kimliğinin kısa özeti. → **(A) seçildi**;
+  (B) kimlik kayması nedeniyle reddedildi; (C) insan tarafından okunabilirliği
+  kaybettirdiği için reddedildi.
 
 ### OD26 — Tenant API token modelinin hizalanması (kapsam ve iptal izi) 🆕
 
@@ -1288,6 +1402,38 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
 - **Karar beklenmeden yapılacak:** yalnızca `revoked_at` (B alt kümesi) eklenmesi
   geriye dönük uyumludur ve denetim izini geri kazandırır; **kapsam (A)** karar
   gerektirir.
+
+### OD27 — Kiracı içinde birden fazla tüzel şirket (`companies`) 🆕
+
+- **Neden açık:** `docs/ORGANIZATION.md` referans tasarımı bir kiracı içinde birden
+  çok tüzel kişilik (`companies`) öngörüyor; OD24 v1 temel kaynağı yalnızca
+  `departments`/`positions`/`employees`/`employee_manager` olarak kabul etti ve
+  `companies` (ve `employment_history`) **bu turun dışında bırakıldı**. Kapsam
+  belirsizliği: departman ve çalışanlar hangi tüzel kişiliğe ait olacak, raporlama
+  ve kapsam hangi seviyede kısıtlanacak?
+- **Seçenekler:** (A) v1 **tek tüzel kişilik** varsayar (kiracı = şirket); `companies`
+  tablosu eklenmez, ihtiyaç doğduğunda eklenir. (B) `companies` v1'de eklenir;
+  `departments.company_id` ve `employees.company_id` zorunlu olur. (C) v1'de
+  opsiyonel `company_id` (nullable) eklenir, kısıt uygulanmaz.
+- **Öneri:** (A). Gerekçe: hedef kitle KOBİ; tek tüzel kişilik en sade modeldir ve
+  kapsam çözümlemesini (UNIT/TENANT) karmaşıklaştırmaz. (B) sonradan eklenebilir
+  (nullable → backfill → zorunlu), geri dönüşü kolaydır.
+- **Etki:** `docs/DATABASE.md` (B.4, M10–M13), `docs/ORGANIZATION.md` bölüm 7,
+  kapsam çözümleyici. **Karar verilmeden `companies` tablosu yazılmaz.**
+
+### OD28 — Tenant yeniden markalama ve `public_id_prefix` istisnası 🆕
+
+- **Neden açık:** OD25 prefix'i **kalıcı ve değişmez** kıldı; ancak gerçek hayatta
+  şirket birleşmesi/unvan değişikliği gibi durumlarda prefix'in değişmesi talep
+  edilebilir. Mevcut kararda **istisna prosedürü tanımlı değildir**.
+- **Seçenekler:** (A) İstisna yok: prefix v1'de asla değişmez (yalnızca `slug` ve
+  görünen ad değişir). (B) Platform tarafından yürütülen, denetlenen ve nadir bir
+  "prefix göçü" işlemi: yeni prefix tahsis edilir, **mevcut public ID'ler değişmez**,
+  eski prefix kalıcı olarak rezerve kalır. (C) Yeniden üretim: tüm public ID'ler
+  değişir (reddedildi — denetim izini ve dış referansları kırar).
+- **Öneri:** (A) v1 için; (B) yalnızca sözleşmesel zorunluluk doğarsa, ayrı bir
+  kararla ve kayıtlı bir prosedürle.
+- **Etki:** `docs/DATABASE.md` (M27, F1), destek/dış referans süreçleri.
 
 ---
 
@@ -1309,9 +1455,8 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **Karar durumu:** **OD1–OD4, OD19, OD20, OD21, OD22 KAPATILDI** (2026-09-11).
-  Açık: **18 karar** (OD5–OD18, OD23–OD26). **Engelleyici açık karar yoktur**;
-  OD17 (çift onayın uygulanabilirliği), **OD26** (tenant token kapsamı) ve OD23
-  (denetimde platform aktörü) uygulama sırasında öncelikli netleştirilmelidir.
-  Açık **SECURITY FINDING**: F7 (soft-delete yetkiyi kaldırmıyor) — OD21 kararı
-  uygulanarak kapatılır.
+- **Karar durumu:** **OD1–OD4 ve OD19–OD25 KAPATILDI** (2026-09-11). Açık:
+  **17 karar** (OD5–OD18, OD26–OD28). **Engelleyici açık karar yoktur**; OD27
+  (tüzel kişilik/`companies`) v1 kapsamını belirlediği için **kod yazımından önce**
+  netleştirilmelidir. Açık **SECURITY FINDING**'ler: F7 (soft-delete yetkiyi
+  kaldırmıyor) ve F9 (denetim satırı `SET_NULL` ile güncellenebiliyor).
