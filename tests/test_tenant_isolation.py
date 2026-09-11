@@ -66,7 +66,7 @@ def _kiracıya_bagli_tablolar() -> set[str]:
     haric_modeller = {"ApiToken"}
     tablolar: set[str] = set()
     for model in apps.get_models():
-        if model._meta.app_label not in {"tenancy", "accounts", "rbac", "audit"}:
+        if model._meta.app_label not in {"tenancy", "accounts", "rbac", "audit", "organization"}:
             continue
         if model.__name__ in haric_modeller:
             continue

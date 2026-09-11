@@ -168,6 +168,13 @@ sql_deger() {  # sql_deger <dbname> <sql>
     PGPASSWORD="$OWNER_PASS" "${PSQL_ROOT[@]}" -d "$1" -tAc "$2"
 }
 
+# `hr.*` FORCE RLS'tir: kiracı verisi okuyan ölçümler önce bağlam kurmalı (tek işlemde).
+sql_demo() {  # sql_demo <sql>  — demo kiracısı bağlamında çalıştırır
+    sql_deger "$FRESH_DB" \
+        "SELECT set_config('app.tenant_id', (SELECT tenant_id::text FROM hr.tenant_directory WHERE slug='demo'), true); $1" |
+        tail -1
+}
+
 kontrol_metni() {  # kontrol_metni <açıklama> <çıktı> <beklenen parça>
     case "$2" in
         *"$3"*) bilgi "OK   $1" ;;
@@ -337,14 +344,6 @@ django_owner manage.py shell < scripts/_demo_data.py | tail -1
 
 adim "6b/8 M7-M9 tenant RBAC scope durumu (hedef rol seti, kapsam tipleri, guard)"
 if [ "$(tablo_var "$FRESH_DB" "hr.roles")" = "$VAR" ]; then
-    # `hr.*` FORCE RLS'tir: ölçüm öncesi kiracı bağlamı kurulmalı (tek işlemde).
-    # Demo kiracısı bu adımdan ÖNCE üretilir (demo verisi); bu yüzden ölçüm burada.
-    sql_demo() {  # sql_demo <sql>
-        sql_deger "$FRESH_DB" \
-            "SELECT set_config('app.tenant_id', (SELECT tenant_id::text FROM hr.tenant_directory WHERE slug='demo'), true); $1" |
-            tail -1
-    }
-
     bekle "eski 'manager' rolü YOK (M7)" \
         "$(sql_demo "SELECT count(*) FROM hr.roles WHERE code = 'manager'")" "0"
     bekle "hedef rol seti (M7)" \
@@ -369,9 +368,63 @@ if [ "$(tablo_var "$FRESH_DB" "hr.roles")" = "$VAR" ]; then
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.user_roles'::regclass AND conname='user_roles_uniq'")" "0"
     bekle "kapsam guard tetikleyicisi (M9)" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger WHERE tgrelid='hr.user_roles'::regclass AND tgname='trg_user_role_scope_guard'")" "1"
-    # M9'un BİLİNÇLİ ertelenen kısmı: FK + birim geçerlilik guard'ı M10 sonrası.
-    bilgi "M9 ertelenen kısım: hr.departments FK'si = $(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE contype='f' AND confrelid = to_regclass('hr.departments')") (beklenen 0 — M10 öncesi)"
-    bilgi "M9 ertelenen kısım: hr.departments tablosu = $(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class WHERE relname='departments'") (beklenen 0 — M10 işi)"
+    # M9'un eskiden ertelenen kısmı artık M10 ile tamamlandı (bkz. adım 6d).
+    bilgi "M9 ertelenen kısım (FK + alt ağaç) → adım 6d'de doğrulanıyor (M10 sonrası)"
+fi
+
+adim "6d/8 M10-M13 organizasyon/çalışan modeli (tablo, FK, tetikleyici, RLS, kapsam)"
+if [ "$(tablo_var "$FRESH_DB" "hr.departments")" = "$VAR" ]; then
+    for tablo in departments positions employees employee_personal_data employee_manager; do
+        bekle "hr.$tablo RLS + FORCE" \
+            "$(sql_deger "$FRESH_DB" "SELECT relrowsecurity::text || '/' || relforcerowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relname='$tablo'")" \
+            "true/true"
+        bekle "hr.$tablo tenant_isolation politikası" \
+            "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_policies WHERE schemaname='hr' AND tablename='$tablo' AND policyname='tenant_isolation'")" "1"
+    done
+    bekle "hr şemasında FORCE RLS tablo sayısı (7 + 5 yeni)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "12"
+    bekle "OD27: company_id/legal_entity_id kolonu YOK" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND column_name IN ('company_id','legal_entity_id')")" "0"
+    bekle "M9 tamamlama: user_roles.scope_org_unit_id → departments FK" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.user_roles'::regclass AND contype='f' AND confrelid='hr.departments'::regclass")" "1"
+    bekle "M11: ağaç döngü/derinlik tetikleyicisi" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger WHERE tgrelid='hr.departments'::regclass AND tgname='trg_departments_tree_guard'")" "1"
+    bekle "M11: (tenant_id, parent_id) indeksi" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND tablename='departments' AND indexname='departments_tenant_parent_idx'")" "1"
+    bekle "M11: OD24 path/closure kolonu YOK" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND table_name='departments' AND column_name IN ('path','tree_path','lft','rgt')")" "0"
+    # Kısmi benzersizlikler Django'da **kısmi UNIQUE indeks** olarak oluşur (pg_indexes).
+    bekle "M13: tek aktif birincil yönetici (kısmi benzersiz indeks)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND tablename='employee_manager' AND indexname='employee_manager_primary_uniq'")" "1"
+    bekle "M13: kısmi indeks koşulu (primary + açık + silinmemiş)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname='employee_manager_primary_uniq' AND indexdef LIKE '%relation_type%primary%' AND indexdef LIKE '%effective_to IS NULL%' AND indexdef LIKE '%deleted_at IS NULL%'")" "1"
+    bekle "M13: kendini yönetici seçme yasağı (CHECK)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.employee_manager'::regclass AND conname='employee_manager_not_self'")" "1"
+    bekle "kiracı-içi FK guard'ları (organizasyon + kapsam)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE t.tgname IN ('trg_departments_parent_id_same_tenant','trg_departments_manager_employee_id_same_tenant','trg_employees_department_id_same_tenant','trg_employees_position_id_same_tenant','trg_employee_personal_data_employee_id_same_tenant','trg_employee_manager_manager_employee_id_same_tenant','trg_user_roles_scope_org_unit_id_same_tenant') AND NOT t.tgisinternal")" "7"
+
+    # Yetki turu (M10–M13): app rolü SELECT/INSERT/UPDATE alır, DELETE ALMAZ (OD21).
+    for tablo in departments positions employees employee_personal_data employee_manager; do
+        bekle "app rolü hr.$tablo SELECT/INSERT/UPDATE" \
+            "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$APP_ROLE','hr.$tablo','SELECT')::text || has_table_privilege('$APP_ROLE','hr.$tablo','INSERT')::text || has_table_privilege('$APP_ROLE','hr.$tablo','UPDATE')::text")" "truetruetrue"
+        bekle "app rolü hr.$tablo DELETE ALAMAZ (OD21 soft-delete)" \
+            "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$APP_ROLE','hr.$tablo','DELETE')")" "f"
+    done
+    if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$PLATFORM_ROLE'")" = "1" ]; then
+        for tablo in departments positions employees employee_personal_data employee_manager; do
+            bekle "platform rolü hr.$tablo erişemez" \
+                "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','hr.$tablo','SELECT')::text || has_table_privilege('$PLATFORM_ROLE','hr.$tablo','INSERT')::text || has_table_privilege('$PLATFORM_ROLE','hr.$tablo','UPDATE')::text || has_table_privilege('$PLATFORM_ROLE','hr.$tablo','DELETE')::text")" \
+                "falsefalsefalsefalse"
+        done
+    fi
+
+    # Kapsam çözümleyici + izin ∧ kapsam (gerçek servis koduyla, demo verisi üzerinden).
+    PROBE="$(django_owner manage.py shell < scripts/_scope_probe.py 2>&1 | tail -1)"
+    kontrol_metni "kapsam sondası" "$PROBE" "KAPSAM_PROBE finans_birim=2 kardes_haric=1"
+    kontrol_metni "kapsam sondası: alt ağaç erişimi" "$PROBE" "kapsam_ici_erisim=1"
+    kontrol_metni "kapsam sondası: kardeş birim DENY" "$PROBE" "kapsam_disi_erisim=0"
+    kontrol_metni "kapsam sondası: K2/K3 kapsamdan gelmez" "$PROBE" "kisisel_veri=0"
+    kontrol_metni "kapsam sondası: TENANT rolü kiracı geneli" "$PROBE" "tenant_geneli=1"
 fi
 
 adim "6c/8 Gerçek HTTP (roller: app)"

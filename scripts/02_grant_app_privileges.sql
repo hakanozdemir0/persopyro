@@ -136,6 +136,33 @@ BEGIN
 END
 $$;
 
+-- 7) Organizasyon/çalışan tabloları (M10–M13) --------------------------------
+-- OD21: bu tablolarda silme **soft-delete**tir (`deleted_at` + `status`); çalışan,
+-- birim, pozisyon ve kişisel veri kayıtları runtime yolunda **fiziksel olarak
+-- silinmez** (kişisel veri saklama/silme işlemleri ayrı, denetimli bir yönetsel
+-- yoldur). Bu yüzden uygulama rolünden DELETE ve TRUNCATE geri alınır.
+-- DİKKAT: Bu blok, "ALL TABLES" satırından SONRA gelir (aksi halde geniş DML
+-- yetkisi bu daraltmayı sessizce geri alırdı — api_tokens/permissions dersinde
+-- ölçüldü).
+-- `employee_personal_data` (K2/K3): SELECT/INSERT/UPDATE verilir ama DELETE
+-- VERİLMEZ → ON DELETE CASCADE zinciri de (employees silinemez) tetiklenemez.
+DO $$
+DECLARE tablo text;
+BEGIN
+    FOREACH tablo IN ARRAY ARRAY[
+        'departments', 'positions', 'employees',
+        'employee_personal_data', 'employee_manager'
+    ] LOOP
+        IF to_regclass('hr.' || tablo) IS NOT NULL THEN
+            EXECUTE format(
+                'REVOKE DELETE, TRUNCATE ON hr.%I FROM persopyro_app', tablo);
+            EXECUTE format(
+                'GRANT SELECT, INSERT, UPDATE ON hr.%I TO persopyro_app', tablo);
+        END IF;
+    END LOOP;
+END
+$$;
+
 -- 6) Platform şeması (OD3/M1–M5) --------------------------------------------
 -- AYRICALIKLI SINIR: `persopyro_app` (kiracı runtime yolu) platform şemasını
 -- GÖREMEZ ve oradaki hiçbir tabloda yetkiye sahip olamaz. Bu bölüm bilinçli

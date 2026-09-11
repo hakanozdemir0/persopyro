@@ -34,12 +34,12 @@ Birim sorumlusu ayrıca `departments.manager_employee_id` ile tutulur (onay
 yönlendirmesi için); bu, `employee_manager` ile **aynı şey değildir** ve çift kayıt
 oluşturmaz (biri "birimin sorumlusu", diğeri "kim kime raporluyor").
 
-## 2. Tablolar ve sorumluluklar (hedef, v1) 🔜
+## 2. Tablolar ve sorumluluklar (v1) — **✅ M10–M13 UYGULANDI (2026-09-11)**
 
 | Tablo | Sorumluluk | Tenant izolasyonu |
 |---|---|---|
 | `departments` | Birim ağacı (`parent_id`), kod, ad, birim sorumlusu, durum | `tenant_id` + RLS + FORCE + guard (`parent_id`, `manager_employee_id`) |
-| `positions` | Unvan/kadro tanımı (kod, ad, seviye) | `tenant_id` + RLS + FORCE |
+| `positions` | Unvan/kadro tanımı (kod, ad, seviye) — **birime bağlı değil** | `tenant_id` + RLS + FORCE |
 | `employees` | Çalışanın **iş** kaydı (birim, unvan, giriş/çıkış, durum, çalışan no) | `tenant_id` + RLS + FORCE + guard (`department_id`, `position_id`, `user_id`) |
 | `employee_personal_data` | Kişisel veri (K2) ve özel nitelikli veri (K3, şifreli) — 1:1 | `tenant_id` + RLS + FORCE + guard |
 | `employee_manager` | Yönetici/raporlama ilişkisi (birincil/ikincil/delege, tarihli) | `tenant_id` + RLS + FORCE + guard |
@@ -61,8 +61,12 @@ ne" sorusu (K2/K3) **farklı izinlerle** yanıtlanır.
   tutarsız kalma riski bu ölçekte gereksizdir.
 - **Sorgu deseni:** her zaman `(tenant_id, parent_id)` indeksiyle başlar; CTE
   **derinlik sınırlıdır** (bozuk/veri dışı döngüye karşı son savunma).
-- **Önbellek:** bir kullanıcının kapsam sonucu (birim alt ağacı) DB cache'te kısa
-  TTL ile tutulur; birim taşıma veya yönetici değişiminde **geçersiz kılınır**.
+- **Önbellek (v1'de YOK):** kapsam sonucu her çözümlemede veritabanından hesaplanır;
+  sahte önbellek kurulmadı. Geçersiz kılma **sınırı** hazırdır:
+  `apps/rbac/services/scope.py::invalidate_org_scope_cache()` — organizasyonu
+  değiştiren servisler (`move_department`, `set_primary_manager`, `move_employee`,
+  birim silme/geri alma) bunu **çağırır**; ileride eklenecek önbellek (K17) yalnızca
+  burayı doldurur, çağıranlar değişmez.
 - **Geri dönüş tetikleyicileri:** derinlik > 20, kiracı başına birim > 5.000 veya
   kapsam sorgusu p95 > 50 ms → closure tablosu ayrı bir kararla değerlendirilir.
 - **Taşıma ve kapsam (OD5 kapalı):** dept_manager kapsamı **güncel alt ağaçtır**;
@@ -71,17 +75,19 @@ ne" sorusu (K2/K3) **farklı izinlerle** yanıtlanır.
   etkili denetim olayı** olarak kaydedilir (aktör, eski/yeni `parent_id`, gerekçe).
   Döngü/derinlik ihlali veritabanında reddedilir (bölüm 4).
 
-## 4. Döngü ve tutarlılık kuralları (veritabanı garantileri)
+## 4. Döngü ve tutarlılık kuralları (veritabanı garantileri) — **✅ UYGULANDI**
 
 | Kural | Nasıl zorlanır |
 |---|---|
-| Departman kendi atası olamaz (derin döngü) | `BEFORE INSERT OR UPDATE` tetikleyicisi ata zincirini yürür ve döngüde **hata verir** (fail-closed); yürüyüş 20 adımla sınırlıdır |
-| Departman kendi ebeveyni olamaz | `CHECK (parent_id IS DISTINCT FROM id)` |
-| Çalışan kendisinin yöneticisi olamaz | `CHECK (employee_id <> manager_employee_id)` + `employee_manager` için döngü tetikleyicisi |
-| Kiracı dışı ilişki kurulamaz | Mevcut `hr.ensure_same_tenant_ref()` guard'ı (`parent_id`, `manager_employee_id`, `department_id`, `position_id`, `user_id`) |
-| Bir çalışanın **tek birincil** yöneticisi olur | Kısmi benzersiz indeks: `(employee_id) WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL` |
-| Maksimum derinlik | Tetikleyici + CTE sınırı: **20 seviye** |
-| Referans bütünlüğü | `employees.department_id` zorunlu (v1: her çalışan bir birimde); birim boşaltılmadan arşivlenmez |
+| Departman kendi atası olamaz (derin döngü) | `trg_departments_tree_guard` (`BEFORE INSERT/UPDATE`) ata zincirini yürür ve zincirde kendi kaydını bulursa **hata verir**; yürüyüş 20 adımla sınırlıdır ✅ |
+| Departman kendi ebeveyni olamaz | `CHECK (parent_id IS DISTINCT FROM id)` (`departments_parent_not_self`) ✅ |
+| Çalışan kendisinin yöneticisi olamaz | `CHECK (employee_id <> manager_employee_id)` (`employee_manager_not_self`) ✅ |
+| Kiracı dışı ilişki kurulamaz | Mevcut `hr.ensure_same_tenant_ref()` guard'ı 11 tabloda 19 tetikleyiciyle (`parent_id`, `manager_employee_id`, `department_id`, `position_id`, `user_id`, `scope_org_unit_id`) ✅ |
+| Bir çalışanın **tek birincil** yöneticisi olur | Kısmi benzersiz indeks: `(employee_id) WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL` ✅ |
+| Maksimum derinlik | Tetikleyici + CTE sınırı: **20 seviye** ✅ |
+| Referans bütünlüğü | `employees.department_id` zorunlu (v1: her çalışan bir birimde); birim boşaltılmadan **arşivlenmez** (servis guard'ı: alt birim/aktif çalışan varsa red) ✅ |
+| Silinmiş çalışanla yeni aktif raporlama ilişkisi | `trg_employee_manager_active_guard` ✅ |
+| Aktif olmayan birim kapsam olarak atanamaz | `hr.user_role_scope_guard` (M9 tamamlama; devre dışı bırakma serbesttir) ✅ |
 
 Döngü kontrolü **yalnızca uygulama katmanına bırakılmaz**: döngü, kapsam
 çözümlemesini bozarak yetki sınırlarını kaydırabileceği için veritabanında
@@ -116,14 +122,17 @@ mesajı için).
   `hr.user_roles.scope_org_unit_id`. `scope_org_unit_id IS NULL` ise atama **hiçbir
   kapsam üretmez** (fail-closed; NULL "tüm tenant" **değildir** — kiracı geneli yetki
   `TENANT` tipli rolle, `tenant_admin`/`tenant_officer`).
-- **Uygulama durumu:** `hr.roles.scope_type` (M8, `NOT NULL` + kapalı küme `CHECK`) ve
-  `hr.user_roles.scope_org_unit_id` (M9, kolon + `NULLS NOT DISTINCT` benzersizlik +
-  guard tetikleyicisi) **kuruldu**. `departments(id)` FK'si ve **alt ağaç çözümlemesi**
-  M10 sonrasıdır → o gelene kadar `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez**
-  (`apps/rbac/services/scope.py`, fail-closed köprü). Bu, "birim yöneticisi izinleri
-  tenant-wide görünür" açığını kapatır.
+- **Uygulama durumu (M10–M13 ✅, 2026-09-11):** tablolar **kuruldu**; kapsam çözümleyici
+  (`apps/rbac/services/scope.py`) artık **gerçek alt ağacı** hesaplar (recursive CTE,
+  derinlik ≤ 20): `UNIT` = atanan birim + alt ağaç, `UNIT_DIRECT` = yalnız atanan birim,
+  `TENANT` = kiracı geneli, `SELF` = kendi kaydı, çoklu atama = **birleşim** (tek kiracı
+  içinde). `user_roles.scope_org_unit_id` **gerçek FK**'dir (M9 tamamlandı). Fail-closed:
+  silinmiş/silinmiş ata altındaki birim, çözülemeyen kapsam ve kiracı uyuşmazlığı
+  **kapsam üretmez**.
 - **Karar kuralı:** `izinli = (izin kodu var) ∧ (kayıt etkin kapsamda)`. Kapsam izin
-  üretmez; izin de kapsam üretmez. Biri yoksa **reddet**.
+  üretmez; izin de kapsam üretmez. Biri yoksa **reddet**. Merkezi uygulama noktası:
+  `apps/organization/services.py::can_access_employee()` (çalışan hedefi) —
+  görünümler bu fonksiyonu kullanır, kontrolü kopyalamaz.
 - **Çoklu atama:** aynı kiracı içinde birden fazla atama **birleşir (union)**;
   kiracılar arası birleşim **yok**. Soft-delete edilmiş, süresi geçmiş atama veya
   pasif kullanıcı **kapsam üretmez**.
@@ -133,9 +142,11 @@ mesajı için).
 - **Kişisel veri:** "çalışanı yönetebilir" ≠ "K2/K3'ü görebilir". `employees` PII
   içermez; kişisel veri ayrı izin + koşul (maskeleme, `MFA_OK`, `PURPOSE_GIVEN`,
   gerekirse `GRANT_VALID`) gerektirir — kapsam bu kuralları **gevşetmez**.
-- **Soft-delete/restore:** birim silinirse atama kapsam üretmez; birim **restore
-  edilse bile** atama **sessizce** yeniden etkinleşmez (OD21) — açık `*.restore` +
-  denetim kaydı gerekir.
+- **Soft-delete/restore (✅ UYGULANDI):** birim silinirse ona bağlı **kapsam atamaları da
+  devre dışı bırakılır** (`user_roles.deleted_at`) → atama kapsam üretmez; birim
+  **restore edilse bile** atama **sessizce** yeniden etkinleşmez (OD21) — yetki için
+  **açık**, denetimli yeni atama gerekir. Birim ancak **boşken** silinir (aktif alt birim
+  veya aktif çalışan varsa servis reddeder).
 
 ## 6. Birincil yönetici ve ek ilişkiler
 
@@ -175,6 +186,12 @@ Kurallar (OD21): çalışan kaydı **fiziksel silinmez**; `deleted_at` + `status
 kullanılır. Soft-delete edilmiş kaydın yeniden açılması açık bir `*.restore` izni ve
 denetim kaydı gerektirir (**sessiz yeniden etkinleştirme yasak**). Benzersizlikler
 kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`.
+
+**Uygulama (M12 ✅):** durum kümesi DB `CHECK` ile dayatılır
+(`employees_status_valid`: `active`/`suspended`/`terminated`/`archived`);
+`termination_date` boş ya da `hire_date`'ten sonra olmalıdır; çalışan kaydında
+**kişisel veri kolonu yoktur** (ad/iletişim/kimlik/sağlık verisi
+`employee_personal_data` içinde, K3 alanları şifreli).
 
 ## 8. Vardiya, devam ve evrak (hedef şema)
 

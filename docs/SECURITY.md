@@ -34,7 +34,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | T4 | Evrak dosyalarına yetkisiz erişim | Yüksek | Kısa ömürlü imzalı bağlantı, erişim kaydı, sınıflandırma ✅/🔜 |
 | T5 | Denetim kaydının manipüle edilmesi/eksik kalması | Orta-Yüksek | Append-only tablo, uygulama rolüne UPDATE/DELETE yasağı ✅; zincirleme 🔜 |
 | T6 | Dosya yükleme üzerinden zararlı içerik | Orta | MIME/boyut/checksum doğrulaması ✅; içerik taraması ❓ |
-| T7 | Yatay/dikey yetki yükseltme (IDOR) | Yüksek | Her kayıt erişiminde kiracı + kapsam kontrolü ✅/🔜 — **kapsam tarafı M7–M9 ile kuruldu** (fail-closed köprü: kapsam çözülmeden `UNIT` izni üretilmez) |
+| T7 | Yatay/dikey yetki yükseltme (IDOR) | Yüksek | Her kayıt erişiminde kiracı + kapsam kontrolü ✅/🔜 — **kapsam tarafı M7–M13 ile çalışır durumda** (alt ağaç çözümleyici + `can_access_employee()`: kapsam içi ALLOW, kardeş birim/başka kiracı DENY) |
 | T8 | Kişisel verinin gereğinden fazla gösterilmesi/sızması | Orta-Yüksek | Varsayılan maskeleme, en az veri, amaca bağlama 🔜 |
 | T9 | Secret'ın depoya veya loglara düşmesi | Yüksek | Ortam değişkeni, log temizleme, tarama ✅ |
 | T10 | Brute force / parola deneme saldırısı | Orta | Deneme sınırı, hesap kilitleme, hız sınırlama ✅ |
@@ -198,17 +198,19 @@ barındırma, kiracı RLS politikasını platform için gevşetme.
 Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 
 - Model **RBAC + kapsam + kapalı koşul kümesi**; varsayılan **reddetme** ✅.
-- **Kapsam (OD5 — kapalı ✅, 2026-09-11; M7–M9 ✅ UYGULANDI):** karar **izin ∧ kapsam**dır;
+- **Kapsam (OD5 — kapalı ✅, 2026-09-11; M7–M13 ✅ UYGULANDI):** karar **izin ∧ kapsam**dır;
   kapsam izin üretmez, izni daraltır. `dept_manager` kapsamı **atandığı birim + tüm alt ağaç**
-  (`UNIT`; OD24 adjacency + recursive CTE, derinlik ≤ 20) ve kaynağı
-  `hr.user_roles.scope_org_unit_id`'dir. **`scope_org_unit_id IS NULL` → fail-closed**
+  (`UNIT`; OD24 adjacency + **recursive CTE**, derinlik ≤ 20) ve kaynağı
+  `hr.user_roles.scope_org_unit_id`'dir (**gerçek FK**, M9 tamamlandı).
+  **`scope_org_unit_id IS NULL` → fail-closed**
   (NULL **asla** "tüm kiracı" değildir; kiracı geneli yetki `TENANT` tipli rolden gelir).
   Aynı kiracı içindeki çoklu atamalar **birleşir** (kiracılar arası birleşim **yok**);
-  silinmiş/süresi geçmiş atama ve silinmiş birim **kapsam üretmez**; birim taşıma
-  kapsamı yeniden hesaplar → **önbellek geçersiz kılınır** ve taşıma **denetim kaydına**
-  yazılır (yetki kapsamı büyüyebildiği için). Kapsam **kişisel veri erişimi üretmez**:
-  `employees` PII içermez, K2/K3 için ayrı izin + koşul (`MFA_OK`, `PURPOSE_GIVEN`,
-  maskeleme) aynen geçerlidir (§7).
+  silinmiş/süresi geçmiş atama, **silinmiş birim ve alt ağacı** **kapsam üretmez**; birim taşıma
+  kapsamı yeniden hesaplar → **önbellek geçersiz kılınır** (v1: önbellek yok, sınır hazır) ve
+  taşıma **denetim kaydına** yazılır (yetki kapsamı büyüyebildiği için). Kapsam **kişisel veri
+  erişimi üretmez**: `employees` PII içermez, K2/K3 için ayrı izin + koşul (`MFA_OK`,
+  `PURPOSE_GIVEN`, maskeleme) aynen geçerlidir (§7) — merkezi karar
+  `can_access_employee_personal_data()`; kapsam **asla** izin yerine geçmez.
 - **Kapsamın teknik uygulaması (M7–M9, 2026-09-11) ve fail-closed köprü:** rolün azami
   kapsamı `hr.roles.scope_type` (`NOT NULL`, kapalı küme `CHECK`; `SYS` **tenant
   rollerine verilemez**), atamanın kapsamı `hr.user_roles.scope_org_unit_id`.
@@ -225,6 +227,22 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
   **kendi rolünü atayamaz** (self-elevation), aktör atadığı rolün **tüm** izinlerine sahip
   olmalı (sahip olmadığı yetki dağıtılamaz), `role.manage` gerekir, `UNIT` tipli rolde
   kapsam zorunludur ve her atama `audit_logs`'a (`role.assign`) yazılır.
+- **Organizasyon modeli DB garantileri (M10–M13 ✅, 2026-09-11):** ağaç bütünlüğü
+  **veritabanında** zorlanır — `CHECK (parent_id IS DISTINCT FROM id)`, döngü reddi,
+  **derinlik ≤ 20** ve **silinmiş birimin altına yeni aktif birim bağlanamaması**
+  (`trg_departments_tree_guard`); silinmiş çalışan/yönetici ile **yeni aktif** raporlama
+  ilişkisi kurulamaz (`trg_employee_manager_active_guard`); çalışanın **tek aktif birincil**
+  yöneticisi kısmi benzersiz indeksle engellenir. Döngü, kapsam çözümlemesini bozarak **yetki
+  sınırını kaydırabileceği** için bu garantiler uygulama katmanına bırakılmamıştır (OD24).
+- **Yetki turu (organizasyon/çalışan tabloları):** `persopyro_app` `SELECT/INSERT/UPDATE`
+  alır; **`DELETE`/`TRUNCATE` geri alınmıştır** (OD21: silme `deleted_at` ile; K2/K3 ve
+  çalışan kaydı runtime yolunda fiziksel silinmez → `ON DELETE CASCADE` zinciri de
+  kurulamaz). `persopyro_platform` bu tabloların **hiçbirine** erişemez (ayrı güvenlik
+  sınırı; ölçümle ve testle doğrulanır).
+- **Denetim olayları (M10–M13):** `org.unit.create/update/move/delete/restore`,
+  `org.unit.manager_change`, `org.position.create`, `employee.create`,
+  `employee.department_change`, `employee.primary_manager_set`, `employee.manager.close`.
+  `changes` içine **kişisel veri değeri yazılmaz** (yalnızca kimlik/alan adı düzeyi).
 - Kod `<kaynak>.<işlem>` biçimindedir ✅; kapsam ve koşul koda gömülmez.
 - Çakışmada **reddet kazanır** ✅ (kişiye özel yasak, rol iznini geçersiz kılar).
 - Yetki kontrolü dört katmanda: uç nokta → servis → nesne → veritabanı (RLS) ✅.

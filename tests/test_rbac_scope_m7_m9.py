@@ -13,13 +13,13 @@ M7/M8 veri göçleri testte **yeniden oynatılır** (`rolleri_goc_et`,
 """
 
 import importlib
-import uuid
 from types import SimpleNamespace
 
 import pytest
 from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.utils import timezone
 
+from apps.organization.models import Department
 from apps.rbac.models import (
     Permission,
     Role,
@@ -345,12 +345,13 @@ def test_m9_org_kapsamsiz_rolde_birim_kapsami_reddedilir(tenant_a, user_a) -> No
     """`TENANT` tipli role birim kapsamı verilemez (tanımsız/kullanılmayan veri olmaz)."""
     with tenant_context(tenant_a.id):
         roller = create_default_roles(tenant_a)
+        birim = Department.objects.create(tenant=tenant_a, code="GM", name="Genel Müdürlük")
         with pytest.raises(DatabaseError, match="NULL olmalidir"), transaction.atomic():
             UserRole.objects.create(
                 tenant=tenant_a,
                 user=user_a,
                 role=roller["tenant_admin"],
-                scope_org_unit_id=uuid.uuid4(),
+                scope_org_unit=birim,
             )
 
 
@@ -360,17 +361,14 @@ def test_m9_ayni_rol_farkli_birimlere_atanabilir_ayni_birim_tekrarlanamaz(
     """OD5 §5.3 çoklu kapsam: aynı rol farklı birimler için atanabilir; tekrar edemez."""
     with tenant_context(tenant_a.id):
         rol = create_default_roles(tenant_a)["dept_manager"]
-        birim_1, birim_2 = uuid.uuid4(), uuid.uuid4()
-        UserRole.objects.create(
-            tenant=tenant_a, user=user_a, role=rol, scope_org_unit_id=birim_1
-        )
-        UserRole.objects.create(
-            tenant=tenant_a, user=user_a, role=rol, scope_org_unit_id=birim_2
-        )
+        birim_1 = Department.objects.create(tenant=tenant_a, code="B1", name="Birim 1")
+        birim_2 = Department.objects.create(tenant=tenant_a, code="B2", name="Birim 2")
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=rol, scope_org_unit=birim_1)
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=rol, scope_org_unit=birim_2)
         assert UserRole.objects.filter(user=user_a, role=rol).count() == 2
         with pytest.raises(IntegrityError), transaction.atomic():
             UserRole.objects.create(
-                tenant=tenant_a, user=user_a, role=rol, scope_org_unit_id=birim_1
+                tenant=tenant_a, user=user_a, role=rol, scope_org_unit=birim_1
             )
         # Kapsamsız (TENANT/SELF) rollerde çift atama hâlâ engellenir.
         officer = Role.objects.get(code="tenant_officer")
@@ -379,28 +377,39 @@ def test_m9_ayni_rol_farkli_birimlere_atanabilir_ayni_birim_tekrarlanamaz(
             UserRole.objects.create(tenant=tenant_a, user=user_a, role=officer)
 
 
-def test_m9_unit_rol_kapsam_cozulmeden_izin_uretmez(tenant_a, user_a) -> None:
+def test_m9_unit_rol_kapsam_cozulunce_izin_uretir(tenant_a, user_a) -> None:
     """
-    **Kritik güvenlik kuralı:** `dept_manager` izinleri tenant-wide görünmemeli.
+    M10 sonrası: kapsam **çözülebildiği** için `dept_manager` izinleri etkin olur.
 
-    M10 (`departments`) gelmeden kapsam çözülemez → atama izin ÜRETMEZ. Kod
-    "sahiplik" görünümünde (`declared`) görünür ama kullanılabilir (`effective`)
-    kümede yer almaz.
+    (M9 turunda kapsam çözülemediği için bu atamalar izin üretmiyordu; fail-closed
+    köprü artık gerçek alt ağaç çözümlemesine geçti.)
     """
     with tenant_context(tenant_a.id):
         rol = create_default_roles(tenant_a)["dept_manager"]
-        UserRole.objects.create(
-            tenant=tenant_a, user=user_a, role=rol, scope_org_unit_id=uuid.uuid4()
-        )
+        birim = Department.objects.create(tenant=tenant_a, code="FIN", name="Finans")
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=rol, scope_org_unit=birim)
 
         atama = UserRole.objects.get(user=user_a, role=rol)
-        assert resolve_assignment_org_scope(atama) is None  # M10 öncesi: çözülemez
-        assert assignment_grants_permissions(atama) is False
+        assert resolve_assignment_org_scope(atama) == {birim.pk}
+        assert assignment_grants_permissions(atama) is True
 
-        assert effective_permission_codes(user_a) == set()
+        assert effective_permission_codes(user_a) == set(DEPT_MANAGER_PERMISSIONS)
         assert declared_permission_codes(user_a) == set(DEPT_MANAGER_PERMISSIONS)
+        assert user_has_permission(user_a, "employee.read") is True
+        assert user_has_permission(user_a, "leave.request.approve") is True
+
+
+def test_m9_silinmis_birim_izin_uretmez(tenant_a, user_a) -> None:
+    """Silinmiş birime kapsamlı atama **izin üretmez** (OD5 §5.6 fail-closed)."""
+    with tenant_context(tenant_a.id):
+        rol = create_default_roles(tenant_a)["dept_manager"]
+        birim = Department.objects.create(tenant=tenant_a, code="FIN", name="Finans")
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=rol, scope_org_unit=birim)
+        assert effective_permission_codes(user_a)
+
+        Department.objects.filter(pk=birim.pk).update(deleted_at=timezone.now())
+        assert effective_permission_codes(user_a) == set()
         assert user_has_permission(user_a, "employee.read") is False
-        assert user_has_permission(user_a, "leave.request.approve") is False
 
 
 def test_m9_tenant_rolu_birim_kapsami_olmadan_calisir(tenant_a, user_a) -> None:
@@ -534,20 +543,19 @@ def test_dept_manager_atamasi_kapsam_zorunlu_kilar(tenant_a, user_a) -> None:
     hedef = _ikinci_kullanici(tenant_a)
     with tenant_context(tenant_a.id):
         roller = create_default_roles(tenant_a)
+        birim = Department.objects.create(tenant=tenant_a, code="FIN", name="Finans")
         UserRole.objects.create(tenant=tenant_a, user=user_a, role=roller["tenant_admin"])
         with pytest.raises(RoleAssignmentError, match="ZORUNLUDUR"):
-            assign_role_to_user(
-                actor=user_a, target_user=hedef, role=roller["dept_manager"]
-            )
+            assign_role_to_user(actor=user_a, target_user=hedef, role=roller["dept_manager"])
         atama = assign_role_to_user(
             actor=user_a,
             target_user=hedef,
             role=roller["dept_manager"],
-            scope_org_unit_id=uuid.uuid4(),
+            scope_org_unit_id=birim.pk,
         )
-        assert atama.scope_org_unit_id is not None
-        # Kapsam ataması yapıldı ama M10 öncesi izin üretmez (fail-closed).
-        assert effective_permission_codes(hedef) == set()
+        assert atama.scope_org_unit_id == birim.pk
+        # M10 sonrası: kapsam çözülür → hedef set etkin olur (kapsam ∧ izin).
+        assert effective_permission_codes(hedef) == set(DEPT_MANAGER_PERMISSIONS)
         assert declared_permission_codes(hedef) == set(DEPT_MANAGER_PERMISSIONS)
 
 

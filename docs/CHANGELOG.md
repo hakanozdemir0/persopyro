@@ -3,6 +3,113 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.22.0] — 2026-09-11 — M10–M13: organizasyon ve çalışan temel veri modeli + M9 tamamlama
+
+**Baseline (son commit `1964e0b`):** çalışma ağacı temiz, migration'lar tam uygulanmış,
+tam test suite **273 passed**. Kapsam dışı (bu turda **dokunulmadı**): `leave_*`/onay
+tabloları, `shifts`/`attendance`, `documents`, access request/grant, dashboard,
+onboarding/billing, API CRUD uç noktaları, maskeleme motoru.
+
+### Ölçüm (canlı DB, öncesi → sonrası)
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| Kiracı verisi taşıyan FORCE RLS tablosu | **7** | **12** (`departments`, `positions`, `employees`, `employee_personal_data`, `employee_manager`) |
+| Kiracı-içi FK guard tetikleyicisi | 9 | **19** (11 tablo) |
+| `user_roles.scope_org_unit_id` | düz UUID kolonu | **gerçek FK** (`hr.departments.id`) |
+| Kapsam çözümlemesi | fail-closed köprü (çözülemez → izin yok) | **gerçek alt ağaç** (recursive CTE ≤ 20) |
+| `persopyro_app` yetkileri (yeni tablolar) | (yoktu) | `SELECT/INSERT/UPDATE` ✅, **`DELETE`/`TRUNCATE` YOK** |
+| `persopyro_platform` yetkileri (yeni tablolar) | (yoktu) | **hiçbiri** (4 tabloda 0/0/0/0) |
+| Org/çalışan verisi (canlı) | 0 | demo: 4 birim, 2 pozisyon, 3 çalışan, 1 raporlama ilişkisi |
+
+### Eklenen / değişen
+
+- **Yeni uygulama `apps/organization`** — `Department`, `Position`, `Employee`,
+  `EmployeePersonalData` (1:1, PK `employee_id`), `EmployeeManager` + servis katmanı.
+- **M10 ✅ (`organization/0001_od24_departments_positions` + `0009`)** — `hr.departments`
+  (`code`/`name`/`status`, `parent_id` **adjacency list**, `manager_employee_id`) ve
+  `hr.positions` (`code`/`name`/`level`; **birime bağlı değil**). Kısmi benzersizlikler
+  (`WHERE deleted_at IS NULL`), `(tenant_id, parent_id)` indeksi, `status` kapalı küme
+  `CHECK`. **OD27: `company_id`/`legal_entity_id` eklenmedi.**
+- **M11 ✅ (`organization/0002` + `0008`)** — `hr.departments_tree_guard`: **döngü reddi**,
+  **derinlik ≤ 20**, **silinmiş birimin altına yeni aktif birim bağlanamaz**;
+  `CHECK (parent_id IS DISTINCT FROM id)`; `hr.employee_manager_active_guard`: silinmiş
+  çalışan/yönetici ile **yeni aktif** ilişki kurulamaz. `path`/closure kolonu **eklenmedi**.
+- **M12 ✅ (`organization/0003`)** — `hr.employees` (**PII içermez**; `department_id`
+  **NOT NULL**, `user_id`/`position_id` nullable, `employee_no` kısmi benzersizliği,
+  `status` kapalı küme, `hire_date`/`termination_date`) + `hr.employee_personal_data`
+  (K2 açık alanlar, **K3 Fernet şifreli**: `health_notes`, `disability_status`,
+  `biometric_ref`; `apps/common/fields.py`).
+- **M13 ✅ (`organization/0004`)** — `hr.employee_manager`: `relation_type`
+  (`primary`/`secondary`/`delegate`), `effective_from`/`effective_to`, **tek aktif
+  birincil yönetici** kısmi benzersiz indeksi, `(employee_id, manager_employee_id)` kısmi
+  benzersizliği, self-manager `CHECK`'i. **RBAC değildir — yetki üretmez.**
+- **M9 tamamlama (`rbac/0008` + `0009` + `0010`)** — `scope_org_unit_id` **gerçek FK**
+  (kolon **düşürülmedi**, `SeparateDatabaseAndState` ile yalnızca kısıt eklendi); kapsam
+  guard'ı **aktif birim** denetimi kazandı; devre dışı bırakma serbest bırakıldı (ölçülen
+  hata: birim silme servisi atamaları kapatamıyordu).
+- **Kapsam çözümleyici ✅ (`apps/rbac/services/scope.py`)** — `UNIT` = atanan birim + alt
+  ağaç (recursive CTE ≤ 20), `UNIT_DIRECT` = yalnız atanan birim, `TENANT` = kiracı geneli,
+  `SELF` = kendi kaydı; çoklu atama **birleşimi**; fail-closed (silinmiş birim ve alt ağacı,
+  kiracı uyuşmazlığı, silinmiş/süresi geçmiş atama, pasif kullanıcı → kapsam yok).
+  `invalidate_org_scope_cache()` = önbellek sınırı (v1'de önbellek **yok**, sahte sistem
+  kurulmadı).
+- **İzin ∧ kapsam ✅ (`apps/organization/services.py`)** — merkezi
+  `can_access_employee(user, employee, permission_code)` ve
+  `can_access_employee_personal_data(...)`; `object_in_org_scope()` kapsam ekseni.
+  **Organizasyon kapsamı K2/K3 erişimi ÜRETMEZ** (izin + `MFA_OK` + `PURPOSE_GIVEN` gerekir).
+- **Servisler + denetim** — birim oluştur/güncelle/**taşı**/sil/**geri al**/sorumlu ata,
+  pozisyon oluştur, çalışan oluştur/**birim değiştir**, birincil yönetici ata/kapat. Her
+  işlem `audit_logs`'a yazılır (`org.unit.*`, `employee.*`); `changes` **PII değeri içermez**.
+  Birim silme **boş birim** şartına bağlıdır ve bağlı **kapsam atamalarını devre dışı bırakır**
+  (birim restore edilse bile atama sessizce yetki kazanmaz — OD21/OD5 §5.6).
+- **Yetki turu (`scripts/02_grant_app_privileges.sql`)** — yeni beş tabloda `DELETE`/`TRUNCATE`
+  geri alındı (OD21 soft-delete; K2/K3 fiziksel silinmez).
+
+### Doğrulanan
+
+- **Testler:** yeni `tests/test_organization_m10_m13.py` (**56 test**) — 33 maddelik liste
+  (M10 tablo/benzersizlik/cross-tenant parent; M11 self-parent/cycle/derinlik 20/silinmiş
+  ata/move; M12 zorunlu birim + cross-tenant department-position + 1:1 + K3 şifreleme;
+  M13 self/cross-tenant manager + tek aktif primary + secondary/delegate; M9 gerçek FK;
+  kapsam çözümleyici 9 senaryo; izin ∧ kapsam ALLOW/DENY; RLS/FORCE; platform erişim
+  yasağı; servis + denetim + soft-delete/restore davranışı; OD27 kolon yokluğu).
+  `tests/test_rbac_scope_m7_m9.py` M10 sonrası davranışa güncellendi;
+  `tests/test_tenant_isolation.py` yapısal denetimi `organization` uygulamasını kapsayacak
+  şekilde genişletildi. **Tam suite: 330 passed** (273 → 330; regresyon yok).
+- **Kalite:** `ruff check .` ✅, `bandit` ✅, `manage.py check` ✅,
+  `makemigrations --check` ✅ (elle yazılan migration'lar model durumuyla birebir),
+  `migrate` ✅ (10 yeni migration uygulandı).
+- **Fresh install (`scripts/verify_fresh_install.sh`)**: yeni adım **`6d/8`** — beş tablo
+  için RLS+FORCE+politika, **FORCE RLS sayısı 12**, OD27 kolon yokluğu, M9 **gerçek FK**,
+  ağaç tetikleyicisi, `(tenant_id, parent_id)` indeksi, OD24 path kolonu yokluğu, M13
+  kısmi benzersiz indeks + koşulu, 7 kiracı-içi guard, yetki turu (app `DELETE` yok, platform
+  erişemez) ve **kapsam sondası** (`scripts/_scope_probe.py`: alt ağaç erişimi ALLOW, kardeş
+  birim DENY, K2/K3 kapsamdan gelmez, TENANT rolü kiracı geneli). Sıfırdan kurulum: **OK**,
+  330 passed, geçici DB temizlendi.
+- **HTTP smoke (`scripts/smoke.sh`):** health/ready 200, `/admin/` 404, token 201 → logout
+  204 → 401, askıya alınmış kiracı 403; açık process/port bırakılmadı.
+- **Eski garantiler:** platform authorization ✅, tenant RLS + FORCE ✅, `persopyro_app`
+  ve `persopyro_platform` NOBYPASSRLS ✅, `auth_*`/`api_tokens`/`permissions` daraltmaları ✅,
+  `tenant_directory` salt-okunur ✅.
+
+### Kalan (bilinçli, kapsam dışı)
+
+- `leave_*`/`shifts`/`attendance`/`documents`/access request-grant modülleri (M14–M21),
+  `ASSIGNED` koşulunun nesne düzeyi uygulaması (onay modülü), maskeleme motoru,
+  kapsam önbelleği (K17) ve API CRUD uçları.
+- Rol yönetimi **API/akış** katmanı (servis guard'ları hazır).
+
+### Güvenlik
+
+- **Yeni `SECURITY FINDING` yok.** Kapatılan yüzeyler: kapsamsız/çözülemeyen UNIT ataması,
+  silinmiş birim kapsamı, silinmiş ata altında yeni aktif birim, cross-tenant parent /
+  department / position / manager / personal-data, self-manager, çoklu aktif birincil
+  yönetici, runtime `DELETE` ile kişisel veri (ve `ON DELETE CASCADE`) silme, platform
+  rolünün HR verisine erişimi.
+- **`OPEN DECISION` yok** (OD5/OD21/OD24/OD27 zaten kapalı; yeni karar gerekmedi).
+  Mevcut açık kararlar: OD6–OD18 (**13**), engelleyici yoktur.
+
 ## [0.21.0] — 2026-09-11 — M7 + M8 tam, M9 kısmi: tenant RBAC scope altyapısı (OD5 uygulaması)
 
 **Baseline (son commit `8418be3`):** çalışma ağacı temiz, migration'lar tam uygulanmış,

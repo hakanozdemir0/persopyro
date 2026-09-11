@@ -297,13 +297,29 @@ Etkin kapsam = **en dar** olan: rolün izin verdiği kapsam ∩ kaydın kapsamı
 isteğin kapsamı. Örneğin `UNIT` kapsamlı bir onay izni, başka bir birimin
 kaydında işe yaramaz.
 
-Kapsam kaynağı: `user_roles.scope_org_unit_id` (kiracı rolleri için) — ✅ **kolon
-UYGULANDI (M9, 2026-09-11)**; `departments(id)` **FK'si** ve alt ağaç çözümlemesi
-**M10 sonrası**. Rolün kapsamı kişi bazında daraltılabilir; **genişletilemez**.
+Kapsam kaynağı: `user_roles.scope_org_unit_id` (kiracı rolleri için) — ✅ **M9 tamamlandı
+(2026-09-11): gerçek FK** (`hr.departments.id`); **alt ağaç çözümlemesi ✅ UYGULANDI**
+(M10–M13, recursive CTE). Rolün kapsamı kişi bazında daraltılabilir; **genişletilemez**.
 ✅ **OD5 kesinleştirdi (2026-09-11):** `UNIT`/`UNIT_DIRECT` tipli rol için
 `scope_org_unit_id IS NULL` ise atama **hiçbir kapsam üretmez** (fail-closed; NULL =
 "tüm kiracı" **değildir**); kiracı geneli yetki yalnızca `TENANT` tipli rolle verilir.
 Ayrıntı: bölüm 14 → OD5.
+
+**Kapsam çözümlemesi — ✅ UYGULANDI (`apps/rbac/services/scope.py`):**
+
+| `scope_type` | Etkin kapsam (uygulanan) |
+|---|---|
+| `TENANT` | kiracının tamamı |
+| `UNIT` | atanan birim **+ tüm alt ağaç** (`WITH RECURSIVE`, derinlik ≤ 20) |
+| `UNIT_DIRECT` | yalnızca atanan birim |
+| `ASSIGNED` | yalnızca açıkça atanmış kayıtlar (nesne düzeyi; onay modülü — 🔜) |
+| `SELF` | yalnızca kullanıcının kendi kaydı |
+
+Çoklu atama **birleşir** (tek kiracı içinde); fail-closed: silinmiş birim (ve alt ağacı),
+çözülemeyen kapsam, kiracı uyuşmazlığı, silinmiş/süresi geçmiş atama, silinmiş rol,
+pasif kullanıcı → **kapsam üretilmez**. Nesne kararı:
+`object_in_org_scope()`; çalışan hedefi için merkezi yardımcı
+`can_access_employee()` / `can_access_employee_personal_data()`.
 
 **Rol kapsam tipi — ✅ UYGULANDI (M8, 2026-09-11):** `hr.roles.scope_type`
 (`NOT NULL` + kapalı küme `CHECK`). Kiracı rollerinde geçerli küme yukarıdaki beş
@@ -322,6 +338,8 @@ koddan **`SYS` hariç** olanıdır: `TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`,
 
 M10 öncesi kapsam çözülemediği için `UNIT`/`UNIT_DIRECT` atamaları **yalnız
 `sahiplık` görünümünde** kalır; `effective` kümede yer almaz (fail-closed).
+**M10–M13 sonrası ✅:** kapsam **çözülür** → `UNIT`/`UNIT_DIRECT` roller etkin izin
+üretebilir; ancak yalnızca **kapsam içindeki** kayıtlar için (`izin ∧ kapsam`).
 
 ---
 
@@ -1004,14 +1022,12 @@ servis/model guard'ları ve testleri vardır.
   onaylamamalıdır.
 - **Etki:** Onay akışı, bildirimler, arayüz ekranları.
 
-### OD5 — Departman yöneticisinin kapsamı — **KAPALI** ✅ (2026-09-11) — **M7/M8 ✅ ve M9 ✅ kısmi UYGULANDI** (2026-09-11)
+### OD5 — Departman yöneticisinin kapsamı — **KAPALI** ✅ (2026-09-11) — **M7–M13 ✅ UYGULANDI** (2026-09-11)
 
-**Uygulama durumu:** `hr.roles.scope_type` (M8) ve `hr.user_roles.scope_org_unit_id`
-(M9, kısmi) uygulandı; `manager → dept_manager` göçü yapıldı (M7). M9'un
-`departments(id)` **FK'si**, "aktif birim" guard'ı ve **alt ağaç çözümlemesi** M10
-sonrasına bırakıldı — bu boşluk `apps/rbac/services/scope.py` ile **fail-closed**
-kapatıldı (kapsam çözülmeden `UNIT`/`UNIT_DIRECT` ataması **izin üretmez**).
-M10'da yapılacaklar için bkz. §5.9.
+**Uygulama durumu:** `hr.roles.scope_type` (M8), `hr.user_roles.scope_org_unit_id`
+(M9 → gerçek FK, M9 tamamlandı) ve organizasyon/çalışan tabloları (M10–M13)
+**uygulandı**; kapsam **gerçek alt ağaçtan** hesaplanır (recursive CTE, derinlik ≤ 20).
+Kapsam çözülemezse `UNIT`/`UNIT_DIRECT` ataması **izin üretmez** (fail-closed).
 
 **KARAR (A) seçildi:** `dept_manager` rolünün organizasyon kapsamı, **atandığı
 organizasyon birimi + o birimin tüm alt birimleridir** (kapsam kodu **`UNIT`**).
@@ -1143,10 +1159,10 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
 |---|---|---|
 | **M7** | `manager → dept_manager` göçünde rol **`UNIT`** tipine geçer; `tenant_officer` **`TENANT`** tiplidir; göç sonrası **kapsamsız `dept_manager` ataması bırakılmaz** (varsa göç sırasında raporlanır/hata verir — fail-closed) | ✅ UYGULANDI (`rbac/0005`): yerinde adlandırma, izin setleri DY/ŞYT, conflict + soft-delete fail-closed. **M10 öncesi kapsamsız `dept_manager` ataması izin üretmez** (kapsam çözülemez) — yani "sessiz geniş yetki" yolu kapalı |
 | **M8** | `hr.roles.scope_type` kapalı küme (`TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`) + dokümandaki backfill; varsayılan şablonlarda `dept_manager` = `UNIT` | ✅ UYGULANDI (`rbac/0006`): NOT NULL + DB `CHECK`; backfill eşlemesi uygulandı |
-| **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi**: rol `scope_type ∈ {UNIT, UNIT_DIRECT}` ise `scope_org_unit_id` **zorunlu**; benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** | ✅ **KISMİ** (`rbac/0007`): kolon + benzersizlik + guard tetikleyicisi ✅; `departments` **FK'si** ve "aktif birim" guard'ı **⏳ M10 sonrası** |
-| **M10–M13** | `departments`/`positions`/`employees`/`employee_manager`: kapsam hesabı için `(tenant_id, parent_id)` indeksi (M24) ve `employees.department_id` zorunluluğu | ⏳ bekliyor |
-| **Resolver** | **organization scope resolver** (`scope_org_unit_id` → alt ağaç kimlikleri, kiracı bağlamında) + **permission resolver** ile birleşik karar: `izin ∧ kapsam` | ✅ **Köprü kuruldu** (`apps/rbac/services/scope.py`): kapsam çözülemezse `UNIT`/`UNIT_DIRECT` **izin üretmez**; alt ağaç çözümlemesi M10'da bu **tek noktaya** eklenecek (çağıran değişmez). İki görünüm ayrıldı: `declared_permission_codes` (sahiplik) / `effective_permission_codes` (kullanılabilir) |
-| **Testler** | T7 (kendini yükseltme), alt ağaç/kardeş birim ayrımı, multi-scope birleşim, NULL fail-closed, silinmiş birim/atama, süre bitimi, move sonrası yeniden hesaplama, PII ayrımı | ✅ UYGULANDI (M7–M9 kapsamı): göç/atama korunumu, çift kayıt yok, soft-delete, kapsam zorunluluğu, NULL fail-closed, çoklu kapsam, süre bitimi, pasif kullanıcı, tenant izolasyonu, self-elevation; **⏳ M10 sonrası:** alt ağaç/kardeş birim, move sonrası yeniden hesaplama |
+| **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi**: rol `scope_type ∈ {UNIT, UNIT_DIRECT}` ise `scope_org_unit_id` **zorunlu**; benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** | ✅ **TAMAMLANDI** (`rbac/0007` + `0008_od5_scope_org_unit_fk` + `0009`/`0010`): kolon, benzersizlik, **gerçek FK (`hr.departments.id`)**, kiracı guard'ı ve "aktif birim" denetimi; devre dışı bırakma serbest |
+| **M10–M13** | `departments`/`positions`/`employees`/`employee_manager`: kapsam hesabı için `(tenant_id, parent_id)` indeksi (M24) ve `employees.department_id` zorunluluğu | ✅ UYGULANDI (`organization/0001`–`0009`): tablolar + `department_id` NOT NULL + kısmi benzersizlikler + kiracı guard'ları + RLS/FORCE; alt ağaç çözümlemesi tek noktada |
+| **Resolver** | **organization scope resolver** (`scope_org_unit_id` → alt ağaç kimlikleri, kiracı bağlamında) + **permission resolver** ile birleşik karar: `izin ∧ kapsam` | ✅ UYGULANDI (`apps/rbac/services/scope.py`): recursive CTE ile gerçek alt ağaç (≤ 20), `UNIT_DIRECT` ayrımı, çoklu atama birleşimi, fail-closed; nesne kararı `object_in_org_scope()` + çalışan hedefi için `can_access_employee()`. İki görünüm: `declared_permission_codes` (sahiplik) / `effective_permission_codes` (kullanılabilir) |
+| **Testler** | T7 (kendini yükseltme), alt ağaç/kardeş birim ayrımı, multi-scope birleşim, NULL fail-closed, silinmiş birim/atama, süre bitimi, move sonrası yeniden hesaplama, PII ayrımı | ✅ UYGULANDI: M7–M9 testleri + M10–M13 testleri (`tests/test_organization_m10_m13.py`, 56 test): alt ağaç/kardeş birim, çoklu kapsam birleşimi, silinmiş birim/atama, süre bitimi, move sonrası **yeniden hesaplama**, izin ∧ kapsam (ALLOW/DENY), K2/K3 ayrımı |
 
 #### 5.10 Güvenlik etkisi
 

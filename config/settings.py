@@ -96,6 +96,8 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.rbac",
     "apps.audit",
+    # Organizasyon ve çalışan temel veri modeli (M10–M13; OD24/OD27/OD21/OD5 kapalı).
+    "apps.organization",
     # Platform katmanı (OD3/OD20/OD22/OD25): AYRI GÜVENLİK SINIRI — kiracı
     # tablolarıyla birleşmez, ORM modeli yoktur (ham SQL migration + servis).
     "apps.platform",

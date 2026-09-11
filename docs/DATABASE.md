@@ -218,11 +218,17 @@ olduğu için etki boş dizinle sınırlıdır).
 | `user_roles` | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
 | `user_permission_overrides` | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
 | `audit_logs` | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `departments` ✅ (M10) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `positions` ✅ (M10) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `employees` ✅ (M12) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `employee_personal_data` ✅ (M12) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `employee_manager` ✅ (M13) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
 
-7/7 tabloda `rls=true` **ve** `force_rls=true`. Politikalarda platform istisnası
-**yoktur** (bu, OD3 kararının veritabanı karşılığıdır: politika gevşetilmez).
+**12/12 tabloda** `rls=true` **ve** `force_rls=true` (ölçüldü: M10–M13 sonrası 7 → **12**).
+Politikalarda platform istisnası **yoktur** (bu, OD3 kararının veritabanı
+karşılığıdır: politika gevşetilmez).
 
-## A.4 Kiracılar arası referans guard'ları (9 tetikleyici, 6 tablo)
+## A.4 Kiracılar arası referans guard'ları (19 tetikleyici, 11 tablo)
 
 `hr.ensure_same_tenant_ref()` + `BEFORE INSERT OR UPDATE` tetikleyicisi:
 
@@ -230,9 +236,13 @@ olduğu için etki boş dizinle sınırlıdır).
 |---|---|
 | `users` | `created_by_id → users` |
 | `role_permissions` | `role_id → roles` |
-| `user_roles` | `user_id → users`, `role_id → roles`, `granted_by_id → users` |
+| `user_roles` | `user_id → users`, `role_id → roles`, `granted_by_id → users`, **`scope_org_unit_id → departments` (M9 tamamlama)** |
 | `user_permission_overrides` | `user_id → users`, `granted_by_id → users` |
 | `audit_logs` | `user_id → users` |
+| `departments` ✅ (M11) | `parent_id → departments`, `manager_employee_id → employees` |
+| `employees` ✅ (M12) | `user_id → users`, `department_id → departments`, `position_id → positions` |
+| `employee_personal_data` ✅ (M12) | `employee_id → employees` |
+| `employee_manager` ✅ (M13) | `employee_id → employees`, `manager_employee_id → employees`, `created_by_id → users` |
 | `tenants` | (guard değil) `sync_tenant_directory` — `AFTER INSERT/UPDATE/DELETE` |
 
 **Neden gerekli:** Yabancı anahtar kontrolü RLS'ten etkilenmez; `tenant_id` doğru
@@ -450,7 +460,7 @@ erişim yalnızca `persopyro_platform` rolüyle.
 | `tenants` | **`public_id_prefix varchar(20) NOT NULL UNIQUE`** (immutable; değişmezlik tetikleyicisi) — RLS politikası aynı kalır | OD25 (kapalı): public ID ön eki sabit |
 | `api_tokens` | **Genişletildi ✅ (OD26 — kapalı, uygulandı):** `token_kind`, `purpose` NOT NULL, `scopes text[]` (katalog doğrulamalı, `platform.*` yasak), `revoked_at` + `revoked_reason`; değişmezlik ve tek yönlü iptal tetikleyicileri. **Yeni token sistemi kurulmaz** (`accounts/0003`) | OD26 / bulgu F8 |
 
-## B.4 Kiracı iş tabloları (yeni, `hr` şemasında, RLS zorunlu) 🔜
+## B.4 Kiracı iş tabloları (yeni, `hr` şemasında, RLS zorunlu) — **M10–M13 ✅ UYGULANDI**
 
 Yetkilendirme modelinin ihtiyaç duyduğu minimum küme tasarlanmıştır; bordro,
 performans, işe alım, faturalama gibi modüller **bu turun kapsamı dışındadır**
@@ -461,38 +471,51 @@ aşağıdaki tüm tablolar **doğrudan `tenant_id`'ye** bağlıdır ve hiçbirin
 `company_id`/`legal_entity_id` **bulunmaz**. Gelecekte çok tüzel kişilik gerekirse
 ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (OD27).
 
-### `hr.departments`
+### `hr.departments` ✅ (M10/M11)
 - **PURPOSE:** Organizasyon birimleri; `UNIT` kapsamının temeli.
-- **PRIMARY KEY:** `id` · **UNIQUE:** `(tenant_id, code)`
+- **PRIMARY KEY:** `id` · **UNIQUE (kısmi, OD21):** `(tenant_id, code) WHERE deleted_at IS NULL`
 - **FOREIGN KEYS:** `tenant_id → tenants.id`, `parent_id → departments.id` (self), `manager_employee_id → employees.id` (nullable)
-- **TENANT ISOLATION:** `tenant_id` RLS + `parent_id`/`manager_employee_id` guard · **PERSONAL DATA LEVEL:** K0
-- **RLS:** ✅ + FORCE zorunlu · **AUDIT:** yapı değişikliği, birim taşıma (`org.unit.move`)
+- **Kolonlar (10):** `id, created_at, updated_at, deleted_at, tenant_id, parent_id, manager_employee_id, code, name, status`
+- **Doğrulanan tasarım:** `status` kapalı küme `CHECK` (`active`/`inactive`/`archived`); `code`/`name` zorunlu; `parent_id` **adjacency list** (OD24); ağaç kolonu (`path`/closure) **yok**.
+- **DB garantileri (M11):** `CHECK (parent_id IS DISTINCT FROM id)`; tetikleyici `trg_departments_tree_guard` — **döngü reddi**, **derinlik ≤ 20**, **silinmiş birimin altına yeni aktif birim bağlanamaz** (OD21).
+- **TENANT ISOLATION:** `tenant_id` RLS + `parent_id`/`manager_employee_id` kiracı guard'ı · **PERSONAL DATA LEVEL:** K0
+- **RLS:** ✅ + FORCE · **AUDIT:** yapı değişikliği, birim taşıma (`org.unit.move`)
+- **İndeksler:** `(tenant_id, parent_id)` (kapsam sorguları), `(tenant_id, status)`
 
-### `hr.positions`
-- **PURPOSE:** Unvan/pozisyon tanımı.
-- **PRIMARY KEY:** `id` · **UNIQUE:** `(tenant_id, code)` · **FK:** `tenant_id`
-- **RLS:** ✅ + FORCE · **PERSONAL DATA LEVEL:** K0 · **AUDIT:** orta
+### `hr.positions` ✅ (M10)
+- **PURPOSE:** Unvan/kadro tanımı (tenant düzeyinde; **birime bağlı değildir**).
+- **PRIMARY KEY:** `id` · **UNIQUE (kısmi):** `(tenant_id, code) WHERE deleted_at IS NULL` · **FK:** `tenant_id`
+- **Kolonlar:** `id, created_at, updated_at, deleted_at, tenant_id, code, name, level`
+- **RLS:** ✅ + FORCE · **PERSONAL DATA LEVEL:** K0 · **AUDIT:** orta (`org.position.create`)
 
-### `hr.employees`
+### `hr.employees` ✅ (M12)
 - **PURPOSE:** Çalışanın **iş** kaydı (kimlik verisi değil).
-- **PRIMARY KEY:** `id` · **UNIQUE:** `(tenant_id, employee_no)`
-- **FOREIGN KEYS:** `tenant_id`, `user_id → users.id` (nullable), `department_id → departments.id`, `position_id → positions.id` (nullable)
-- **TENANT ISOLATION:** `tenant_id` RLS + tüm FK'lar için guard · **PERSONAL DATA LEVEL:** **K0/K1** — bilinçli olarak PII **içermez**
-- **RLS:** ✅ + FORCE · **AUDIT:** yüksek (oluşturma, birim/unvan/manager değişimi, çıkış)
+- **PRIMARY KEY:** `id` · **UNIQUE (kısmi):** `(tenant_id, employee_no) WHERE deleted_at IS NULL`
+- **FOREIGN KEYS:** `tenant_id`, `user_id → users.id` (nullable), `department_id → departments.id` (**NOT NULL** — OD24 §4), `position_id → positions.id` (nullable)
+- **Kolonlar:** `id, created_at, updated_at, deleted_at, tenant_id, user_id, department_id, position_id, employee_no, hire_date, termination_date, status`
+- **Doğrulanan tasarım:** `status` kapalı küme `CHECK` (`active`/`suspended`/`terminated`/`archived`); `CHECK (termination_date IS NULL OR termination_date >= hire_date)`; `department_id` **zorunlu**
+- **TENANT ISOLATION:** `tenant_id` RLS + `user_id`/`department_id`/`position_id` kiracı guard'ı · **PERSONAL DATA LEVEL:** **K0/K1** — bilinçli olarak PII **içermez**
+- **RLS:** ✅ + FORCE · **AUDIT:** yüksek (`employee.create`, `employee.department_change`)
+- **İndeksler:** `(tenant_id, department_id)`, `(tenant_id, user_id)`, `(tenant_id, status)`
 
-### `hr.employee_personal_data` (1:1)
+### `hr.employee_personal_data` (1:1) ✅ (M12)
 - **PURPOSE:** Kişisel veriyi ayrı tabloda tutar → maskeleme ve erişim **tablo kapsamında** kontrol edilir.
-- **PRIMARY KEY:** `employee_id` (1:1) · **FK:** `tenant_id`, `employee_id → employees.id` (CASCADE)
-- **Kolonlar:** K2: `first_name, last_name, birth_date, national_id, address, personal_email, personal_phone, iban` · **K3 (şifreli):** `health_notes`, `disability_status`, `biometric_ref`
-- **TENANT ISOLATION:** `tenant_id` RLS · **PERSONAL DATA LEVEL:** **K2 + K3**
-- **RLS:** ✅ + FORCE · **AUDIT:** **çok yüksek** — okuma dahil (gerekçeli, `employee.personal_data.read`)
+- **PRIMARY KEY:** `employee_id` (1:1 — ayrı `id` kolonu **yoktur**) · **FK:** `tenant_id`, `employee_id → employees.id` (CASCADE)
+- **Kolonlar (K2):** `first_name, last_name, birth_date, national_id, address, personal_email, personal_phone, iban` · **(K3, şifreli):** `health_notes`, `disability_status`, `biometric_ref` (Fernet; `apps/common/fields.py`)
+- **TENANT ISOLATION:** `tenant_id` RLS + `employee_id` kiracı guard'ı · **PERSONAL DATA LEVEL:** **K2 + K3**
+- **RLS:** ✅ + FORCE · **AUDIT:** **çok yüksek** (okuma dahil; `employee.sensitive.read` + `MFA_OK`/`PURPOSE_GIVEN`)
+- **Erişim notu:** organizasyon kapsamı (UNIT) bu tabloya **tek başına erişim hakkı vermez** (OD5 §5.7) — karar `can_access_employee_personal_data()` içindedir.
+- **Yetki turu:** app rolü `SELECT/INSERT/UPDATE` alır, **`DELETE` almaz** (OD21 + saklama politikası; `ON DELETE CASCADE` zinciri de böylece runtime'da kurulamaz).
 
-### `hr.employee_manager` (raporlama ilişkisi)
-- **PURPOSE:** Yönetici–çalışan ilişkisi (geçmişli, çoklu yönetici destekli).
-- **PRIMARY KEY:** `id` · **UNIQUE (kısmi):** `(employee_id, manager_employee_id) WHERE effective_to IS NULL`
+### `hr.employee_manager` (raporlama ilişkisi) ✅ (M13)
+- **PURPOSE:** Yönetici–çalışan ilişkisi (geçmişli, çoklu yönetici destekli). **RBAC değildir — yetki üretmez.**
+- **PRIMARY KEY:** `id` · **UNIQUE (kısmi):** `(employee_id) WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL` (**tek aktif birincil yönetici**) + `(employee_id, manager_employee_id) WHERE effective_to IS NULL AND deleted_at IS NULL`
 - **FOREIGN KEYS:** `tenant_id`, `employee_id`, `manager_employee_id`, `created_by_id`
-- **TENANT ISOLATION:** `tenant_id` + 3 guard · **PERSONAL DATA LEVEL:** K0
-- **RLS:** ✅ + FORCE · **AUDIT:** yüksek (yönetici ataması yetki etkisi taşır)
+- **Kolonlar:** `id, created_at, updated_at, deleted_at, tenant_id, employee_id, manager_employee_id, relation_type, effective_from, effective_to, created_by_id`
+- **Doğrulanan tasarım:** `relation_type` kapalı küme `CHECK` (`primary`/`secondary`/`delegate`); `CHECK (employee_id <> manager_employee_id)`; `CHECK (effective_to IS NULL OR effective_to >= effective_from)`; `effective_from` zorunlu
+- **TENANT ISOLATION:** `tenant_id` + 3 guard (+ `trg_employee_manager_active_guard`: **silinmiş çalışan/yönetici ile yeni aktif ilişki kurulamaz**) · **PERSONAL DATA LEVEL:** K0
+- **RLS:** ✅ + FORCE · **AUDIT:** yüksek (`employee.primary_manager_set`, `employee.manager.close`)
+- **İndeksler:** `(tenant_id, manager_employee_id)` ("ekibim"), `(tenant_id, employee_id)`
 
 ### `hr.documents` + `hr.document_access`
 - **`documents`:** `id, tenant_id, owner_employee_id, category, title, storage_key, checksum_sha256, mime_type, size_bytes, classification (public/internal/confidential/restricted), contains_personal_data (yes/no/unsure), personal_data_categories text[], retention_until, version, uploaded_by_id, created_at, deleted_at`
@@ -575,10 +598,10 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M7** | Rol kodu göçü: `manager → dept_manager` (kiracı başına, veri) + `tenant_officer` şablon rolünün oluşturulması — **✅ UYGULANDI (2026-09-11)** (`rbac/0005_od5_rol_katalogu_gocu`): göç **yerinde** yapılır — rolün **kimliği, atamaları ve izin bağları korunur** (yeni rol üretilmez), izin seti §6.2 **DY** kolonuna **explicit** getirilir (ölçüm: `+7/-0` → **7→14 izin**); `tenant_officer` §6.2 **ŞYT** setiyle oluşturulur (**19 izin**, `◐ ❓OD9` işaretli kodlar fail-closed olarak **alınmaz**). **Fail-closed kararlar:** (a) aynı kiracıda `manager`+`dept_manager` birlikte varsa migration **açık hata** verir (sessiz birleştirme yok), (b) soft-delete edilmiş `manager` **sessizce canlandırılmaz** (adı değiştirilmez, yeni rol üretilmez), (c) hedef sette olmayan eski izinler **çıkarılır** (kalıntı yetki yok), (d) katalogda olmayan izin kodu → **açık hata**. İdempotent; çıktı olarak kiracı başına rol/rol-izin sayıları **raporlanır** | Veri | M6, M8 | Yerinde ters adlandırma (atama varsa `tenant_officer` silinmez → açık hata) |
 | **M8** | `hr.roles.scope_type` (OD5 ✅): kapalı küme `TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF` (yeni kod yok; **`SYS` hariç** — yalnız platform rolleri) — **✅ UYGULANDI (2026-09-11)** (`rbac/0006_od5_role_scope_type`): kolon **NOT NULL** + DB `CHECK` (`roles_scope_type_valid`); backfill doküman eşlemesiyle: `tenant_admin`/`tenant_officer`/`hr_manager` = `TENANT`, `dept_manager` = `UNIT`, `employee` = `SELF`, bilinen kod dışı **custom** roller = `TENANT` (§4.1) ve **raporlanır**. `scope_type` rolün **azami** kapsamıdır; izin **üretmez** (karar `izin ∧ kapsam`) | Şema | — | Kolon + kısıt düşürülür |
 | **M9** | `hr.user_roles.scope_org_unit_id` + **guard tetikleyicisi** + kısmi benzersizlikler — **✅ KISMİ UYGULANDI (2026-09-11)** (`rbac/0007_od5_user_role_scope`; `M10` bağımlılığı nedeniyle bilinçli bölme): **uygulanan** (a) kolon (uuid, nullable), (b) `UNIQUE NULLS NOT DISTINCT (user_id, role_id, scope_org_unit_id)` → kapsamsız rollerde çift atama engellenir, aynı rol farklı birimlere atanabilir, (c) `trg_user_role_scope_guard`: `scope_type ∈ {UNIT, UNIT_DIRECT}` iken kapsam **zorunlu** ("NULL = tüm tenant" **değildir**), diğer tiplerde kapsam **NULL olmalı**, rol kiracı bağlamında görünmüyorsa yazım **reddedilir**. **Ertelenen (M10 sonrası):** `departments(id)` **FK'si**, "kapsam aynı kiracının **aktif** birimi olmalı" guard'ı ve **alt ağaç çözümlemesi** (sahte FK/tablo üretilmedi). **Fail-closed köprü:** `apps/rbac/services/scope.py` — M10 öncesi `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez** (aksi hâlde birim yöneticisi izinleri tenant-wide görünürdü) | Şema + tetikleyici | M10 (departments) | Kolon/tetikleyici DROP |
-| **M10** | `hr.departments` + `hr.positions` + RLS + FORCE + guard'lar + indeksler. **OD27 kapalı: `company_id`/`legal_entity_id` EKLENMEZ** — tablolar doğrudan `tenant_id`'ye bağlıdır | Yeni | M1 (şema zaten var) | DROP TABLE (veri kaybı kabul, yeni modül) |
-| **M11** | **Organizasyon ağacı garantileri (OD24 kapalı):** `CHECK (parent_id IS DISTINCT FROM id)`, `BEFORE INSERT/UPDATE` **döngü reddi** tetikleyicisi (ata zinciri yürüyüşü, derinlik sınırı 20), `employee_manager` için `CHECK (employee_id <> manager_employee_id)` + aynı tetikleyici, `relation_type='primary'` kısmi benzersizliği. **`path`/closure kolonu EKLENMEZ** | Şema + tetikleyici | M10 | Tetikleyici/kısıt DROP |
-| **M12** | `hr.employees` + `hr.employee_personal_data` (K3 şifreli kolonlar) + RLS + guard'lar. **OD27 kapalı: `company_id` EKLENMEZ** | Yeni | M10 | DROP TABLE |
-| **M13** | `hr.employee_manager` + RLS + guard + kısmi benzersizlik | Yeni | M12 | DROP TABLE |
+| **M10** | `hr.departments` + `hr.positions` + RLS + FORCE + guard'lar + indeksler. **OD27 kapalı: `company_id`/`legal_entity_id` EKLENMEZ** — tablolar doğrudan `tenant_id`'ye bağlıdır — **✅ UYGULANDI (2026-09-11)** (`organization/0001_od24_departments_positions`): `departments` (`code`/`name`/`status` + `parent_id` adjacency list), `positions` (`code`/`name`/`level`; birime bağlı **değil**), kısmi benzersizlikler (`WHERE deleted_at IS NULL`), `(tenant_id, parent_id)` indeksi, `status` kapalı küme `CHECK` (`organization/0009`); RLS + FORCE + `tenant_isolation` politikası (`0006_rls_organization`), kiracı-içi FK guard'ları (`0007`) | Yeni | M1 (şema zaten var) | DROP TABLE (veri kaybı kabul, yeni modül) |
+| **M11** | **Organizasyon ağacı garantileri (OD24 kapalı):** `CHECK (parent_id IS DISTINCT FROM id)`, `BEFORE INSERT/UPDATE` **döngü reddi** tetikleyicisi (ata zinciri yürüyüşü, derinlik sınırı 20), `employee_manager` için `CHECK (employee_id <> manager_employee_id)` + aynı tetikleyici deseni, `relation_type='primary'` kısmi benzersizliği. **`path`/closure kolonu EKLENMEZ** — **✅ UYGULANDI** (`organization/0002_od24_tree_guards` + `0008_employee_manager_active_guard`): `hr.departments_tree_guard()` döngüyü, **derinliği (≤ 20)** ve **silinmiş ata** altına yeni aktif birim bağlanmasını reddeder; `hr.employee_manager_active_guard()` silinmiş çalışan/yöneticiyle yeni aktif ilişkiyi engeller; `employee_manager` kısmi benzersizlikleri `0004`'te | Şema + tetikleyici | M10 | Tetikleyici/kısıt DROP |
+| **M12** | `hr.employees` + `hr.employee_personal_data` (K3 şifreli kolonlar) + RLS + guard'lar. **OD27 kapalı: `company_id` EKLENMEZ** — **✅ UYGULANDI** (`organization/0003_od24_employees`): `employees` = **iş kaydı, PII içermez**; `department_id` **NOT NULL** (OD24 §4), `user_id`/`position_id` nullable, kısmi `(tenant_id, employee_no)` benzersizliği, `status` kapalı küme, `termination_date >= hire_date`; `employee_personal_data` **PK `employee_id` (1:1)**, K2 açık + **K3 Fernet şifreli** (`apps/common/fields.py`) | Yeni | M10 | DROP TABLE |
+| **M13** | `hr.employee_manager` + RLS + guard + kısmi benzersizlik — **✅ UYGULANDI** (`organization/0004_od24_employee_manager`): `relation_type` (`primary`/`secondary`/`delegate`) kapalı küme, `effective_from`/`effective_to` (tarih aralığı `CHECK`), `created_by_id`; **tek aktif birincil yönetici** kısmi benzersiz indeksi, `(employee_id, manager_employee_id)` kısmi benzersizliği, self-manager `CHECK`'i, kiracı guard'ları + **silinmiş çalışanla yeni aktif ilişki yasağı**. **RBAC değildir — yetki üretmez** | Yeni | M12 | DROP TABLE |
 | **M14** | `hr.leave_*`, `hr.approval_steps` + RLS + guard | Yeni | M12 | DROP TABLE |
 | **M15** | `hr.shifts`, `hr.shift_assignments`, `hr.attendance_records` + RLS + guard | Yeni | M12 | DROP TABLE |
 | **M16** | `hr.documents` + `hr.document_access` + sınıflandırma/kişisel veri işaretleri + RLS + guard | Yeni | M12 | DROP TABLE |
@@ -711,6 +734,7 @@ yeni tablo migration'ı sonunda **açık bir yetki turu** yapılır:
 | Tablo türü | `persopyro_app` yetkisi |
 |---|---|
 | Normal iş tablosu | SELECT, INSERT, UPDATE, DELETE |
+| **OD21 soft-delete tablosu** (`departments`, `positions`, `employees`, `employee_personal_data`, `employee_manager` — M10–M13) | **SELECT, INSERT, UPDATE** (DELETE/TRUNCATE revoke — silme `deleted_at` ile; K2/K3 ve `employees` fiziksel silinmez, `ON DELETE CASCADE` zinciri runtime'da kurulamaz) |
 | Denetim/olay tablosu (`audit_logs`, `platform_access_notices`) | **INSERT, SELECT** (UPDATE/DELETE revoke) |
 | Yansı/dizin tablosu (`tenant_directory`) | **SELECT** |
 | Global tanım tablosu (`permissions`) | **SELECT** |
@@ -735,11 +759,11 @@ indeksler `tenant_id` ile başlar; (2) dışa aktarma/sıralama indeksleri
 | `user_roles` | **kısmi** UNIQUE `(user_id, role_id) WHERE deleted_at IS NULL` | OD21 |
 | `user_permission_overrides` | **kısmi** UNIQUE `(user_id, permission_id) WHERE deleted_at IS NULL` | OD21 |
 | `tenants` | `slug`, `domain` **tam** benzersiz (**istisna**, OD21) | Şirket slug'ı kalıcı rezerve; destek/denetim belirsizliğini ve `public_id` ön ek kaymasını önler |
-| `departments` | **kısmi** UNIQUE `(tenant_id, code) WHERE deleted_at IS NULL`, `(tenant_id, parent_id)`, ağaç kolonu (`path text_pattern_ops` **veya** closure tablosu `(ancestor_id, descendant_id)`) | `UNIT` kapsam sorguları (OD24) + kısmi benzersizlik (OD21) |
+| `departments` | **kısmi** UNIQUE `(tenant_id, code) WHERE deleted_at IS NULL`, `(tenant_id, parent_id)` **ağaç sorguları için** (OD24: recursive CTE; `path`/closure kolonu **yoktur**) | `UNIT` kapsam sorguları (OD24) + kısmi benzersizlik (OD21) |
 | `positions` | **kısmi** UNIQUE `(tenant_id, code) WHERE deleted_at IS NULL` | OD21 |
 | `employees` | **kısmi** UNIQUE `(tenant_id, employee_no) WHERE deleted_at IS NULL`; `(tenant_id, department_id)`, `(tenant_id, user_id)`, `(tenant_id, status)` | Kapsam + listeler + OD21 |
 | `employee_personal_data` | PK `employee_id`; `(tenant_id)` | 1:1 erişim |
-| `employee_manager` | **kısmi** UNIQUE `(employee_id, manager_employee_id) WHERE deleted_at IS NULL AND effective_to IS NULL`, `(tenant_id, manager_employee_id)` | Raporlama zinciri + "ekibim" sorgusu (OD21) |
+| `employee_manager` | **kısmi** UNIQUE `(employee_id) WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL` (**tek aktif birincil yönetici**, ✅ M13), **kısmi** UNIQUE `(employee_id, manager_employee_id) WHERE deleted_at IS NULL AND effective_to IS NULL`, `(tenant_id, manager_employee_id)` | Raporlama zinciri + "ekibim" sorgusu (OD21/OD24) |
 | `documents` | **kısmi** UNIQUE (belge numarası varsa) `WHERE deleted_at IS NULL`; `(tenant_id, owner_employee_id)`, `(tenant_id, classification)`, `(tenant_id, contains_personal_data)`, `(tenant_id, retention_until)` | Yetki + saklama işleri + OD21 |
 | `document_access` | `(tenant_id, document_id)`, **kısmi** `(expires_at) WHERE expires_at IS NOT NULL` | Erişim kontrolü + süre temizliği |
 | `leave_requests` / `approval_steps` | `(tenant_id, status)`, `(tenant_id, approver_user_id, status)` | Onay kuyruğu |

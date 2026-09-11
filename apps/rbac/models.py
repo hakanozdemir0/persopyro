@@ -183,17 +183,19 @@ class UserRole(TenantScopedModel):
     )
     granted_at = models.DateTimeField("verilme zamanı", auto_now_add=True)
     expires_at = models.DateTimeField("bitiş", null=True, blank=True)
-    scope_org_unit_id = models.UUIDField(
-        "organizasyon birimi kapsamı",
+    scope_org_unit = models.ForeignKey(
+        "organization.Department",
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
+        related_name="user_role_scopes",
         help_text=(
             "OD5: UNIT/UNIT_DIRECT tipli rollerde ZORUNLU (DB tetikleyicisi dayatır); "
-            "diğer tiplerde NULL olmalıdır. Değer, atanan birimin organizasyon "
-            "ağacındaki konumunu gösterir ve yetki kapsamı bu birim + alt ağacıdır. "
-            "FK (departments) M10 sonrası eklenecek; M10 öncesi kapsam "
-            "ÇÖZÜLEMEZ ve bu atamalar izin ÜRETMEZ (fail-closed)."
+            "diğer tiplerde NULL olmalıdır. Yetki kapsamı bu birim + alt ağacıdır "
+            "(OD24: yalnızca AKTİF birim; silinmiş birim kapsam üretmez). "
+            "M9 tamamlandı: gerçek FK (`hr.departments.id`), ON DELETE RESTRICT."
         ),
+        verbose_name="organizasyon birimi kapsamı",
     )
 
     class Meta:
@@ -205,7 +207,7 @@ class UserRole(TenantScopedModel):
             # kez taşıyabilir (kapsam birleşimi). `nulls_distinct=False`: kapsamsız
             # (TENANT/SELF) atamalar NULL'ları "aynı" sayar → çift atama yine engellenir.
             models.UniqueConstraint(
-                fields=["user", "role", "scope_org_unit_id"],
+                fields=["user", "role", "scope_org_unit"],
                 name="user_roles_user_role_scope_uniq",
                 nulls_distinct=False,
             ),

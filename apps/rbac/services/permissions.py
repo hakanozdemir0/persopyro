@@ -37,8 +37,14 @@ from apps.rbac.services.scope import assignment_grants_permissions
 from apps.tenancy.access import tenant_access_allowed
 
 
-def _active_assignments(user) -> list:
-    """Kullanıcının **geçerli** rol atamaları (silinmemiş, süresi geçmemiş)."""
+def active_role_assignments(user) -> list:
+    """
+    Kullanıcının **geçerli** rol atamaları (silinmemiş, süresi geçmemiş).
+
+    Kapsam çözümlemesi (`apps.rbac.services.scope`) ile paylaşılan tek sorgu:
+    salt `deleted_at`/`expires_at` süzgeci uygular; rolün kapsam tipine göre karar
+    **çağıran** tarafın işidir.
+    """
     now = timezone.now()
     return list(
         UserRole.objects.filter(user=user, deleted_at__isnull=True)
@@ -58,7 +64,7 @@ def _active_role_ids(user) -> list:
     """
     return [
         atama.role_id
-        for atama in _active_assignments(user)
+        for atama in active_role_assignments(user)
         if atama.role.deleted_at is None and assignment_grants_permissions(atama)
     ]
 
@@ -88,7 +94,7 @@ def declared_permission_codes(user) -> set[str]:
         return set()
     rol_ids = [
         atama.role_id
-        for atama in _active_assignments(user)
+        for atama in active_role_assignments(user)
         if atama.role.deleted_at is None
     ]
     return _role_permission_codes(rol_ids)
