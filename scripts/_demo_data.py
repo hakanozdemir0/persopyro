@@ -16,8 +16,17 @@ from decimal import Decimal
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.leave.models import LeavePolicy, LeaveRequest, LeaveRequestStatus, LeaveType
+from apps.leave.models import (
+    BalanceEntryKind,
+    LeaveBalance,
+    LeaveBalanceEntry,
+    LeavePolicy,
+    LeaveRequest,
+    LeaveRequestStatus,
+    LeaveType,
+)
 from apps.leave.services import (
+    LeaveError,
     accrue_leave_entitlements,
     create_default_leave_types,
     create_leave_policy,
@@ -184,6 +193,40 @@ with tenant_context(TENANT_ID):
         actor=kullanıcı, tenant=kiracı, period_year=timezone.localdate().year
     )
 
+    # Demo bakiye tamamlama: onaylanan demo talepleri zamanla bakiyeyi tüketebilir
+    # (elle test sırasında talepler onaylanınca). Elle test için en az 5 gün kalsın.
+    # NOT: gerçek düzeltme `adjust_leave_balance` servisinden geçer ve
+    # `leave.balance.manage` izni ister; bu izin şu an hiçbir rol şablonunda
+    # tanımlı değil (bulgu olarak raporlandı). Demo betiği sahte verisini doğrudan yazar.
+    yil = timezone.localdate().year
+    for calisan in (finans_muduru, muhasebe_calisani, ik_calisani):
+        bakiye = LeaveBalance.objects.filter(
+            employee=calisan, leave_type=yillik_tur, period_year=yil
+        ).first()
+        if bakiye is None:
+            continue
+        kalan = bakiye.available_days
+        if kalan is None or kalan >= Decimal("5.0"):
+            continue
+        fark = Decimal("5.0") - kalan
+        bakiye.adjustment_days = bakiye.adjustment_days + fark
+        bakiye.save(update_fields=["adjustment_days", "updated_at"])
+        LeaveBalanceEntry.objects.create(
+            tenant=kiracı,
+            balance=bakiye,
+            employee=calisan,
+            leave_type=yillik_tur,
+            period_year=yil,
+            entry_kind=BalanceEntryKind.ADJUSTMENT,
+            delta_days=fark,
+            reason="Demo veri: elle test icin bakiye tamamlama",
+            actor=kullanıcı,
+        )
+        print(
+            f"DEMO_BAKIYE {calisan.employee_no}: +{fark} gün "
+            f"(yeni kalan {bakiye.available_days})"
+        )
+
     # Onay ekranı için bekleyen talepler: biri kapsam İÇİ (Muhasebe), biri kapsam
     # DIŞI (İK). Böylece Finans müdürü yalnızca birincisini görür/onaylayabilir.
     def _bekleyen_talep(calisan, tur, gun: int, gerekce: str):  # noqa: ANN001, ANN202
@@ -193,15 +236,20 @@ with tenant_context(TENANT_ID):
         if mevcut is not None:
             return mevcut
         baslangic = timezone.localdate() + timedelta(days=10)
-        return create_leave_request(
-            actor=kullanıcı,
-            employee=calisan,
-            leave_type=tur,
-            start_date=baslangic,
-            end_date=baslangic + timedelta(days=gun - 1),
-            reason=gerekce,
-            submit=True,
-        )
+        try:
+            return create_leave_request(
+                actor=kullanıcı,
+                employee=calisan,
+                leave_type=tur,
+                start_date=baslangic,
+                end_date=baslangic + timedelta(days=gun - 1),
+                reason=gerekce,
+                submit=True,
+            )
+        except LeaveError as hata:
+            # Bakiye yetersizse demo betiği düşmez; durum bilgilendirilir.
+            print(f"DEMO_UYARI {calisan.employee_no}/{gerekce}: talep açılamadı — {hata}")
+            return None
 
     _bekleyen_talep(muhasebe_calisani, yillik_tur, 3, "IZIN_TESTI_MUHASEBE")
     _bekleyen_talep(ik_calisani, yillik_tur, 2, "IZIN_TESTI_IK")

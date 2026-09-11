@@ -22,6 +22,7 @@ from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.db.models import Q
 from django.http import Http404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
@@ -71,9 +72,11 @@ from apps.organization.services import (
     move_employee,
     soft_delete_department,
     sub_tree_department_ids,
+    update_department,
 )
 from apps.rbac.models import (
     ORG_SCOPED_ROLE_SCOPE_TYPES,
+    Permission,
     Role,
     RolePermission,
     UserPermissionOverride,
@@ -87,10 +90,16 @@ from apps.rbac.services import (
     effective_permission_codes,
     restore_role_assignment,
     revoke_role_assignment,
+    update_role_permissions,
     user_has_permission,
 )
 from apps.rbac.services.scope import user_org_scope
-from apps.testui.labels import istisna_etiketi, kapsam_metni, kapsam_tipi_etiketi
+from apps.testui.labels import (
+    istisna_etiketi,
+    kapsam_metni,
+    kapsam_tipi_etiketi,
+    modul_etiketi,
+)
 
 
 def _test_ui_kapali() -> None:
@@ -546,6 +555,23 @@ class DashboardView(TestUiView):
             if can_view_leave_request(user, t)
         ]
 
+        # Yaklaşan izinler: onaylanmış ve başlangıcı bugünden sonra olan talepler
+        # (kapsam süzgeci aynı kuraldan geçer; çalışan yalnız kendini görür).
+        bugun = timezone.localdate()
+        yaklasanlar = [
+            _talep_ozeti(t, user)
+            for t in (
+                LeaveRequest.objects.filter(
+                    deleted_at__isnull=True,
+                    status=LeaveRequestStatus.APPROVED,
+                    start_date__gte=bugun,
+                )
+                .select_related("employee__department", "leave_type", "employee")
+                .order_by("start_date")[:20]
+            )
+            if can_view_leave_request(user, t)
+        ][:10]
+
         # Karara bağlanmış talepler (onay/red): kapsam süzgeci aynı kuraldan geçer.
         karara_baglananlar = [
             _talep_ozeti(t, user)
@@ -572,6 +598,7 @@ class DashboardView(TestUiView):
                 "data": {
                     "employee": _calisan_ozeti(calisan) if calisan is not None else None,
                     "period_year": yil,
+                    "upcoming_requests": yaklasanlar,
                     "decided_requests": karara_baglananlar,
                     "status_counts": durum_sayilari,
                     "balances": bakiyeler,
@@ -682,6 +709,40 @@ class DepartmentMoveView(TestUiView):
         except (LeaveError, OrganizationError, LeaveAuthorizationError) as hata:
             return TestUiErrors.cevap(hata)
         return Response({"data": {"id": str(tasindi.pk)}})
+
+
+class DepartmentUpdateView(TestUiView):
+    """Birimin adını/kodunu değiştirir (denetimli; yetki servis katmanında)."""
+
+    def post(self, request, department_id: str):  # noqa: ANN001
+        birim = _kapsamda_birim(request.user, department_id)
+        veri = request.data
+        try:
+            ad = str(veri.get("name") or "").strip()
+            kod = str(veri.get("code") or "").strip()
+            if veri.get("name") is not None and not ad:
+                raise LeaveError("Departman adı boş olamaz.")
+            if veri.get("code") is not None and not kod:
+                raise LeaveError("Departman kodu boş olamaz.")
+            guncel = update_department(
+                actor=request.user,
+                department=birim,
+                name=(ad or None),
+                code=(kod or None),
+                reason=str(veri.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {
+                "data": {
+                    "id": str(guncel.pk),
+                    "code": guncel.code,
+                    "name": guncel.name,
+                    "parent_id": str(guncel.parent_id) if guncel.parent_id else None,
+                }
+            }
+        )
 
 
 class DepartmentDeleteView(TestUiView):
@@ -859,6 +920,10 @@ class RoleListView(TestUiView):
                     "kapsam_gerekli": rol.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES,
                     "atanabilir": izin_var,
                     "gerekce": gerekce,
+                    "permission_count": RolePermission.objects.filter(role=rol).count(),
+                    "user_count": UserRole.objects.filter(
+                        role=rol, deleted_at__isnull=True
+                    ).count(),
                 }
             )
         return Response(
@@ -991,6 +1056,90 @@ class LeaveTypeDeactivateView(TestUiView):
         except Exception as hata:  # noqa: BLE001
             return TestUiErrors.cevap(hata)
         return Response({"data": _izin_turu_ozeti(tur)})
+
+
+class RolePermissionView(TestUiView):
+    """
+    Bir rolün izin kümesini okur/yazar (`role.manage`; kiracıda şirket yöneticisi).
+
+    Okuma yanıtı izinleri **modül bazında gruplar** ve mevcut durumu işaretler;
+    platform izinleri listelenmez (OD3).
+    """
+
+    def _rol(self, request, role_id: str):  # noqa: ANN001
+        rol = Role.objects.filter(
+            pk=_uuid(role_id, "role_id"), tenant=request.user.tenant_id, deleted_at__isnull=True
+        ).first()
+        if rol is None:
+            raise Http404("rol_yok")
+        return rol
+
+    def get(self, request, role_id: str):  # noqa: ANN001
+        rol = self._rol(request, role_id)
+        secili = set(
+            RolePermission.objects.filter(role=rol).values_list("permission__code", flat=True)
+        )
+        aktor_izinleri = effective_permission_codes(request.user)
+        moduller: dict[str, list[dict]] = {}
+        for izin in Permission.objects.exclude(code__startswith="platform.").order_by(
+            "module", "code"
+        ):
+            moduller.setdefault(izin.module or "diger", []).append(
+                {
+                    "code": izin.code,
+                    "name": izin.name,
+                    "secili": izin.code in secili,
+                    "aktor_sahip": izin.code in aktor_izinleri,
+                }
+            )
+        return Response(
+            {
+                "data": {
+                    "role": {
+                        "id": str(rol.pk),
+                        "code": rol.code,
+                        "name": rol.name,
+                        "scope_type": rol.scope_type,
+                        "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                        "role_type": rol.role_type,
+                    },
+                    "modules": [
+                        {
+                            "module": m,
+                            "module_label": modul_etiketi(m),
+                            "permissions": izinler,
+                        }
+                        for m, izinler in sorted(moduller.items())
+                    ],
+                    "selected_count": len(secili),
+                    "total_count": Permission.objects.exclude(
+                        code__startswith="platform."
+                    ).count(),
+                    "can_edit": user_has_permission(request.user, "role.manage")
+                    and not UserRole.objects.filter(
+                        user=request.user, role=rol, deleted_at__isnull=True
+                    ).exists(),
+                }
+            }
+        )
+
+    def post(self, request, role_id: str):  # noqa: ANN001
+        rol = self._rol(request, role_id)
+        kodlar = request.data.get("permission_codes")
+        if not isinstance(kodlar, list):
+            return TestUiErrors.cevap(
+                LeaveError("'permission_codes' bir liste olmalıdır (izin kodları).")
+            )
+        try:
+            update_role_permissions(
+                actor=request.user,
+                role=rol,
+                permission_codes=kodlar,
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": self.get(request, role_id).data})
 
 
 class LookupView(TestUiView):

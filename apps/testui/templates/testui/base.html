@@ -66,9 +66,20 @@ kurulmaz; ek bağımlılık yoktur.
     .tree li { padding: 4px 0; }
     code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
     .login-wrap { max-width: 420px; margin: 8vh auto; }
+    /* Üst bar (başlık + sekmeler) sayfa kaydırılırken sabit kalır. */
+    .topbar { position: sticky; top: 0; z-index: 30; background: var(--bg, #f7f9fc);
+      border-bottom: 1px solid var(--line); }
+    .topbar header { border-bottom: none; padding-bottom: 6px; }
+    .tabs { position: static; }
     .small { font-size: 12px; }
     .bayraklar { display: flex; flex-wrap: wrap; gap: 4px 12px; }
     .bayraklar label { font-weight: 400; color: var(--muted); }
+    .modul { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+    .modul-baslik { display: flex; align-items: center; gap: 8px; }
+    .modul-izinler { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 4px 12px; margin-top: 6px; }
+    .izin-kutu { display: flex; align-items: flex-start; gap: 6px; font-weight: 400; }
+    .izin-kutu code { font-size: 11px; color: var(--muted); }
     .hakedis { display: inline-block; }
     .hakedis-buyuk { font-size: 15px; }
     .detail-box { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px;
@@ -87,6 +98,7 @@ kurulmaz; ek bağımlılık yoktur.
   </style>
 </head>
 <body>
+  <div class="topbar">
   <header>
     <span class="brand">Persopyro</span>
     <span class="badge dev">Manuel Test Arayüzü</span>
@@ -97,6 +109,9 @@ kurulmaz; ek bağımlılık yoktur.
       <button id="logout-btn" type="button">Çıkış</button>
     {% endif %}
   </header>
+  {# Sekmeler üst barla birlikte sabit kalır (kullanıcı geri bildirimi). #}
+  {% block tabs %}{% endblock %}
+  </div>
   <main>
     <div id="global-msg" class="msg"></div>
     {% block content %}{% endblock %}

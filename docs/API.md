@@ -122,10 +122,14 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/positions` | POST | Unvan (pozisyon) tanımı oluşturur (`org.position.manage`) |
 | `/test-ui/api/leave-types` | GET / POST | İzin türleri (tümü, pasifler dahil) / kiracıya özel tür ekleme (`leave.type.manage`; sistem kodları rezerve) |
 | `/test-ui/api/leave-types/<uuid>/deactivate` | POST | İzin türünü pasifleştirir (silmez; mevcut talepler korunur) |
+| `/test-ui/api/departments/<uuid>/update` | POST | Birimin adı/kodunu değiştirir (`org.department.manage` ∧ kapsam) |
+| `/test-ui/api/roles/<uuid>/permissions` | GET / POST | Rolün izin kümesini okur (modül gruplu, Türkçe adlarla) / yazar (`role.manage`) |
 
 Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama (ör. `UNIT` rolde
 eksik birim kapsamı), `401/403` kimlik ve yetki/kapsam, `404` kapsam dışı veya yok,
-`409` durum/iş kuralı çakışması. Oturum yokken dönen `403` yanıtı
+`409` durum/iş kuralı çakışması. Rol izin yazımında ek kurallar: platform izni (**OD3**),
+bilinmeyen kod veya **boş küme** `400`; kendi rolü / sahip olunmayan izni dağıtma `403`.
+Oturum yokken dönen `403` yanıtı
 `error.code = "not_authenticated"` taşır; "yetki yok" durumundan böylece ayrılır.
 Arayüz hiçbir yetki kararını kendisi vermez: her işlem servis katmanına delege
 edilir (`apps/organization/services.py`, `apps/leave/services/*`), RLS yürürlükte

@@ -3,6 +3,60 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.27.0] — 2026-09-11 — Test arayüzü: departman düzenleme, rol izin düzenleme (yetki yönetimi), yaklaşan izinler, sabit üst bar
+
+**Baseline (son commit `5b2e844`):** çalışma ağacı temiz, tam test suite **416 passed**.
+
+Kapsam dışı (bu turda **dokunulmadı**): izin kataloğu (kodlar değişmedi), RLS,
+kimlik doğrulama, üretim API sözleşmesi (`/api/v1/*`), kullanıcı hesabı oluşturma,
+platform yetkilendirmesi (OD3 — kiracı arayüzünden yönetilmez).
+
+### Eklenen
+
+- **Rol izin düzenleme (yeni servis `update_role_permissions`)** — şirket yöneticisi
+  bir rolün izin kümesini manuel düzenler. Guard'lar: yalnız `role.manage`; kendi
+  rolü düzenlenemez (self-elevation/demotion yasağı); **sahip olunmayan izin
+  dağıtılamaz** (kaldırma serbest); **platform izinleri (OD3) listelenmez, verilemez**;
+  bilinmeyen kod ve **boş küme** reddedilir (boş rol sessiz kilitlenme yaratır);
+  her değişiklik `audit_logs`'a yazılır (`role.permissions.update`). Değişiklik
+  anında geçerlidir (izinler her istekte rol tablosundan çözülür).
+- **Yetki Yönetimi sekmesi** — rol tablosu (kapsam tipi, izin sayısı, atama sayısı,
+  atanabilirlik) + rol seçilince **modül gruplu, Türkçe etiketli** izin kutuları,
+  "Tümünü seç" ve modül başlığı seçimi, gerekçe alanı, kaydet. Kendi rolünüzde ve
+  yetkisiz kullanıcıda düzenleyici salt okunur; sahip olmadığınız izinler işaretsiz
+  gösterilir. Rol **atama** yeri: Çalışanlar → Detay → "Rol ve Yetkiler".
+- **Departman düzenleme** — "Departmanlar" ağacında **Düzenle**: ad ve kod değişir
+  (`update_department` servisi, denetim `org.unit.update`); boş ad/kod `400`; taşıma
+  ayrı işlem olarak kalır.
+- **Panelde "Yaklaşan izinler"** — kapsamınızdaki çalışanların **onaylı ve
+  gelecekteki** izinleri (çalışan, birim, tür, başlangıç, bitiş, gün). Bekleyen ve
+  kapsam dışı talepler listelenmez.
+- **Sabit üst bar** — başlık (Persopyro / kullanıcı / Çıkış) ve sekmeler tek bir
+  `sticky` üst bar içinde; sayfa kaydırılırken görünür kalır.
+
+### Ölçüm
+
+| Ölçüm | Önce | Sonrası |
+|---|---|---|
+| Test sayısı | 416 | **424** (+8: departman düzenleme, rol izin guard'ları, yaklaşan izinler, üst bar) |
+| Yeni migration | — | **0** |
+| Yeni bağımlılık | — | **0** |
+| Yeni uç (yalnız `/test-ui/api/*`) | 20 | **22** |
+| Yeni servis | — | `update_role_permissions` (rbac) |
+| Güvenlik modeli | — | **değişmedi** (izin kataloğu, RLS, kapsam mantığı aynen) |
+
+### Doğrulama
+
+- `tests/test_testui.py` **55 test**; tam suite **424 passed**.
+- Gerçek tarayıcı (Chrome/CDP): sabit üst bar (`position: sticky`, sekmeler üst bar
+  içinde); panelde "Yaklaşan izinler"; "Departmanlar → Düzenle" ile gerçek yeniden
+  adlandırma; "Yetki Yönetimi"nde rol tablosu (izin/atama sayıları), dept_manager
+  düzenleyicisi (16 izin, platform izni yok, "Tümünü seç"), bir izni kaldırıp
+  kaydetme (sayaç 16→15, sunucuda doğrulandı) ve geri yükleme (16).
+- `verify_fresh_install.sh`: departman yeniden adlandırma, rol izin ekranı,
+  platform izni `400`, kendi rolü `403`, aynı kümenin yeniden yazılması `200`.
+- `ruff`, `bandit`, `manage.py check`, `makemigrations --check`: temiz.
+
 ## [0.26.0] — 2026-09-11 — Test arayüzü: çalışan/unvan, izin türü yönetimi, panel karar görünümü
 
 **Baseline (son commit `71399fe`):** çalışma ağacı temiz, tam test suite **408 passed**.

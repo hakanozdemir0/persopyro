@@ -630,6 +630,34 @@ kontrol_metni "izin türü eklendi" "$TUR_YANIT" "verify_izni"
 kontrol_metni "talep formunda görünüyor" \
     "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/lookups")" "verify_izni"
 
+# Departman yeniden adlandırma (isim/kod değişikliği).
+IK_BIRIM_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="IK"))' "$DEP_JSON")"
+kontrol_metni "POST /departments/<id>/update" \
+    "$(curl -s -b "$CEREZ" -c "$CEREZ" -X POST "$TABAN2/test-ui/api/departments/$IK_BIRIM_ID/update" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"name":"Dogrulama Birimi","code":"IK-D","reason":"fresh install"}')" \
+    "Dogrulama Birimi"
+
+# Rol yetkileri: okuma + guard'lar + aynı kümeyi geri yazma.
+DM_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="dept_manager"))' "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/roles")")"
+ADMIN_ROL_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="tenant_admin"))' "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/roles")")"
+YETKI_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/roles/$DM_ID/permissions")"
+kontrol_metni "yetki ekrani (modül etiketi)" "$YETKI_JSON" "alışanlar"
+kontrol_yok "yetki ekraninda platform izni yok" "$YETKI_JSON" "platform.tenant.read"
+MEVCUT_KODLAR="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(json.dumps([p["code"] for m in d["modules"] for p in m["permissions"] if p["secili"]]))' "$YETKI_JSON")"
+bekle "POST rol izinleri (platform izni → 400)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "$TABAN2/test-ui/api/roles/$DM_ID/permissions" -H 'Content-Type: application/json' \
+        -H "X-CSRFToken: $(csrf_basligi)" -d '{"permission_codes":["platform.tenant.read"]}')" "400"
+bekle "POST rol izinleri (kendi rolü → 403)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "$TABAN2/test-ui/api/roles/$ADMIN_ROL_ID/permissions" -H 'Content-Type: application/json' \
+        -H "X-CSRFToken: $(csrf_basligi)" -d '{"permission_codes":["employee.read"]}')" "403"
+bekle "POST rol izinleri (ayni kume → 200)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "$TABAN2/test-ui/api/roles/$DM_ID/permissions" -H 'Content-Type: application/json' \
+        -H "X-CSRFToken: $(csrf_basligi)" -d "{\"permission_codes\":$MEVCUT_KODLAR,\"reason\":\"fresh install dogrulama\"}")" "200"
+
 # Rol atama / kaldırma (mock değil, gerçek servis + denetim).
 CALISAN2_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["employee_no"]=="DEMO-002"))' "$CALISAN_JSON")"
 HR_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="hr_manager"))' "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/roles")")"

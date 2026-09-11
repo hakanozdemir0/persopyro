@@ -25,11 +25,13 @@ from django.utils import timezone
 from apps.audit.models import AuditLog
 from apps.leave.models import LeaveBalance
 from apps.organization.services import create_position
-from apps.rbac.models import Role
+from apps.rbac.models import Permission, Role, RolePermission, UserRole
 from apps.rbac.services import (
     RoleAssignmentError,
     assign_role_to_user,
     create_default_roles,
+    update_role_permissions,
+    user_has_permission,
 )
 from apps.tenancy.context import tenant_context
 from tests.leave_helpers import kadro, rol_ver
@@ -1186,3 +1188,257 @@ def test_ui_panel_karara_baglanan_izinleri_gosterir(client, tenant_a, user_a) ->
     _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
     kardes_panel = client.get("/test-ui/api/dashboard").json()["data"]
     assert all(t["employee_no"] != "IK-1" for t in kardes_panel["decided_requests"])
+
+# =============================================================================
+# Bildirim (2. tur): departman adı değiştirme, rol yetki düzenleme,
+# yaklaşan izinler, sabit üst bar
+# =============================================================================
+
+
+def test_ui_departman_adlandirma_calisir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yetkili kullanıcı departmanın adını/kodunu değiştirir; ağaç ve denetim güncellenir."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    muhasebe = lot["birimler"]["muhasebe"]
+    yanit = _post(
+        client,
+        f"/test-ui/api/departments/{muhasebe.pk}/update",
+        {"name": "Muhasebe ve Finans", "code": "MUH-FIN", "reason": "birleştirme"},
+    )
+    assert yanit.status_code == 200
+    assert yanit.json()["data"]["name"] == "Muhasebe ve Finans"
+
+    agac = {d["code"]: d["name"] for d in client.get("/test-ui/api/departments").json()["data"]}
+    assert agac["MUH-FIN"] == "Muhasebe ve Finans"
+    # Kapsam/ağaç ilişkisi korunur.
+    assert (
+        client.get(f"/test-ui/api/departments?moves_for={muhasebe.pk}").json()["meta"]["moves_for"]
+        == str(muhasebe.pk)
+    )
+    with tenant_context(tenant_a.id):
+        assert AuditLog.objects.filter(action="org.unit.update").exists()
+
+
+def test_ui_departman_adlandirma_yetkisiz_ve_gecersiz(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yetkisiz kullanıcı adlandıramaz; boş ad reddedilir."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    yasak = _post(
+        client, f"/test-ui/api/departments/{lot['birimler']['muhasebe'].pk}/update",
+        {"name": "Olmamalı"},
+    )
+    assert yasak.status_code == 403
+
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    bos = _post(
+        client, f"/test-ui/api/departments/{lot['birimler']['muhasebe'].pk}/update", {"name": "  "}
+    )
+    assert bos.status_code == 400
+
+
+def test_ui_rol_yetkileri_okunur(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yetki düzenleme ekranı: modül grupları, Türkçe etiketler, seçili/erişilebilir bilgisi."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    rol_id = next(
+        r["id"]
+        for r in client.get("/test-ui/api/roles").json()["data"]
+        if r["code"] == "dept_manager"
+    )
+    veri = client.get(f"/test-ui/api/roles/{rol_id}/permissions").json()["data"]
+    assert veri["role"]["code"] == "dept_manager"
+    assert veri["role"]["scope_type_label"] == "Seçili birim + alt birimleri"
+    assert veri["can_edit"] is True
+    modul_adlari = [m["module_label"] for m in veri["modules"]]
+    assert "İzin" in modul_adlari and "Organizasyon (departman/unvan)" in modul_adlari
+    # Platform izinleri listelenmez (OD3).
+    kodlar = [p["code"] for m in veri["modules"] for p in m["permissions"]]
+    assert kodlar and not any(k.startswith("platform.") for k in kodlar)
+    secili = [p["code"] for m in veri["modules"] for p in m["permissions"] if p["secili"]]
+    assert "leave.request.approve" in secili and "employee.read" in secili
+
+
+def test_ui_rol_yetkisi_degistirilir_ve_aninda_etki_eder(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yetki ekleme/kaldırma kaydedilir; kullanıcının etkin izinleri anında değişir."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    dm = next(
+        r for r in client.get("/test-ui/api/roles").json()["data"] if r["code"] == "dept_manager"
+    )
+    veri = client.get(f"/test-ui/api/roles/{dm['id']}/permissions").json()["data"]
+    kodlar = [p["code"] for m in veri["modules"] for p in m["permissions"] if p["secili"]]
+    assert "leave.balance.read" in kodlar
+
+    # 1) Yetki KALDIR: bakiye görme yetkisi çıkarılsın.
+    yeni_kume = [k for k in kodlar if k != "leave.balance.read"]
+    yanit = _post(
+        client,
+        f"/test-ui/api/roles/{dm['id']}/permissions",
+        {"permission_codes": yeni_kume, "reason": "bakiye görme kaldırıldı"},
+    )
+    assert yanit.status_code == 200
+    with tenant_context(tenant_a.id):
+        assert not user_has_permission(lot["yonetici_user"], "leave.balance.read")
+
+    # 2) Yetki EKLE: tekrar verilsin.
+    geri = _post(
+        client,
+        f"/test-ui/api/roles/{dm['id']}/permissions",
+        {"permission_codes": kodlar, "reason": "geri alındı"},
+    )
+    assert geri.status_code == 200
+    with tenant_context(tenant_a.id):
+        assert user_has_permission(lot["yonetici_user"], "leave.balance.read")
+        assert AuditLog.objects.filter(action="role.permissions.update").count() >= 2
+
+    # 3) Arayüz de güncel görür.
+    liste = {r["code"]: r for r in client.get("/test-ui/api/roles").json()["data"]}
+    assert liste["dept_manager"]["permission_count"] == len(kodlar)
+
+
+def test_ui_rol_yetkisi_guardlari(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Kendi rolü, platform izni, boş küme ve bilinmeyen kod reddedilir."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    roller = client.get("/test-ui/api/roles").json()["data"]
+    dm = next(r for r in roller if r["code"] == "dept_manager")
+    admin_rolu = next(r for r in roller if r["code"] == "tenant_admin")
+
+    # Kendi rolü: okuma can_edit=false, yazma 403 (self-elevation yasağı).
+    kendi = client.get(f"/test-ui/api/roles/{admin_rolu['id']}/permissions").json()["data"]
+    assert kendi["can_edit"] is False
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/roles/{admin_rolu['id']}/permissions",
+            {"permission_codes": ["employee.read"]},
+        ).status_code
+        == 403
+    )
+
+    platform = _post(
+        client,
+        f"/test-ui/api/roles/{dm['id']}/permissions",
+        {"permission_codes": ["platform.tenant.read"]},
+    )
+    assert platform.status_code == 400
+    assert "Platform" in platform.json()["error"]["message"]
+
+    bilinmeyen = _post(
+        client,
+        f"/test-ui/api/roles/{dm['id']}/permissions",
+        {"permission_codes": ["uydurma.izin"]},
+    )
+    assert bilinmeyen.status_code == 400
+
+    bos = _post(
+        client, f"/test-ui/api/roles/{dm['id']}/permissions", {"permission_codes": []}
+    )
+    assert bos.status_code == 400
+    assert "en az bir izin" in bos.json()["error"]["message"].lower()
+
+    # Yetkisiz kullanıcı: hem okuma bayrağı hem yazma.
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
+    detay = client.get(f"/test-ui/api/roles/{dm['id']}/permissions").json()["data"]
+    assert detay["can_edit"] is False
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/roles/{dm['id']}/permissions",
+            {"permission_codes": ["employee.read"]},
+        ).status_code
+        == 403
+    )
+
+
+def test_ui_sahip_olunmayan_izin_dagitilamaz(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """§4.3: aktör sahip olmadığı izni dağıtamaz (servis katmanı, HTTP 403)."""
+    kadro(tenant_a, user_a)  # kiracı kurulumu (roller + izinler)
+    with tenant_context(tenant_a.id):
+        roller = create_default_roles(tenant_a)
+        # `role.manage` içeren ama `employee.sensitive.read` içermeyen özel bir rol.
+        kisitli = Role.objects.create(
+            tenant=tenant_a,
+            code="kisitli_yonetici",
+            name="Kısıtlı Yönetici",
+            role_type="custom",
+            scope_type="TENANT",
+            is_assignable=True,
+        )
+        for kod in ("role.manage", "role.read", "employee.read"):
+            RolePermission.objects.create(
+                tenant=tenant_a, role=kisitli, permission=Permission.objects.get(code=kod)
+            )
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=kisitli)
+
+    with tenant_context(tenant_a.id):
+        assert user_has_permission(user_a, "role.manage")
+        with pytest.raises(RoleAssignmentError, match="Sahip olmadığınız"):
+            update_role_permissions(
+                actor=user_a,
+                role=roller["employee"],
+                permission_codes=["employee.read", "employee.sensitive.read"],
+            )
+        # Kaldırma serbest: sahip olmadığı bir izni **kaldırabilir**.
+        update_role_permissions(
+            actor=user_a, role=roller["employee"], permission_codes=["employee.read"]
+        )
+
+
+def test_ui_panel_yaklasan_izinler(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Panelde onaylı ve gelecekteki izinler görünür; bekleyen/kapsam dışı görünmez."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    baslangic = timezone.localdate() + timedelta(days=25)
+    talep_id = _post(
+        client,
+        "/test-ui/api/leave-requests",
+        {
+            "employee_id": str(lot["personel"].pk),
+            "leave_type_id": str(lot["turler"]["annual_leave"].pk),
+            "start_date": baslangic.isoformat(),
+            "end_date": (baslangic + timedelta(days=2)).isoformat(),
+            "reason": "Yaklaşan izin",
+            "submit": True,
+        },
+    ).json()["data"]["id"]
+
+    # Bekleyen talep yaklaşan izinlerde görünmez.
+    assert client.get("/test-ui/api/dashboard").json()["data"]["upcoming_requests"] == []
+    # 1. adım birincil yönetici, 2. adım kiracı geneli yetkili (M14 onay sırası).
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
+    assert (
+        _post(client, f"/test-ui/api/leave-requests/{talep_id}/decision", {"decision": "approved"})
+        .status_code
+        == 200
+    )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    nihai = _post(
+        client, f"/test-ui/api/leave-requests/{talep_id}/decision", {"decision": "approved"}
+    )
+    assert nihai.status_code == 200 and nihai.json()["data"]["status"] == "approved"
+    yaklasan = client.get("/test-ui/api/dashboard").json()["data"]["upcoming_requests"]
+    assert [t["employee_no"] for t in yaklasan] == ["MUH-1"]
+    assert yaklasan[0]["start_date"] == baslangic.isoformat()
+
+    # Kapsam süzgeci: müdür yalnız alt ağacı görür.
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["kardes_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/dashboard").json()["data"]["upcoming_requests"] == []
+
+
+def test_ui_ust_bar_sabit_ve_sekmeler_sabit_alanda(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Başlık ve sekmeler kaydırmada sabit kalan tek bir üst bar içinde."""
+    assert _giris(client, tenant_a, user_a.email, PAROLA_A).status_code == 200
+    govde = client.get("/test-ui/").content.decode()
+    assert ".topbar { position: sticky; top: 0;" in govde
+    # Sekmeler üst barın İÇİNDE gelir (ayrı blok).
+    ust_bar = govde.index('class="topbar"')
+    sekmeler = govde.index('class="tabs"')
+    kapanis = govde.index("</div>", sekmeler)
+    assert ust_bar < sekmeler < kapanis
+    assert "Yetki Yönetimi" in govde

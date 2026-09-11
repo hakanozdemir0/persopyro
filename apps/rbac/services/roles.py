@@ -347,3 +347,117 @@ def restore_role_assignment(*, actor, assignment, reason: str = ""):  # noqa: AN
         },
     )
     return assignment
+
+
+# --- rol izin kümesi düzenleme (§4.3 / OD3 guard'ları) -----------------------
+
+
+def _rol_izin_guardlari(actor, role) -> None:  # noqa: ANN001
+    """Rol izin kümesi düzenlemenin ortak guard'ları (fail-closed)."""
+    if actor is None or not getattr(actor, "is_authenticated", False) or not actor.is_active:
+        raise RoleAssignmentError("Aktör aktif bir kullanıcı değil.")
+    if role is None or role.deleted_at is not None:
+        raise RoleAssignmentValidationError("Rol bulunamadı veya silinmiş.")
+    if str(role.tenant_id) != str(getattr(actor, "tenant_id", None)):
+        raise RoleAssignmentError("Rol ve aktör aynı kiracıda olmalıdır.")
+    # Self-elevation/self-demotion: aktör, **kendisinde etkin** olan bir rolün izin
+    # kümesini değiştiremez (aksi halde kendi yetkisini genişletip daraltabilirdi).
+    if UserRole.objects.filter(user=actor, role=role, deleted_at__isnull=True).exists():
+        raise RoleAssignmentError(
+            "Kendinizde etkin olan bir rolün izinlerini değiştiremezsiniz (self-elevation yasağı)."
+        )
+    if "role.manage" not in effective_permission_codes(actor):
+        raise RoleAssignmentError("Bu işlem için 'role.manage' izni gerekir.")
+
+
+@transaction.atomic
+def update_role_permissions(*, actor, role, permission_codes, reason: str = ""):  # noqa: ANN001
+    """
+    Rolün izin kümesini **açıkça** değiştirir (izin listesi tam olarak verilir).
+
+    Kurallar (docs/AUTHORIZATION.md §4.3/§4.4 + OD3):
+      * yalnızca `role.manage` sahibi (kiracıda pratikte **şirket yöneticisi**),
+      * aktör kendi rolünü düzenleyemez (self-elevation/self-demotion yasağı),
+      * aktör **sahip olmadığı** bir izni veremez; kaldırma serbesttir,
+      * **platform izinleri** (`platform.*`) bu yoldan verilemez (OD3: platform
+        yetkilendirmesi kiracı tablosunda yönetilmez),
+      * bilinmeyen izin kodu reddedilir; rol **en az bir** izin içermelidir
+        (boş rol sessiz kilitlenme yaratır),
+      * değişiklik `audit_logs`'a yazılır (`role.permissions.update`).
+    """
+    _rol_izin_guardlari(actor, role)
+
+    hedef = {str(kod).strip().lower() for kod in permission_codes if str(kod).strip()}
+    platform_istenen = sorted(k for k in hedef if k.startswith("platform."))
+    if platform_istenen:
+        raise RoleAssignmentValidationError(
+            "Platform izinleri kiracı rolüne verilemez (OD3): " + ", ".join(platform_istenen)
+        )
+    bilinen = set(Permission.objects.filter(code__in=hedef).values_list("code", flat=True))
+    bilinmeyen = sorted(hedef - bilinen)
+    if bilinmeyen:
+        raise RoleAssignmentValidationError(
+            "Bilinmeyen izin kodu: " + ", ".join(bilinmeyen)
+        )
+    if not hedef:
+        raise RoleAssignmentValidationError(
+            "Rol en az bir izin içermelidir; tüm izinleri kaldırmak rolü kullanılamaz kılar."
+        )
+
+    mevcut = set(
+        RolePermission.objects.filter(role=role).values_list("permission__code", flat=True)
+    )
+    eklenecek = hedef - mevcut
+    kaldirilacak = mevcut - hedef
+
+    aktor_izinleri = effective_permission_codes(actor)
+    eksik = sorted(eklenecek - aktor_izinleri)
+    if eksik:
+        raise RoleAssignmentError(
+            "Sahip olmadığınız izinleri dağıtamazsınız (§4.3): " + ", ".join(eksik)
+        )
+
+    if kaldirilacak:
+        RolePermission.objects.filter(role=role, permission__code__in=kaldirilacak).delete()
+    if eklenecek:
+        RolePermission.objects.bulk_create(
+            [
+                RolePermission(tenant_id=role.tenant_id, role=role, permission_id=pid)
+                for pid in Permission.objects.filter(code__in=eklenecek).values_list(
+                    "id", flat=True
+                )
+            ],
+            ignore_conflicts=True,
+        )
+
+    log_action(
+        tenant_id=role.tenant_id,
+        action="role.permissions.update",
+        user=actor,
+        table_name="role_permissions",
+        record_id=role.pk,
+        changes={
+            "role_code": role.code,
+            "added": sorted(eklenecek)[:40],
+            "removed": sorted(kaldirilacak)[:40],
+            "added_count": len(eklenecek),
+            "removed_count": len(kaldirilacak),
+            "total": len(hedef),
+            "reason": (reason or "")[:200],
+        },
+    )
+    return role
+
+
+__all__ = [
+    "MissingPermissionError",
+    "RoleAssignmentError",
+    "RoleAssignmentValidationError",
+    "SoftDeletedDefaultRoleError",
+    "assign_role_to_user",
+    "can_assign_role",
+    "create_default_roles",
+    "restore_role_assignment",
+    "revoke_role_assignment",
+    "update_role_permissions",
+]

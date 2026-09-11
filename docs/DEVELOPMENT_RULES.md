@@ -179,7 +179,13 @@ Kiracı `slug`: `demo`.
 12. **Panel → Karara bağlanan izinler**: onay bekleyen/onaylanan/reddedilen/iptal
     sayıları ve son karara bağlanan talepler (çalışan adı, birim, tür, tarih, gün,
     durum) — kapsamınız dışındaki çalışanlar listede görünmez.
-13. **Departmanlar → Taşı**: açılan pencerede hedef üst birimi ağaçtan seç
+13. **Departmanlar → Düzenle**: birimin adını/kodunu değiştir (denetim kaydı yazılır);
+    **Taşı** ayrı düğmedir.
+14. **Yetki Yönetimi**: rol tablosundan bir rolü seç → **Yetkileri düzenle** →
+    modül gruplarından izinleri işaretle ("Tümünü seç" üstte) → gerekçe yaz →
+    **Yetkileri kaydet**. Değişiklik anında geçerlidir; kendi rolünüz ve platform
+    izinleri düzenlenemez. Rol atamak için: **Çalışanlar → Detay → Rol ve Yetkiler**.
+15. **Departmanlar → Taşı**: açılan pencerede hedef üst birimi ağaçtan seç
     ("En üst seviyeye taşı (kök)" seçeneği de vardır); onay sorusundan sonra ağaç
     yenilenir ve Finans müdürünün gördüğü çalışanlar yeni ağaca göre değişir.
     Taşınan birimin kendisi ve alt birimleri listede **çıkmaz** (sunucu üretir).

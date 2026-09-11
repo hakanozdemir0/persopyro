@@ -27,6 +27,11 @@ urlpatterns = [
         name="test-ui-department-move",
     ),
     path(
+        "api/departments/<str:department_id>/update",
+        api.DepartmentUpdateView.as_view(),
+        name="test-ui-department-update",
+    ),
+    path(
         "api/departments/<str:department_id>/delete",
         api.DepartmentDeleteView.as_view(),
         name="test-ui-department-delete",
@@ -43,6 +48,11 @@ urlpatterns = [
         name="test-ui-employee-role-assign",
     ),
     path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
+    path(
+        "api/roles/<str:role_id>/permissions",
+        api.RolePermissionView.as_view(),
+        name="test-ui-role-permissions",
+    ),
     path("api/positions", api.PositionCreateView.as_view(), name="test-ui-positions"),
     path("api/leave-types", api.LeaveTypeListView.as_view(), name="test-ui-leave-types"),
     path(

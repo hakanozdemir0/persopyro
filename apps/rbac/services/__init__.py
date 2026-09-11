@@ -32,6 +32,7 @@ from apps.rbac.services.roles import (
     create_default_roles,
     restore_role_assignment,
     revoke_role_assignment,
+    update_role_permissions,
 )
 from apps.rbac.services.scope import (
     MAX_DEPTH,
@@ -68,6 +69,7 @@ __all__ = [
     "resolve_department_scope",
     "restore_role_assignment",
     "revoke_role_assignment",
+    "update_role_permissions",
     "user_has_any_permission",
     "user_has_permission",
     "user_org_scope",

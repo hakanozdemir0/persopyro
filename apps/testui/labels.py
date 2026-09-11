@@ -49,3 +49,28 @@ def kapsam_metni(*, scope_type: str | None, birim_adi: str | None) -> str:
 def istisna_etiketi(effect: str | None) -> str:
     """İzin istisnasının okunabilir adı."""
     return ISTISNA_ETIKETLERI.get(str(effect or ""), str(effect or "—"))
+
+
+#: İzin kataloğu modülleri → kullanıcı dostu Türkçe başlık (yetki düzenleme ekranı).
+MODUL_ETIKETLERI = {
+    "tenant": "Kiracı",
+    "user": "Kullanıcılar",
+    "role": "Rol ve yetki yönetimi",
+    "org": "Organizasyon (departman/unvan)",
+    "employee": "Çalışanlar",
+    "leave": "İzin",
+    "shift": "Vardiya",
+    "attendance": "Devam / puantaj",
+    "document": "Evrak",
+    "audit": "Denetim kaydı",
+    "billing": "Abonelik / faturalama",
+    "report": "Raporlar",
+    "dataaccess": "Veri erişimi",
+    "platform": "Platform (kiracı arayüzünde yönetilemez)",
+}
+
+
+def modul_etiketi(module: str | None) -> str:
+    """İzin modülünün okunabilir adı."""
+    anahtar = str(module or "").strip() or "diger"
+    return MODUL_ETIKETLERI.get(anahtar, anahtar)

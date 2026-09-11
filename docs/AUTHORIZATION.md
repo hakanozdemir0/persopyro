@@ -935,7 +935,7 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1–OD5, OD19–OD28 KAPATILDI** (15 karar).
+**Durum (2026-09-11):** **OD1–OD5, OD19–OD28 KAPATILDI** (15 karar); **OD29 AÇIK**.
 Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
@@ -1979,7 +1979,7 @@ karar gereği v1'de yok.
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
 - **Karar durumu:** **OD1–OD5, OD19–OD28 KAPATILDI** (2026-09-11).
-  Açık: **13 karar** (OD6–OD18). **Engelleyici açık karar yoktur**; **OD5
+  Açık: **14 karar** (OD6–OD18 + **OD29** — `leave.balance.manage` rol ataması). **Engelleyici açık karar yoktur**; **OD5
   (departman yöneticisi kapsamı) 2026-09-11'de KAPATILDI** → organizasyon modülü
   (M7–M13) önündeki kapsam belirsizliği kalktı: `dept_manager` kapsamı **`UNIT`**
   (atandığı birim + alt ağaç), kapsam kaynağı `user_roles.scope_org_unit_id`,
@@ -1988,3 +1988,29 @@ karar gereği v1'de yok.
   bekliyor), F10 (prefix/slug benzerliği — typosquatting, Düşük) ve **F11 (kiracı
   askıya alınınca erişim kesilmiyor, Yüksek)**. **F7 (soft-delete yetkiyi
   kaldırmıyor) ve F9 (denetim satırı `SET_NULL`) KAPATILDI (2026-09-11).**
+
+
+### OD29 — `leave.balance.manage` iznini hangi rol taşıyacak? — **AÇIK** ⏳ (2026-09-11)
+
+**Bağlam (bulgu — test arayüzü turu):** M14 ile katalogda `leave.balance.manage`
+("İzin bakiyesi düzeltme") kodu tanımlandı ve `adjust_leave_balance` servisi bu izni
+zorunlu tutuyor; ancak `permission_catalog.DEFAULT_ROLE_TEMPLATES` içinde **hiçbir rol**
+bu izni almıyor. Sonuç: kiracıda **servis üzerinden manuel bakiye düzeltmesi
+yapılamıyor** (izin hiçbir kullanıcıda bulunmuyor). Bu turda `apps/testui` bunu
+değiştirmedi; demo/bootstrap betiği sahte verisinde elle test için bakiye tamamlamasını
+**doğrudan** yazar (gerçek düzeltme yolu değildir).
+
+**Etki:** Bakiye yalnızca hakediş komutuyla (`accrue_leave_entitlements`, idempotent)
+üretilebiliyor; hakedişin elle düzeltilmesi gerektiğinde kullanılabilir bir yol yok.
+**Güvenlik açığı değildir** — davranış fail-closed'dur (izin yoksa işlem reddedilir).
+
+**Seçenekler:**
+  * **(A)** `tenant_admin` + `hr_manager` rolleri bu izni alsın (kapsam `TENANT`;
+    denetim kaydı zaten yazılıyor).
+  * **(B)** Yalnızca `tenant_admin` alsın.
+  * **(C)** Yeni bir "İK operasyon / bordro" rolü tanımlanıp izin ona verilsin.
+  * **(D)** v1'de yalnızca hakediş komutu kalsın (izin katalogda rezerve kalır).
+
+**Karar sahibi:** ürün sahibi. **Not:** seçilen seçenek rol izin sayılarını değiştirir;
+`docs/AUTHORIZATION.md` §6.2 matrisi ve `scripts/verify_fresh_install.sh` beklentileri
+**birlikte** güncellenmelidir — bu yüzden bu turda kod değiştirilmedi.
