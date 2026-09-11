@@ -516,6 +516,22 @@ def test_ui_frontend_csrfyi_yazma_isteklerinde_gonderir(client, tenant_a, user_a
     assert 'window.location.replace("/test-ui/login/")' in govde
 
 
+def test_ui_kapali_pencereler_gorunmez(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """
+    (regresyon) Kapatılmış pencere/gizli alanlar CSS nedeniyle görünür kalmamalı.
+
+    Bildirilen hata: `.modal-backdrop { display: flex }` kuralı `hidden` özniteliğini
+    ezdiği için giriş sonrası panelde "Onayla / Vazgeç" penceresi boşta duruyordu.
+    """
+    assert _giris(client, tenant_a, user_a.email, PAROLA_A).status_code == 200
+    govde = client.get("/test-ui/").content.decode()
+    assert "[hidden] { display: none !important; }" in govde
+    # Pencere düğmeleri başlangıçta işlevsiz görünmemeli: başlık boş gelir.
+    assert '<h2 id="modal-title"></h2>' in govde
+    # Escape ile kapatma bağlı.
+    assert 'olay.key !== "Escape"' in govde
+
+
 # --- madde 2: yıllık izin bakiyesi görünürlüğü -------------------------------
 
 

@@ -71,6 +71,10 @@ kurulmaz; ek bağımlılık yoktur.
     .hakedis-buyuk { font-size: 15px; }
     .detail-box { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px;
       padding: 12px 14px; background: #fbfcfe; }
+    /* DİKKAT (regresyon): `hidden` özniteliği, sınıf seçicili `display` kurallarını
+       kaybeder. Bu kural olmadan modal/pencere kapalıyken de görünür kalıyordu
+       (giriş sonrası ekranda "Onayla/Vazgeç" duruyordu). */
+    [hidden] { display: none !important; }
     .modal-backdrop { position: fixed; inset: 0; background: rgba(18, 24, 33, 0.45);
       display: flex; align-items: center; justify-content: center; z-index: 50; }
     .modal { max-width: 520px; width: 92%; }
@@ -155,6 +159,17 @@ kurulmaz; ek bağımlılık yoktur.
     // Çıkış: oturum **sunucuda** kapatılır (mevcut `/api/v1/auth/logout` ucu); başarılı
     // yanıt görülmeden panelden çıkılmaz. Yerel durum temizlenir ve `replace` ile
     // girişe dönülür → geri tuşuyla korunan sayfaya dönülemez.
+    // Pencere (modal) davranışı: Escape ile kapat.
+    document.addEventListener("keydown", (olay) => {
+      if (olay.key !== "Escape") return;
+      const kapak = document.getElementById("modal");
+      if (kapak && !kapak.hidden) {
+        kapak.hidden = true;
+        const iptal = document.getElementById("modal-cancel");
+        if (iptal) iptal.click();
+      }
+    });
+
     const cikis = document.getElementById("logout-btn");
     if (cikis) {
       cikis.addEventListener("click", async () => {
