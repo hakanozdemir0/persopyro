@@ -20,6 +20,8 @@ from apps.rbac.models import (
     Permission,
     Role,
     RolePermission,
+    RoleScopeType,
+    RoleType,
     UserRole,
 )
 from apps.rbac.permission_catalog import DEFAULT_ROLE_TEMPLATES
@@ -459,5 +461,165 @@ __all__ = [
     "create_default_roles",
     "restore_role_assignment",
     "revoke_role_assignment",
+    "update_role_permissions",
+]
+
+
+# --- kiracı rolü oluşturma / düzenleme (§4.4 kapalı kapsam kümesi) ------------
+
+#: Kiracı rolü için geçerli kapsam tipleri. **`SYS`/platform burada YOKTUR** (OD3:
+#: platform rolleri `platform.roles`'ta yaşar, kiracı arayüzünden yönetilmez).
+TENANT_ROLE_SCOPE_TYPES: tuple[str, ...] = (
+    RoleScopeType.TENANT,
+    RoleScopeType.UNIT,
+    RoleScopeType.UNIT_DIRECT,
+    RoleScopeType.SELF,
+)
+
+
+def _rol_yazma_guardlari(actor, tenant) -> None:  # noqa: ANN001
+    """Rol oluşturma/düzenleme ortak guard'ları (yalnız `role.manage`)."""
+    if actor is None or not getattr(actor, "is_authenticated", False) or not actor.is_active:
+        raise RoleAssignmentError("Aktör aktif bir kullanıcı değil.")
+    if str(getattr(actor, "tenant_id", None)) != str(getattr(tenant, "pk", tenant)):
+        raise RoleAssignmentError("Rol ve aktör aynı kiracıda olmalıdır.")
+    if "role.manage" not in effective_permission_codes(actor):
+        raise RoleAssignmentError("Bu işlem için 'role.manage' izni gerekir.")
+
+
+@transaction.atomic
+def create_custom_role(  # noqa: ANN001, PLR0913
+    *,
+    actor,
+    tenant,
+    code: str,
+    name: str,
+    scope_type: str = RoleScopeType.TENANT,
+    reason: str = "",
+):
+    """
+    Kiracıya özel (`role_type=custom`) yeni rol oluşturur ve denetler.
+
+    Kurallar:
+      * yalnızca `role.manage` (kiracıda şirket yöneticisi),
+      * kod zorunlu, küçük harfe normalize edilir; **varsayılan rol kodlarıyla
+        çakışamaz** (`DEFAULT_ROLE_TEMPLATES`) ve aynı kiracıda tekrar edemez,
+      * kapsam tipi kapalı kümeden olmalı (`TENANT`/`UNIT`/`UNIT_DIRECT`/`SELF`);
+        **platform (`SYS`) reddedilir** (OD3),
+      * yeni rol **boş** doğar: izin kümesi "Yetki Yönetimi"nden düzenlenir.
+    """
+    _rol_yazma_guardlari(actor, tenant)
+    kod = (code or "").strip().lower()
+    ad = (name or "").strip()
+    if not kod:
+        raise RoleAssignmentValidationError("Rol kodu zorunludur.")
+    if not ad:
+        raise RoleAssignmentValidationError("Rol adı zorunludur.")
+    if kod in DEFAULT_ROLE_TEMPLATES:
+        raise RoleAssignmentValidationError(
+            f"'{kod}' varsayılan rol kodudur; farklı bir kod seçin."
+        )
+    if scope_type not in TENANT_ROLE_SCOPE_TYPES:
+        raise RoleAssignmentValidationError(
+            "Kapsam tipi TENANT/UNIT/UNIT_DIRECT/SELF olmalıdır (platform rolleri "
+            "kiracı arayüzünden oluşturulamaz — OD3)."
+        )
+    mevcut = Role.objects.filter(tenant=tenant, code=kod).first()
+    if mevcut is not None and mevcut.deleted_at is None:
+        raise RoleAssignmentValidationError(f"'{kod}' koduyla bir rol zaten var.")
+    if mevcut is not None:
+        raise RoleAssignmentValidationError(
+            f"'{kod}' kodu silinmiş bir role ait. OD21 gereği sessizce canlandırılmaz; "
+            "açık geri alma gerekir."
+        )
+
+    rol = Role.objects.create(
+        tenant=tenant,
+        code=kod,
+        name=ad,
+        role_type=RoleType.CUSTOM,
+        scope_type=scope_type,
+        is_assignable=True,
+    )
+    log_action(
+        tenant_id=tenant.pk,
+        action="role.create",
+        user=actor,
+        table_name="roles",
+        record_id=rol.pk,
+        changes={"code": kod, "name": ad, "scope_type": scope_type, "reason": reason[:200]},
+    )
+    return rol
+
+
+@transaction.atomic
+def update_role_meta(  # noqa: ANN001
+    *,
+    actor,
+    role,
+    name: str | None = None,
+    scope_type: str | None = None,
+    reason: str = "",
+):
+    """
+    Rolün **adını** ve/veya **kapsam tipini** değiştirir (izin kümesi ayrı işlemdir).
+
+    * Yalnız `role.manage`; aktörün **kendisinde etkin** olan rol düzenlenemez.
+    * **Kapsam tipi**, rolün etkin ataması varsa **değiştirilemez**: `UNIT` bir rol
+      kapsamsız atamalarla fail-closed kalırdı (yanlış yapılandırma).
+    * Değişiklik `audit_logs`'a yazılır (`role.update`).
+    """
+    _rol_yazma_guardlari(actor, role.tenant)
+    if role is None or role.deleted_at is not None:
+        raise RoleAssignmentValidationError("Rol bulunamadı veya silinmiş.")
+    if UserRole.objects.filter(user=actor, role=role, deleted_at__isnull=True).exists():
+        raise RoleAssignmentError(
+            "Kendinizde etkin olan bir rolü düzenleyemezsiniz (self-elevation yasağı)."
+        )
+
+    degisen: dict[str, dict] = {}
+    if name is not None and name.strip() and name.strip() != role.name:
+        degisen["name"] = {"before": role.name, "after": name.strip()}
+        role.name = name.strip()
+    if scope_type is not None and scope_type != role.scope_type:
+        if scope_type not in TENANT_ROLE_SCOPE_TYPES:
+            raise RoleAssignmentValidationError(
+                "Kapsam tipi TENANT/UNIT/UNIT_DIRECT/SELF olmalıdır (platform reddedilir)."
+            )
+        if UserRole.objects.filter(role=role, deleted_at__isnull=True).exists():
+            raise RoleAssignmentValidationError(
+                "Kapsam tipi değiştirilemez: rolün etkin ataması var. Önce atamaları "
+                "kaldırın (aksi halde atamalar kapsamsız kalır ve fail-closed olur)."
+            )
+        degisen["scope_type"] = {"before": role.scope_type, "after": scope_type}
+        role.scope_type = scope_type
+
+    if not degisen:
+        return role
+    role.save(update_fields=[*degisen.keys(), "updated_at"])
+    log_action(
+        tenant_id=role.tenant_id,
+        action="role.update",
+        user=actor,
+        table_name="roles",
+        record_id=role.pk,
+        changes={**degisen, "reason": (reason or "")[:200]},
+    )
+    return role
+
+
+__all__ = [
+    "MissingPermissionError",
+    "RoleAssignmentError",
+    "RoleAssignmentValidationError",
+    "SoftDeletedDefaultRoleError",
+    "TENANT_ROLE_SCOPE_TYPES",
+    "assign_role_to_user",
+    "can_assign_role",
+    "create_custom_role",
+    "create_default_roles",
+    "restore_role_assignment",
+    "revoke_role_assignment",
+    "update_role_meta",
     "update_role_permissions",
 ]

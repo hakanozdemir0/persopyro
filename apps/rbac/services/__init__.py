@@ -29,9 +29,11 @@ from apps.rbac.services.roles import (
     RoleAssignmentValidationError,
     assign_role_to_user,
     can_assign_role,
+    create_custom_role,
     create_default_roles,
     restore_role_assignment,
     revoke_role_assignment,
+    update_role_meta,
     update_role_permissions,
 )
 from apps.rbac.services.scope import (
@@ -59,6 +61,7 @@ __all__ = [
     "assignment_org_scope",
     "authorized_permission_codes",
     "can_assign_role",
+    "create_custom_role",
     "create_default_roles",
     "declared_permission_codes",
     "effective_permission_codes",
@@ -69,6 +72,7 @@ __all__ = [
     "resolve_department_scope",
     "restore_role_assignment",
     "revoke_role_assignment",
+    "update_role_meta",
     "update_role_permissions",
     "user_has_any_permission",
     "user_has_permission",

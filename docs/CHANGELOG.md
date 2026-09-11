@@ -3,6 +3,100 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.29.0] — 2026-09-11 — Test arayüzü: yetki yönetimi kapısı, hesap açma, kişisel veriler, rol oluşturma
+
+**Baseline (son commit `f1bd7cf`):** çalışma ağacı temiz, tam test suite **428 passed**.
+
+Kullanıcı bildirimi: *"hangi kullanıcı olursa olsun kendi panelinde kendi bilgilerini
+görmesi gerekir (ad soyad, unvan, birim, kayıtlı e-posta, şirket, izin bakiyesi)"*,
+*"çalışan eklerken hesap bağlama seçeneği olmasın; e-posta ve şifreyi biz verelim,
+şifre oluşturucu olsun"*, *"izin türü ekleme ekranı çok karmaşık"*, *"yetki yönetimi
+bölümü yalnızca yetki açıp kapatabilenlerde görünsün, yetkiler daha açıklayıcı olsun"*,
+*"rol oluşturma ve düzenleme seçeneği olmalı"*, *"yeni çalışan girişinde kişisel veriler
+sorulsun (ad, soyad, e-posta, adres, yakın telefonu ve yakınlık derecesi, vatandaşlık —
+Türk değilse oturma/çalışma izni—, doğum tarihi); bu verileri yalnızca şirket yöneticisi
+ve rol ile yetkilendirdiği kişiler görebilmeli"*.
+
+### Şema (ilk kez bu turda migration)
+
+- `hr.employee_personal_data` tablosuna **5 K2 kolonu** eklendi
+  (`apps/organization/migrations/0010_m12_personal_data_k2_genisletme.py`):
+  `emergency_contact_phone`, `emergency_contact_relation`, `citizenship`,
+  `work_permit_type`, `work_permit_valid_until` (nullable).
+  Eklemeli (additive); mevcut kolon ve kısıtlar değişmedi, K3 şifreli kolonlar sabit.
+  Şifreleme **gerekmez** (K2 — K3 değil). Canlı geliştirme DB'sine `scripts/migrate.sh`
+  ile uygulandı.
+- Vatandaşlık kuralı: `citizenship` **TR değilse** oturma/çalışma izni türü **zorunlu**;
+  kural servis/UI katmanında uygulanır (DB `CHECK` bilinçli olarak eklenmedi — bilgi
+  sonradan tamamlanabilir, kayıt bloke edilmez). Gerekçe ölçümle sabitlendi.
+
+### Panel — "Bilgilerim"
+
+- Her kullanıcı (rol/izin farkı olmadan) kendi panelinde **Ad Soyad, Kayıtlı e-posta,
+  Şirket, Unvan, Birim, Çalışan no, Yıllık izin (hak/kullanılan/bekleyen/kalan), Roller**
+  satırlarını görür. Çalışan kaydı yoksa alan boş, bakiye yerine
+  "Bu kullanıcıya bağlı çalışan kaydı yok." yazılır. Veriler backend'den gelir.
+
+### Çalışan ekleme — hesap açma ve kişisel veriler
+
+- **Kişisel veri boşlukları:** `employee.sensitive.read` izni + kapsamı olan kullanıcı
+  yeni çalışan formunda kişisel veri alanlarını görür; izni olmayan kullanıcı forma
+  bunları **hiç görmez** (backend de yazmayı reddeder). Kişisel veri **okuma** ucu
+  `GET /test-ui/api/employees/<uuid>/personal`; izin yoksa **403**, kapsam dışıysa **404**.
+- **Hesap açma:** "Hesap bağlama" listesi kaldırıldı. Yönetici `user.manage` izniyle
+  e-posta + **parola** verir; parola için **"Parola üret"** düğmesi (15 karakter,
+  tarayıcıda üretilir, sunucu parolayı **geri döndürmez**). Zayıf parola Django
+  doğrulayıcılarıyla **400**; e-posta çakışması **400**. Hesap açma denetim kaydı
+  `user.create` yazar ve **yalnızca e-postayı** içerir (parola asla — regresyon testi).
+- Denetim: kişisel veri yazımı `employee.personal_data.create|update` olarak **alan
+  adlarını** yazar, değerleri yazmaz (PII denetim kaydına düşmez — regresyon testi).
+
+### İzin türleri — sadeleştirme
+
+- Form **hazır şablonlar** kazandı (Yıllık izin, Hastalık/rapor, Ücretsiz izin, Doğum
+  izni) → kod/ad/kategori ve dört özellik (ücretli, bakiye kullanır, onay, belge)
+  otomatik dolar; alanlar açıklama metinleriyle ayrıldı.
+
+### Yetki Yönetimi — görünürlük, açıklamalar, rol oluşturma
+
+- Sekme artık yalnızca **`role.manage`** sahibinde görünür (`/api/me` → `menu.roles_manage`);
+  çalışan ve departman yöneticisi sekneyi hiç görmez (ölçüm: `(GİZLİ)`).
+- İzinler modül başlıkları + **modül açıklaması** ile listelenir; her izin Türkçe adıyla
+  ("Devam kaydı düzeltme"), kod yalnızca detayda. Kapsam tipleri Türkçe etiketli.
+- **Yeni servisler:** `create_custom_role` + `update_role_meta`
+  (`apps/rbac/services/roles.py`). Kurallar: yalnız `role.manage` ∧ aynı kiracı;
+  SYS/platform kapsamı **reddedilir**; varsayılan/sistem rol kodu ve var olan kod
+  **400**; kendi rolünü düzenleme yasağı; **etkin ataması olan rolde kapsam değişikliği
+  400** (atamalar kapsamsız kalmasın); her değişiklik `role.create`/`role.update`
+  denetim kaydı yazar. Uçlar: `POST /test-ui/api/roles/create`,
+  `POST /test-ui/api/roles/<uuid>/update`.
+
+### Doğrulama özeti
+
+- İzin/servis kuralları hedef testlerle; 7 yeni regresyon testi
+  (`tests/test_testui.py`: panel kartı, hesap açma + gerçek giriş, zayıf parola,
+  kapsamsız PII 403/404, PII zorunlu alan, rol oluşturma/yetkisiz, kapsam değişikliği
+  kilidi, izin türü şablonları).
+- `verify_fresh_install.sh` **6c-3d** adımı: yönetici kişisel veriyi görür, departman
+  yöneticisi **403**, yönetici rol oluşturur **201**, departman yöneticisi **403**,
+  çalışanın menüsünde `roles_manage=false` + `pii_gorunur=false`.
+- Canlı tarayıcı (gerçek `runserver`): panel "Bilgilerim" kartı, 3 bölümlü çalışan
+  formu, "Parola üret" (15 karakter), kişisel veri bölümü + 11 alanlı form, izin türü
+  şablonları, **gerçek rol oluşturma** ("Vardiya Sorumlusu" göründü), çalışan görünümünde
+  Yetki Yönetimi sekmesi gizli.
+
+### Açık karar
+
+- **OD30 AÇILDI:** kişisel veri **yazma** için ayrı izin kodu yok; arayüz okuma iznini
+  (`employee.sensitive.read`) yazma için de kullanıyor (katalog sabit tutuldu). Seçenekler
+  `docs/AUTHORIZATION.md` OD30.
+
+### Kapsam dışı (bilinçli)
+
+- Rol **silme/pasifleştirme** yok (istenmedi). Rol izin (override) yazma yok — karar yok.
+- Impersonation yok; platform rolleri kiracı arayüzünden yönetilmez.
+- Hafta tatili/resmî tatil gün hesabı **M15** (M14'ten devralınan kısıt).
+
 ## [0.28.0] — 2026-09-11 — Test arayüzü: yetki sınırları sıkılaştırıldı (çalışan yetki düzenleyemez), PII'siz şirket dizini, yetki ekranı sadeleştirildi
 
 **Baseline (son commit `60b4500`):** çalışma ağacı temiz, tam test suite **424 passed**.

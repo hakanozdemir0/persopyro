@@ -99,6 +99,11 @@ mesajı için).
 - **Ağaç yetki mirası üretmez.** Bir üst birimin yöneticisi olmak, alt birimlerin
   yetkilerini otomatik **vermez**; kapsam yalnızca *hangi kayıtları görebileceğini*
   belirler. Yetki kararı **her zaman** RBAC'ten gelir (izin kodu + kapsam + koşul).
+- **Kişisel veri (K2/K3) görünürlüğü:** kapsam **tek başına yetmez**; kişisel veri
+  `employee.sensitive.read` izni **ve** kapsam birlikte gerekir (`can_access_employee_personal_data()`).
+  Departman yöneticisi kapsamındaki çalışanın **organizasyon kimliğini** görür, kişisel
+  verisini **görmez** (`403`); kapsam dışı kayıtta `404`. Şirket yöneticisi izni,
+  Yetki Yönetimi ekranından başka bir role de verebilir — veriyi yalnızca yetki verilenler görür.
 - Kapsam kodları: `TENANT` (tüm kiracı), `UNIT` (kendi birimi ve alt ağacı),
   `UNIT_DIRECT` (yalnızca kendi birimi), `ASSIGNED` (atanan kayıt), `SELF`.
 - Rol bazlı görünürlük (güncel rol kodlarıyla):

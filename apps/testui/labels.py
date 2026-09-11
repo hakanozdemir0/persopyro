@@ -74,3 +74,25 @@ def modul_etiketi(module: str | None) -> str:
     """İzin modülünün okunabilir adı."""
     anahtar = str(module or "").strip() or "diger"
     return MODUL_ETIKETLERI.get(anahtar, anahtar)
+
+
+#: İzin modüllerinin kısa açıklaması (yetki ekranında başlığın altında gösterilir).
+MODUL_ACIKLAMALARI = {
+    "tenant": "Kiracı bilgileri ve kiracı ayarları.",
+    "user": "Giriş hesaplarını görme ve hesap açma/güncelleme.",
+    "role": "Rolleri görme; rol oluşturma, izin kümesi ve atama yönetimi.",
+    "org": "Departman ağacı, unvan tanımları ve birim yönetimi.",
+    "employee": "Çalışan kaydı ekleme/görme; hassas veri (K2/K3) erişimi.",
+    "leave": "İzin türü/politika, talep, onay ve bakiye işlemleri.",
+    "shift": "Vardiya tanımları ve planlama (M15 ile gelecek).",
+    "attendance": "Devam/puantaj kayıtları (M15 ile gelecek).",
+    "document": "Evrak yükleme, görme ve gizli evrak erişimi (M16 ile gelecek).",
+    "audit": "Denetim kaydını görüntüleme.",
+    "billing": "Abonelik/faturalama işlemleri.",
+    "platform": "Platform operasyonları — kiracı arayüzünden yönetilemez (OD3).",
+}
+
+
+def modul_aciklamasi(module: str | None) -> str:
+    """İzin modülünün kısa açıklaması."""
+    return MODUL_ACIKLAMALARI.get(str(module or "").strip(), "")

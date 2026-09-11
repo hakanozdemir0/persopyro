@@ -229,6 +229,23 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   `role.manage` sahibi, çalışan detayındaki "Rol ve Yetkiler" bölümünden rol atar
   (UNIT rollerde birim kapsamı seçer), atamayı kaldırır (soft delete, OD21) ve
   izin istisnalarını (override) salt okunur görür.
+- **Bilgilerim (her rol):** panelde ad soyad, kayıtlı e-posta, şirket, unvan, birim,
+  çalışan no, yıllık izin (hak/kullanılan/bekleyen/kalan) ve roller. Çalışan kaydı
+  yoksa alanlar boş, bakiye yerine açıklama gösterilir.
+- **Hesap açma:** "hesap bağlama" listesi yok; yönetici (`user.manage`) e-posta ve
+  parolayı verir, **"Parola üret"** düğmesi 15 karakterlik parola üretir (tarayıcıda;
+  sunucu parolayı geri döndürmez), zayıf parola `400`. Denetim kaydı yalnız e-postayı yazar.
+- **Kişisel veriler (K2):** çalışan kaydında ad, soyad, doğum tarihi, kişisel e-posta,
+  adres, yakın telefonu + yakınlık derecesi, vatandaşlık (TR değilse oturma/çalışma izni
+  türü **zorunlu**). Bölüm yalnızca `employee.sensitive.read` + kapsam sahibine görünür;
+  yazma da aynı kapıdan geçer, izinsiz istek `403` (kapsam dışı `404`). Denetim yalnız
+  alan adlarını yazar — değerler PII olarak kaydedilmez.
+- **İzin türü ekleme:** hazır şablonlar (yıllık, hastalık/rapor, ücretsiz, doğum) formu
+  doldurur; dört özellik açıklamalı (ücretli, bakiye kullanır, onay, belge).
+- **Yetki Yönetimi:** sekme yalnızca `role.manage` sahibinde görünür; izinler modül
+  başlığı + modül açıklaması + Türkçe izin adıyla listelenir. **Rol oluşturma** (ad, kod,
+  kapsam tipi) ve **rol düzenleme** (ad; etkin ataması yoksa kapsam) desteklenir —
+  SYS/platform kapsamı, varsayılan/var olan kod, kendi rolünü düzenleme `400/403`.
 - **Self-elevation yasakları arayüzden bağımsız korunur:** kullanıcı kendi rolünü
   atayamaz/yükseltemez, sahip olmadığı yetkiyi dağıtamaz, `role.manage` yoksa
   rol yönetimi kapanır; platform rolleri kiracı arayüzünden yönetilemez.

@@ -696,6 +696,38 @@ kontrol_yok "dizinde izin/bakiye detayı yok" "$DETAY_JSON" '"annual"'
 kontrol_yok "dizinde e-posta/ad yok" "$DETAY_JSON" "persopyro.test"
 oturum_kapat
 
+# --- 6c-3d) Hesap/kişisel veri/rol (bildirim 5. tur) --------------------------
+# Ölçülen: (1) yönetici kişisel veriyi görür, (2) departman yöneticisi GÖREMEZ,
+# (3) yönetici yeni rol oluşturur, departman yöneticisi oluşturamaz,
+# (4) çalışanın menüsünde yetki yönetimi ve kişisel veri KAPALI.
+bilgi "hesap/PII/rol (6c-6): PII yalnız yetkiyle, rol oluşturma yalnız role.manage"
+bekle "POST /auth/login (kiracı yöneticisi)" "$(oturum_ac "demo@persopyro.test")" "200"
+YON_LISTE="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")"
+CALISAN_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if not x.get("dizin")))' "$YON_LISTE")"
+kontrol_metni "yönetici kişisel veriyi görür (6c-6)" \
+    "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees/$CALISAN_ID/personal")" \
+    '"emergency_contact_relation"'
+bekle "POST /test-ui/api/roles/create (yönetici → 201)" \
+    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/roles/create" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"name":"Doğrulama Rolü","code":"vrf_rol","scope_type":"UNIT"}')" "201"
+oturum_kapat
+
+bekle "POST /auth/login (departman yöneticisi)" "$(oturum_ac "finans.mudur@persopyro.test")" "200"
+bekle "GET  /employees/<id>/personal (dept_manager → 403)" \
+    "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/employees/$CALISAN_ID/personal")" "403"
+bekle "POST /test-ui/api/roles/create (dept_manager → 403)" \
+    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/roles/create" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"name":"Yasak","code":"vrf_yasak","scope_type":"UNIT"}')" "403"
+oturum_kapat
+
+bekle "POST /auth/login (çalışan)" "$(oturum_ac "personel@persopyro.test")" "200"
+CALISAN_ME="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/me")"
+kontrol_metni "çalışan menüsü: yetki yönetimi kapalı" "$CALISAN_ME" '"roles_manage":false'
+kontrol_metni "çalışan menüsü: kişisel veri kapalı" "$CALISAN_ME" '"pii_gorunur":false'
+oturum_kapat
+
 rm -f "$CEREZ"
 
 kill "$SUNUCU_PID" 2>/dev/null || true

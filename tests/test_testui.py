@@ -1598,3 +1598,309 @@ def test_ui_departman_agaci_calisana_acik_ama_detaylar_degil(client, tenant_a, u
     assert {"FIN-M1", "IK-1"} <= no_lar
     # Rol kataloğu ve yetki ekranı kapalı (role.read yok).
     assert client.get("/test-ui/api/roles").status_code == 403
+
+# =============================================================================
+# Bildirim (4. tur): Bilgilerim kartı, hesap açma (parola), kişisel veriler,
+# rol oluşturma/düzenleme, izin türü şablonları
+# =============================================================================
+
+
+def test_ui_panel_bilgilerim_karti(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Her kullanıcı kendi panelinde kendi bilgilerini görür."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    profil = client.get("/test-ui/api/dashboard").json()["data"]["profile"]
+    assert profil["email"] == lot["personel_user"].email
+    assert profil["tenant"] == tenant_a.name
+    assert "position" in profil  # unvan alanı her zaman döner (boş olabilir)
+    assert profil["department"] == "Muhasebe"  # birim
+    assert profil["employee_no"] == "MUH-1"
+    assert profil["annual"]["hakedis_var"] is True
+    assert profil["name"]  # ad soyad (hesap kaydından)
+
+    # Çalışan kaydı olmayan kullanıcı da kendi bilgilerini görür (alanlar boş).
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    admin_profil = client.get("/test-ui/api/dashboard").json()["data"]["profile"]
+    assert admin_profil["email"] == lot["admin"].email
+    assert admin_profil["tenant"] == tenant_a.name
+    assert admin_profil["employee_no"] is None
+
+
+def test_ui_calisan_hesabi_acilir_ve_giris_yapar(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Çalışan eklerken e-posta + parola verilir; hesap açılır ve giriş çalışır."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    yanit = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "YENI-20",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": timezone.localdate().isoformat(),
+            "email": "yeni.personel@ornek.test",
+            "password": "Yeni-Parola-1234",
+            "first_name": "Yeni",
+            "last_name": "Personel",
+        },
+    )
+    assert yanit.status_code == 201, yanit.content
+    assert yanit.json()["data"]["user_email"] == "yeni.personel@ornek.test"
+    # Parola yanıtta DÖNMEZ.
+    assert "Yeni-Parola-1234" not in yanit.content.decode()
+
+    # Denetim kaydında parola geçmez.
+    with tenant_context(tenant_a.id):
+        kayit = AuditLog.objects.filter(action="user.create").order_by("-created_at").first()
+        assert kayit is not None
+        assert set(kayit.changes) == {"email"}  # parola alanı YOK
+        assert not AuditLog.objects.filter(changes__icontains="Yeni-Parola").exists()
+
+    # Gerçek giriş: yeni hesap çalışıyor.
+    cikis = client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    assert cikis.status_code == 204
+    giris = _giris(client, tenant_a, "yeni.personel@ornek.test", "Yeni-Parola-1234")
+    assert giris.status_code == 200
+    assert client.get("/test-ui/api/me").json()["data"]["user"]["email"] == (
+        "yeni.personel@ornek.test"
+    )
+
+
+def test_ui_hesap_acma_kurallari(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Zayıf parola ve tekrarlanan e-posta reddedilir; yetkisiz kullanıcı açamaz."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    govde = {
+        "employee_no": "YENI-21",
+        "department_id": str(lot["birimler"]["muhasebe"].pk),
+        "hire_date": timezone.localdate().isoformat(),
+        "first_name": "Test",
+        "last_name": "Kişi",
+    }
+    zayif = _post(
+        client, "/test-ui/api/employees", {**govde, "email": "zayif@ornek.test", "password": "123"}
+    )
+    assert zayif.status_code == 400
+    assert "Parola" in zayif.json()["error"]["message"]
+
+    tekrar = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            **govde,
+            "employee_no": "YENI-22",
+            "email": lot["admin"].email,
+            "password": "Yeni-Parola-1234",
+        },
+    )
+    assert tekrar.status_code == 400
+    assert "zaten var" in tekrar.json()["error"]["message"]
+
+    # `user.manage` olmayan kullanıcı hesap açamaz.
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
+    yasak = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "YENI-23",
+            "department_id": str(lot["birimler"]["finans"].pk),
+            "hire_date": timezone.localdate().isoformat(),
+            "email": "olmaz@ornek.test",
+            "password": "Yeni-Parola-1234",
+        },
+    )
+    assert yasak.status_code == 403
+
+
+def test_ui_kisisel_veri_yetkiyle_gorunur_ve_yazilir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Kişisel veriler yalnız `employee.sensitive.read` ile okunur/yazılır."""
+    lot = kadro(tenant_a, user_a)
+    personel_id = str(lot["personel"].pk)
+
+    # Çalışan ve departman yöneticisi: kişisel veri YOK.
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    assert client.get(f"/test-ui/api/employees/{personel_id}/personal").status_code == 403
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
+    assert client.get(f"/test-ui/api/employees/{personel_id}/personal").status_code == 403
+    assert (
+        _post(
+            client, f"/test-ui/api/employees/{personel_id}/personal", {"first_name": "Olmaz"}
+        ).status_code
+        == 403
+    )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    # Şirket yöneticisi: yazar ve okur.
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    kaydet = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {
+            "first_name": "Ayşe",
+            "last_name": "Demir",
+            "birth_date": "1992-04-03",
+            "personal_email": "ayse@ornek.test",
+            "personal_phone": "05551234567",
+            "address": "Kadıköy / İstanbul",
+            "emergency_contact_phone": "05559876543",
+            "emergency_contact_relation": "Eş",
+            "citizenship": "TR",
+        },
+    )
+    assert kaydet.status_code == 200, kaydet.content
+    veri = client.get(f"/test-ui/api/employees/{personel_id}/personal").json()["data"]
+    assert veri["first_name"] == "Ayşe"
+    assert veri["birth_date"] == "1992-04-03"
+    assert veri["emergency_contact_relation"] == "Eş"
+
+    # Denetim: alan ADLARI yazılır, DEĞERLER yazılmaz (kayıt yeni ise `create`).
+    with tenant_context(tenant_a.id):
+        kayit = (
+            AuditLog.objects.filter(action="employee.personal_data.update").first()
+            or AuditLog.objects.filter(action="employee.personal_data.create").first()
+        )
+        assert kayit is not None
+        assert "Kadıköy" not in str(kayit.changes)
+        assert "alanlar" in kayit.changes
+
+
+def test_ui_yabanci_uyruklu_calisanda_izin_zorunlu(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """TR dışı vatandaşlıkta oturma/çalışma izni zorunlu; verilince kaydedilir."""
+    lot = kadro(tenant_a, user_a)
+    personel_id = str(lot["personel"].pk)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    eksik = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {"first_name": "Ali", "last_name": "Yabancı", "citizenship": "DE"},
+    )
+    assert eksik.status_code == 400
+    assert "izni" in eksik.json()["error"]["message"].lower()
+
+    tam = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {
+            "first_name": "Ali",
+            "last_name": "Yabancı",
+            "citizenship": "DE",
+            "work_permit_type": "Çalışma izni",
+            "work_permit_valid_until": "2027-12-31",
+        },
+    )
+    assert tam.status_code == 200
+    assert tam.json()["data"]["work_permit_type"] == "Çalışma izni"
+    assert tam.json()["data"]["work_permit_valid_until"] == "2027-12-31"
+
+
+def test_ui_rol_olusturma_ve_duzenleme(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Şirket yöneticisi özel rol oluşturur, adını/kapsamını düzenler."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+
+    yeni = _post(
+        client,
+        "/test-ui/api/roles/create",
+        {"name": "Vardiya Sorumlusu", "code": "vardiya_sorumlusu", "scope_type": "UNIT"},
+    )
+    assert yeni.status_code == 201, yeni.content
+    rol_id = yeni.json()["data"]["id"]
+    liste = {r["code"]: r for r in client.get("/test-ui/api/roles").json()["data"]}
+    assert liste["vardiya_sorumlusu"]["role_type"] == "custom"
+    assert liste["vardiya_sorumlusu"]["permission_count"] == 0
+    assert liste["vardiya_sorumlusu"]["can_edit_meta"] is True
+
+    # İzin verilebilir ve etki eder.
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/roles/{rol_id}/permissions",
+            {"permission_codes": ["employee.read", "leave.request.read"]},
+        ).status_code
+        == 200
+    )
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/employees/{lot['personel'].pk}/roles",
+            {"role_id": rol_id, "scope_org_unit_id": str(lot["birimler"]["muhasebe"].pk)},
+        ).status_code
+        == 201
+    )
+    with tenant_context(tenant_a.id):
+        assert user_has_permission(lot["personel_user"], "leave.request.read")
+
+    # Yeniden adlandırma serbest; kapsam, etkin atama varken değiştirilemez.
+    ad = _post(client, f"/test-ui/api/roles/{rol_id}/update", {"name": "Vardiya Şefi"})
+    assert ad.status_code == 200
+    assert ad.json()["data"]["name"] == "Vardiya Şefi"
+    kapsam = _post(
+        client, f"/test-ui/api/roles/{rol_id}/update", {"scope_type": "TENANT"}
+    )
+    assert kapsam.status_code == 400
+    assert "ataması var" in kapsam.json()["error"]["message"]
+
+    # Atama kaldırılınca kapsam değişir.
+    with tenant_context(tenant_a.id):
+        atama_id = str(
+            UserRole.objects.get(user=lot["personel_user"], role_id=rol_id).pk
+        )
+    assert (
+        _post(
+            client, f"/test-ui/api/role-assignments/{atama_id}/revoke", {"reason": "deneme"}
+        ).status_code
+        == 200
+    )
+    son = _post(client, f"/test-ui/api/roles/{rol_id}/update", {"scope_type": "TENANT"})
+    assert son.status_code == 200
+    assert son.json()["data"]["scope_type"] == "TENANT"
+
+    # Guard'lar: varsayılan kod, tekrar eden kod, platform kapsamı.
+    assert (
+        _post(
+            client,
+            "/test-ui/api/roles/create",
+            {"name": "Kopya", "code": "dept_manager"},
+        ).status_code
+        == 400
+    )
+    assert (
+        _post(
+            client,
+            "/test-ui/api/roles/create",
+            {"name": "Tekrar", "code": "vardiya_sorumlusu"},
+        ).status_code
+        == 400
+    )
+    assert (
+        _post(
+            client,
+            "/test-ui/api/roles/create",
+            {"name": "Platform", "code": "platform_rol", "scope_type": "SYS"},
+        ).status_code
+        == 400
+    )
+    with tenant_context(tenant_a.id):
+        assert AuditLog.objects.filter(action="role.create").exists()
+        assert AuditLog.objects.filter(action="role.update").exists()
+
+
+def test_ui_yetki_sekmesi_gorunurlugu_ve_sablonlar(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yetki sekmesi bayrağı ve izin türü şablonları yalnız yetkiliye/tümüne döner."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/me").json()["data"]["menu"]["roles_manage"] is True
+    lookups = client.get("/test-ui/api/lookups").json()
+    assert lookups["meta"]["can_create_users"] is True
+    assert lookups["meta"]["can_see_pii"] is True
+    assert len(lookups["data"]["leave_type_presets"]) >= 4
+    sablon = lookups["data"]["leave_type_presets"][0]
+    assert {"ad", "code", "category", "uses_balance", "requires_document"} <= set(sablon)
+
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/me").json()["data"]["menu"]["roles_manage"] is False
+    calisan_lookups = client.get("/test-ui/api/lookups").json()["meta"]
+    assert calisan_lookups["can_create_users"] is False
+    assert calisan_lookups["can_see_pii"] is False

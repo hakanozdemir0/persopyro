@@ -1979,7 +1979,7 @@ karar gereği v1'de yok.
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
 - **Karar durumu:** **OD1–OD5, OD19–OD28 KAPATILDI** (2026-09-11).
-  Açık: **14 karar** (OD6–OD18 + **OD29** — `leave.balance.manage` rol ataması). **Engelleyici açık karar yoktur**; **OD5
+  Açık: **15 karar** (OD6–OD18 + **OD29**, **OD30** — `leave.balance.manage` rol ataması). **Engelleyici açık karar yoktur**; **OD5
   (departman yöneticisi kapsamı) 2026-09-11'de KAPATILDI** → organizasyon modülü
   (M7–M13) önündeki kapsam belirsizliği kalktı: `dept_manager` kapsamı **`UNIT`**
   (atandığı birim + alt ağaç), kapsam kaynağı `user_roles.scope_org_unit_id`,
@@ -2010,6 +2010,28 @@ değiştirmedi; demo/bootstrap betiği sahte verisinde elle test için bakiye ta
   * **(B)** Yalnızca `tenant_admin` alsın.
   * **(C)** Yeni bir "İK operasyon / bordro" rolü tanımlanıp izin ona verilsin.
   * **(D)** v1'de yalnızca hakediş komutu kalsın (izin katalogda rezerve kalır).
+
+### OD30 — Kişisel veri **yazma** için ayrı izin kodu gerekli mi? — **AÇIK** ⏳ (2026-09-11)
+
+**Bağlam:** Katalogda kişisel veri için yalnızca `employee.sensitive.read` var; **yazma**
+(yeni kayıt/güncelleme) için ayrı kod yok. Test arayüzü kişisel veriyi hem **okumak** hem
+**yazmak** için bu tek kodu kullanıyor (izin + organizasyon kapsamı).
+
+**Neden açık:** Yetki kataloğu değişikliği rol izin sayılarını (ve
+`docs/AUTHORIZATION.md` matrisi ile `verify_fresh_install.sh` beklentilerini) etkiler;
+bu tur kapsamında katalog **bilinçli olarak sabit tutuldu**. Güvenlik açığı değildir:
+izinsiz kullanıcı hem okuma hem yazmada `403` alır (fail-closed).
+
+**Seçenekler:**
+  * **(A)** Mevcut tek kod (`employee.sensitive.read`) okuma + yazma için yeterli olsun
+    (bugünkü davranış; dokümante edilmiş kabul).
+  * **(B)** `employee.sensitive.write` kodu eklenip kapsam `TENANT` ile `hr_manager` +
+    `tenant_admin` rollerine verilsin (okuma izni olmadan yazma mümkün olmasın diye
+    servis "yazma ⇒ okuma" kuralını uygular).
+  * **(C)** Yazma yalnızca `tenant_admin` ile sınırlansın (İK yöneticisi giremesin).
+  * **(D)** Kişisel veri yazımı bu arayüzden hiç yapılmasın; yalnız okunur kalsın.
+
+**Karar sahibi:** ürün sahibi.
 
 **Karar sahibi:** ürün sahibi. **Not:** seçilen seçenek rol izin sayılarını değiştirir;
 `docs/AUTHORIZATION.md` §6.2 matrisi ve `scripts/verify_fresh_install.sh` beklentileri

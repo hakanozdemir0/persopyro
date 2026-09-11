@@ -199,12 +199,28 @@ Kiracı `slug`: `demo`.
 
 `bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki + çıkış +
 bakiye + rol yönetimi + taşıma) ve `bash scripts/verify_fresh_install.sh`
-(**6c-1…6c-4** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
+(**6c-1…6c-6** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
 bakiye/unvan/rol görünürlüğü, taşıma hedefleri, rol atama-kaldırma, yetkisiz 403,
-üretim varsayılanında 404).
+PII'siz çalışan dizini, kişisel veri kapısı, rol oluşturma, üretim varsayılanında 404).
+
+### Elle denenecek yeni akışlar (bildirim 5. tur)
+
+1. **Bilgilerim:** hangi rolle girilirse girilsin panelin ilk kartında ad soyad, unvan,
+   birim, kayıtlı e-posta, şirket ve yıllık izin satırları görünür.
+2. **Hesap açma:** Çalışanlar → "Yeni çalışan" → *2) Giriş hesabı*; "Parola üret" ile
+   parola oluştur, kaydı aç, çıkış yapıp o e-posta/parolayla giriş yapılabildiğini gör.
+3. **Kişisel veriler:** yönetici çalışan detayında "Kişisel veriler" bölümünü görür ve
+   güncelleyebilir; departman yöneticisi aynı bölümü **görmez** (uç `403` döner).
+   Vatandaşlık TR dışı seçilirse oturma/çalışma izni türü zorunludur.
+4. **İzin türü ekleme:** hazır şablon seç → "Uygula"; alanlar ve özellikler dolar.
+5. **Yetki Yönetimi:** yalnız şirket yöneticisinde görünür; "Yeni rol" ile rol açılır,
+   "Düzenle" ile ad/kapsam güncellenir (etkin ataması olan rolde kapsam değiştirilemez).
+6. **Yetki açıp kapatma:** rol izinlerini değiştir → çıkış yapıp o rolle giriş yap →
+   etkinin anında görüldüğünü doğrula.
 
 ### Kapsam dışı
 
 Impersonation **yok** (kullanıcı değiştirmek için çıkış + giriş). Üretim UI'ı,
-tema/tasarım sistemi, JS çerçevesi, arayüz üzerinden yetki yönetimi bu kapsamda
-değildir.
+tema/tasarım sistemi ve JS çerçevesi bu kapsamda değildir. Rol izinlerinin
+düzenlenmesi **vardır** ama kararı arayüz vermez: yetki kararı servis katmanında
+(`apps/rbac/services/roles.py`) verilir, arayüz yalnızca bunu yansıtır.

@@ -87,14 +87,17 @@ from apps.rbac.services import (
     RoleAssignmentValidationError,
     assign_role_to_user,
     can_assign_role,
+    create_custom_role,
     effective_permission_codes,
     restore_role_assignment,
     revoke_role_assignment,
+    update_role_meta,
     update_role_permissions,
     user_has_permission,
 )
 from apps.rbac.services.scope import user_org_scope
 from apps.testui.labels import (
+    MODUL_ACIKLAMALARI,
     istisna_etiketi,
     kapsam_metni,
     kapsam_tipi_etiketi,
@@ -108,6 +111,10 @@ def _test_ui_kapali() -> None:
         raise Http404("test_ui_disabled")
 
 
+class TestUiAuthorizationError(RuntimeError):
+    """Test arayüzü katmanının kendi yetki reddi (HTTP 403)."""
+
+
 class TestUiErrors:
     """Servis hatalarını HTTP kodlarına ve anlaşılır mesaja çevirir."""
 
@@ -119,6 +126,17 @@ class TestUiErrors:
 
     @classmethod
     def cevap(cls, hata: Exception) -> Response:
+        if isinstance(hata, TestUiAuthorizationError):
+            return Response(
+                {
+                    "error": {
+                        "code": "forbidden",
+                        "message": "Bu işlem için yetkiniz veya organizasyon kapsamınız yok.",
+                        "detail": str(hata),
+                    }
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         # Girdi doğrulaması yetki reddinden ÖNCE kontrol edilir (400 vs 403).
         if isinstance(hata, RoleAssignmentValidationError):
             return Response(
@@ -506,6 +524,7 @@ class MeView(TestUiView):
                         # Rol/yetki yönetimi yalnızca `role.manage` sahibinde görünür
                         # (karar servis katmanında; UI yalnızca gizler).
                         "roles_manage": user_has_permission(user, "role.manage"),
+                        "pii_gorunur": user_has_permission(user, "employee.sensitive.read"),
                     },
                 }
             }
@@ -598,6 +617,20 @@ class DashboardView(TestUiView):
                 "data": {
                     "employee": _calisan_ozeti(calisan) if calisan is not None else None,
                     "period_year": yil,
+                    "profile": {
+                        "name": f"{user.first_name} {user.last_name}".strip() or user.email,
+                        "email": user.email,
+                        "tenant": user.tenant.name,
+                        "position": (
+                            calisan.position.name if calisan and calisan.position_id else None
+                        ),
+                        "department": (
+                            calisan.department.name if calisan and calisan.department_id else None
+                        ),
+                        "employee_no": calisan.employee_no if calisan is not None else None,
+                        "annual": _yillik_ozet(calisan, yil),
+                    },
+                    "pii_gorunur": user_has_permission(user, "employee.sensitive.read"),
                     "upcoming_requests": yaklasanlar,
                     "decided_requests": karara_baglananlar,
                     "status_counts": durum_sayilari,
@@ -847,8 +880,50 @@ class EmployeeListView(TestUiView):
                 position = Position.objects.filter(
                     pk=_uuid(veri["position_id"], "position_id"), deleted_at__isnull=True
                 ).first()
-            user = None
-            if veri.get("user_id"):
+            # Hesap açma/bağlama: ya mevcut hesap seçilir ya da yenisi açılır
+            # (e-posta + parola; parola arayüzde üretilir ve yanıtta dönmez).
+            if veri.get("email") and veri.get("password"):
+                if not user_has_permission(request.user, "user.manage"):
+                    raise TestUiAuthorizationError(
+                        "Hesap açmak için 'user.manage' izni gerekir."
+                    )
+                from django.contrib.auth import get_user_model  # noqa: PLC0415
+                from django.contrib.auth.password_validation import (  # noqa: PLC0415
+                    validate_password,
+                )
+                from django.core.exceptions import ValidationError  # noqa: PLC0415
+
+                eposta = str(veri["email"]).strip().lower()
+                try:
+                    validate_password(str(veri["password"]))
+                except ValidationError as hata:
+                    raise LeaveError(
+                        "Parola kuralları: " + " ".join(hata.messages)
+                    ) from hata
+                user_modelu = get_user_model()
+                if user_modelu.objects.filter(
+                    tenant=request.user.tenant_id, email=eposta
+                ).exists():
+                    raise LeaveError("Bu e-posta ile kayıtlı bir kullanıcı zaten var.")
+                user = user_modelu.objects.create_user(
+                    tenant=request.user.tenant,
+                    email=eposta,
+                    password=str(veri["password"]),
+                    first_name=str(veri.get("first_name") or "").strip(),
+                    last_name=str(veri.get("last_name") or "").strip(),
+                )
+                from apps.audit.services import log_action  # noqa: PLC0415
+
+                log_action(
+                    tenant_id=request.user.tenant_id,
+                    action="user.create",
+                    user=request.user,
+                    table_name="users",
+                    record_id=user.pk,
+                    changes={"email": eposta},  # parola ASLA yazılmaz
+                )
+            user = user if "user" in locals() else None
+            if user is None and veri.get("user_id"):
                 from django.contrib.auth import get_user_model  # noqa: PLC0415
 
                 user = get_user_model().objects.filter(pk=_uuid(veri["user_id"], "user_id")).first()
@@ -876,7 +951,21 @@ class EmployeeListView(TestUiView):
                 position=position,
                 user=user,
             )
-        except (LeaveError, OrganizationError, LeaveAuthorizationError) as hata:
+            # Kişisel veriler (yalnız `employee.sensitive.read` sahibi yazabilir).
+            pii = {a: veri[a] for a in PII_ALANLARI if a in veri}
+            if pii:
+                _pii_yaz(request.user, calisan, pii)
+                for alan in ("first_name", "last_name"):
+                    if alan in pii and calisan.user_id and not getattr(calisan.user, alan):
+                        setattr(calisan.user, alan, pii[alan])
+                if calisan.user_id:
+                    calisan.user.save(update_fields=["first_name", "last_name", "updated_at"])
+        except (
+            LeaveError,
+            OrganizationError,
+            LeaveAuthorizationError,
+            TestUiAuthorizationError,
+        ) as hata:
             return TestUiErrors.cevap(hata)
         return Response({"data": _calisan_ozeti(calisan)}, status=status.HTTP_201_CREATED)
 
@@ -987,6 +1076,10 @@ class RoleListView(TestUiView):
                     "kapsam_gerekli": rol.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES,
                     "atanabilir": izin_var,
                     "gerekce": gerekce,
+                    "role_type": rol.role_type,
+                    "can_edit_meta": not UserRole.objects.filter(
+                        user=request.user, role=rol, deleted_at__isnull=True
+                    ).exists(),
                     "permission_count": RolePermission.objects.filter(role=rol).count(),
                     "user_count": UserRole.objects.filter(
                         role=rol, deleted_at__isnull=True
@@ -998,6 +1091,12 @@ class RoleListView(TestUiView):
                 "data": roller,
                 "meta": {
                     "can_manage": user_has_permission(request.user, "role.manage"),
+                    "scope_types": [
+                        {"value": "TENANT", "label": "Tüm kiracı"},
+                        {"value": "UNIT", "label": "Seçili birim + alt birimleri"},
+                        {"value": "UNIT_DIRECT", "label": "Yalnızca seçili birim"},
+                        {"value": "SELF", "label": "Yalnızca kendi kaydı"},
+                    ],
                 },
             }
         )
@@ -1125,6 +1224,69 @@ class LeaveTypeDeactivateView(TestUiView):
         return Response({"data": _izin_turu_ozeti(tur)})
 
 
+class RoleCreateView(TestUiView):
+    """Kiracıya özel rol oluşturur (`role.manage`)."""
+
+    def post(self, request):  # noqa: ANN001
+        try:
+            rol = create_custom_role(
+                actor=request.user,
+                tenant=request.user.tenant,
+                code=str(request.data.get("code") or ""),
+                name=str(request.data.get("name") or ""),
+                scope_type=str(request.data.get("scope_type") or "TENANT"),
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {
+                "data": {
+                    "id": str(rol.pk),
+                    "code": rol.code,
+                    "name": rol.name,
+                    "scope_type": rol.scope_type,
+                    "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                }
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class RoleUpdateView(TestUiView):
+    """Rolün adını/kapsam tipini değiştirir (`role.manage`; kapsam için atama guard'ı)."""
+
+    def post(self, request, role_id: str):  # noqa: ANN001
+        rol = Role.objects.filter(
+            pk=_uuid(role_id, "role_id"), tenant=request.user.tenant_id, deleted_at__isnull=True
+        ).first()
+        if rol is None:
+            raise Http404("rol_yok")
+        try:
+            update_role_meta(
+                actor=request.user,
+                role=rol,
+                name=(str(request.data["name"]) if request.data.get("name") else None),
+                scope_type=(
+                    str(request.data["scope_type"]) if request.data.get("scope_type") else None
+                ),
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {
+                "data": {
+                    "id": str(rol.pk),
+                    "code": rol.code,
+                    "name": rol.name,
+                    "scope_type": rol.scope_type,
+                    "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                }
+            }
+        )
+
+
 class RolePermissionView(TestUiView):
     """
     Bir rolün izin kümesini okur/yazar (`role.manage`; kiracıda şirket yöneticisi).
@@ -1178,10 +1340,20 @@ class RolePermissionView(TestUiView):
                         "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
                         "role_type": rol.role_type,
                     },
+                    "scope_types": [
+                        {"value": k, "label": v}
+                        for k, v in (
+                            ("TENANT", "Tüm kiracı"),
+                            ("UNIT", "Seçili birim + alt birimleri"),
+                            ("UNIT_DIRECT", "Yalnızca seçili birim"),
+                            ("SELF", "Yalnızca kendi kaydı"),
+                        )
+                    ],
                     "modules": [
                         {
                             "module": m,
                             "module_label": modul_etiketi(m),
+                            "module_aciklama": MODUL_ACIKLAMALARI.get(m, ""),
                             "permissions": izinler,
                         }
                         for m, izinler in sorted(moduller.items())
@@ -1249,6 +1421,44 @@ class LookupView(TestUiView):
                     ],
                     "users": _kullanici_secenekleri(request.user),
                     "categories": [{"value": k, "label": e} for k, e in LeaveCategory.choices],
+                    "leave_type_presets": [
+                        {
+                            "ad": "Yıllık izin",
+                            "code": "yillik_izin",
+                            "category": "annual",
+                            "is_paid": True,
+                            "uses_balance": True,
+                            "requires_approval": True,
+                            "requires_document": False,
+                        },
+                        {
+                            "ad": "Hastalık / rapor",
+                            "code": "hastalik_izni",
+                            "category": "sick",
+                            "is_paid": True,
+                            "uses_balance": False,
+                            "requires_approval": True,
+                            "requires_document": True,
+                        },
+                        {
+                            "ad": "Ücretsiz izin",
+                            "code": "ucretsiz_izin",
+                            "category": "unpaid",
+                            "is_paid": False,
+                            "uses_balance": False,
+                            "requires_approval": True,
+                            "requires_document": False,
+                        },
+                        {
+                            "ad": "Doğum izni",
+                            "code": "dogum_izni",
+                            "category": "maternity",
+                            "is_paid": True,
+                            "uses_balance": False,
+                            "requires_approval": True,
+                            "requires_document": True,
+                        },
+                    ],
                     "recent_days": 90,
                 },
                 "meta": {
@@ -1256,8 +1466,190 @@ class LookupView(TestUiView):
                         request.user, "org.position.manage"
                     ),
                     "can_manage_leave_types": can_manage_leave_types(request.user),
+                    "can_create_users": user_has_permission(request.user, "user.manage"),
+                    "can_see_pii": user_has_permission(request.user, "employee.sensitive.read"),
                 },
             }
+        )
+
+
+#: Kişisel veri alanları (K2) — arayüz ve API aynı listeyi kullanır.
+PII_ALANLARI = (
+    "first_name",
+    "last_name",
+    "birth_date",
+    "address",
+    "personal_email",
+    "personal_phone",
+    "emergency_contact_phone",
+    "emergency_contact_relation",
+    "citizenship",
+    "work_permit_type",
+    "work_permit_valid_until",
+    "national_id",
+    "iban",
+)
+
+
+def _pii_ozeti(kayit) -> dict:  # noqa: ANN001
+    """Kişisel veri kaydı (yalnız `employee.sensitive.read` sahibine döner)."""
+    return {
+        "first_name": kayit.first_name,
+        "last_name": kayit.last_name,
+        "birth_date": kayit.birth_date.isoformat() if kayit.birth_date else None,
+        "address": kayit.address,
+        "personal_email": kayit.personal_email,
+        "personal_phone": kayit.personal_phone,
+        "emergency_contact_phone": kayit.emergency_contact_phone,
+        "emergency_contact_relation": kayit.emergency_contact_relation,
+        "citizenship": kayit.citizenship,
+        "work_permit_type": kayit.work_permit_type,
+        "work_permit_valid_until": (
+            kayit.work_permit_valid_until.isoformat() if kayit.work_permit_valid_until else None
+        ),
+        "national_id": kayit.national_id,
+        "iban": kayit.iban,
+    }
+
+
+def _pii_guardlari(user, employee) -> None:  # noqa: ANN001
+    """Kişisel veri erişimi: tablo kapsamı izni (OD5 §5.7) + kapsam."""
+    if not user_has_permission(user, "employee.sensitive.read"):
+        raise TestUiAuthorizationError(
+            "Kişisel verileri görüntülemek için 'employee.sensitive.read' izni gerekir."
+        )
+
+
+def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
+    """Kişisel veriyi yazar/günceller; doğrulama ve denetim burada yapılır."""
+    _pii_guardlari(user, calisan)
+    from apps.organization.models import EmployeePersonalData  # noqa: PLC0415
+
+    kayit = EmployeePersonalData.objects.filter(employee=calisan).first()
+    yeni = kayit is None
+    if kayit is None:
+        kayit = EmployeePersonalData(employee=calisan, tenant=calisan.tenant)
+    for alan in PII_ALANLARI:
+        if alan not in veri:
+            continue
+        deger = veri.get(alan)
+        if alan in {"birth_date", "work_permit_valid_until"}:
+            setattr(kayit, alan, _tarih(deger, alan) if deger else None)
+        else:
+            setattr(kayit, alan, ("" if deger is None else str(deger)).strip())
+    if not (kayit.first_name or "").strip() or not (kayit.last_name or "").strip():
+        raise LeaveError("Kişisel veri için ad ve soyad zorunludur.")
+    uyruk = (kayit.citizenship or "").strip().upper()
+    if uyruk and uyruk != "TR" and not (kayit.work_permit_type or "").strip():
+        raise LeaveError(
+            "Vatandaşlık Türkiye dışında ise oturma/çalışma izni bilgisi zorunludur."
+        )
+    kayit.save()
+    # Denetim: kişisel veri DEĞERİ yazılmaz, yalnızca hangi alanların değiştiği bilgisi.
+    from apps.audit.services import log_action  # noqa: PLC0415
+
+    log_action(
+        tenant_id=calisan.tenant_id,
+        action="employee.personal_data.create" if yeni else "employee.personal_data.update",
+        user=user,
+        table_name="employee_personal_data",
+        record_id=calisan.pk,
+        changes={"alanlar": sorted({a for a in PII_ALANLARI if a in veri})},
+    )
+
+
+class EmployeePersonalView(TestUiView):
+    """
+    Kişisel veri (K2) okuma/yazma — **yalnızca** `employee.sensitive.read` sahibi
+    (şirket yöneticisi ve izin verdiği kişiler). Organizasyon kapsamı tek başına
+    bu tabloya erişim vermez (OD5 §5.7).
+    """
+
+    def get(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+            _pii_guardlari(request.user, calisan)
+        except TestUiAuthorizationError as hata:
+            return TestUiErrors.cevap(hata)
+        kayit = getattr(calisan, "personal_data", None)
+        return Response(
+            {
+                "data": _pii_ozeti(kayit) if kayit is not None else None,
+                "meta": {
+                    "employee_no": calisan.employee_no,
+                    "var": kayit is not None,
+                    "mesaj": "" if kayit is not None else "Kişisel veri kaydı henüz yok.",
+                },
+            }
+        )
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+            _pii_yaz(request.user, calisan, request.data)
+        except (TestUiAuthorizationError, LeaveError, OrganizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _pii_ozeti(calisan.personal_data)})
+
+
+class UserCreateView(TestUiView):
+    """Giriş hesabı açar (`user.manage`). Parola **yanıtta dönmez**, denetime yazılmaz."""
+
+    def post(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "user.manage"):
+            return TestUiErrors.cevap(
+                TestUiAuthorizationError("Hesap açmak için 'user.manage' izni gerekir.")
+            )
+        from django.contrib.auth import get_user_model  # noqa: PLC0415
+        from django.contrib.auth.password_validation import validate_password  # noqa: PLC0415
+        from django.core.exceptions import ValidationError  # noqa: PLC0415
+
+        eposta = str(request.data.get("email") or "").strip().lower()
+        parola = str(request.data.get("password") or "")
+        ad = str(request.data.get("first_name") or "").strip()
+        soyad = str(request.data.get("last_name") or "").strip()
+        if not eposta or "@" not in eposta:
+            return TestUiErrors.cevap(LeaveError("Geçerli bir e-posta adresi girin."))
+        if not parola:
+            return TestUiErrors.cevap(LeaveError("Parola zorunludur."))
+        try:
+            validate_password(parola)
+        except ValidationError as hata:
+            return TestUiErrors.cevap(LeaveError("Parola kuralları: " + " ".join(hata.messages)))
+        user_modelu = get_user_model()
+        if user_modelu.objects.filter(tenant=request.user.tenant_id, email=eposta).exists():
+            return TestUiErrors.cevap(
+                LeaveError("Bu e-posta ile bir kullanıcı zaten var (kiracı içinde benzersiz).")
+            )
+        try:
+            kullanici = user_modelu.objects.create_user(
+                tenant=request.user.tenant,
+                email=eposta,
+                password=parola,
+                first_name=ad,
+                last_name=soyad,
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(LeaveError(f"Hesap açılamadı: {hata}"))
+        from apps.audit.services import log_action  # noqa: PLC0415
+
+        log_action(
+            tenant_id=request.user.tenant_id,
+            action="user.create",
+            user=request.user,
+            table_name="users",
+            record_id=kullanici.pk,
+            changes={"email": eposta},  # parola ASLA yazılmaz
+        )
+        return Response(
+            {
+                "data": {
+                    "id": str(kullanici.pk),
+                    "email": kullanici.email,
+                    "name": f"{kullanici.first_name} {kullanici.last_name}".strip(),
+                }
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 

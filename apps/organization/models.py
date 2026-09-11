@@ -282,6 +282,23 @@ class EmployeePersonalData(TimeStampedModel, SoftDeleteModel):
     personal_email = models.EmailField("kişisel e-posta", max_length=190, blank=True)
     personal_phone = models.CharField("kişisel telefon", max_length=30, blank=True)
     iban = models.CharField("IBAN", max_length=34, blank=True)
+    # --- K2 devamı (M12 genişletme, 2026-09-11) ---
+    emergency_contact_phone = models.CharField("yakın kişi telefonu", max_length=30, blank=True)
+    emergency_contact_relation = models.CharField("yakınlık derecesi", max_length=60, blank=True)
+    citizenship = models.CharField(
+        "vatandaşlık",
+        max_length=60,
+        blank=True,
+        default="",
+        help_text="ISO ülke kodu veya ad; boş = bilinmiyor. 'TR' = Türkiye.",
+    )
+    work_permit_type = models.CharField(
+        "oturma/çalışma izni",
+        max_length=60,
+        blank=True,
+        help_text="Türk vatandaşı değilse izin türü (ör. 'çalışma izni', 'oturma izni').",
+    )
+    work_permit_valid_until = models.DateField("izin geçerlilik tarihi", null=True, blank=True)
     # --- K3 (özel nitelikli kişisel veri — ŞİFRELİ) ---
     health_notes = EncryptedTextField("sağlık notları (şifreli)", blank=True, null=True)
     disability_status = EncryptedCharField("engellilik durumu (şifreli)", blank=True, null=True)
