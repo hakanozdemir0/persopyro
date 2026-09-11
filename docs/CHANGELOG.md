@@ -5,6 +5,100 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.4.0] — 2026-09-11 — Faz 1: veritabanı, rol ayrımı ve kiracı izolasyonu (RLS)
+
+PostgreSQL 18.6 kullanıcı tarafından kuruldu (sudo gerektirdiği için ajan
+kuramadı). Bu sürümde veri katmanının güvenlik temeli kuruldu ve
+**çalıştırılarak kanıtlandı**.
+
+### Eklenen
+
+- `scripts/01_bootstrap.sql` — roller (`persopyro_owner`, `persopyro_app`),
+  veritabanı, `pgcrypto`. Süper kullanıcı çalıştırır, idempotent.
+- `scripts/02_grant_app_privileges.sql` — `hr` şeması, şema yetkileri, varsayılan
+  yetkiler (tablo/sequence/fonksiyon/**tip**), mevcut nesnelerin yetkileri,
+  denetim tablosu koruması. **Saf SQL** (psql'e özgü komut yok), bu yüzden test
+  veritabanında da (conftest) çalıştırılabilir.
+- `scripts/03_verify_isolation.sql` — kiracı izolasyonu kanıtı: A1–A9 iddiaları,
+  başarısızlıkta `RAISE EXCEPTION`. Geçici `spike` şeması kurar ve siler; `hr`
+  şemasına dokunmaz.
+- `scripts/bootstrap.sh` — tek komutla kurulum: roller/DB/şema/yetkiler →
+  rastgele parola üretimi → `.env` yazımı → izolasyon doğrulaması → uygulama
+  rolüyle TCP bağlantı sınaması (parola + `search_path`).
+- `scripts/run_tests.sh` — testleri sahip rolüyle çalıştırır (test veritabanı
+  oluşturma yetkisi uygulama rolünde bilinçli olarak yoktur).
+- `tests/conftest.py` — test veritabanında `hr` şemasını ve uygulama rolü
+  yetkilerini uygular (geçiş dönemi çözümü; faz 2'de ilk migration devralacak).
+- `tests/test_database_roles.py` — 8 test: uygulama rolü superuser değil, RLS'i
+  atlayamaz, veritabanı/rol oluşturamaz, `hr`/`public` şemasında DDL yapamaz,
+  `hr` şemasını kullanabilir; tenant bağlamı fail-closed; `search_path` doğru;
+  roller ayrı.
+- `config/settings.py`: `.env` yükleyici (ek bağımlılık yok, gerçek ortam
+  değişkenleri kazanır), `DJANGO_ENV_FILE` ile dosya yolu geçersiz kılınabilir;
+  `APP_DB_ROLE` / `OWNER_DB_ROLE` ayarları.
+
+### Verilen kararlar
+
+- **Kimlik doğrulama:** kimlik doğrulama uygulama katmanında kalır;
+  veritabanındaki `crypt()` tabanlı fonksiyon üretimde kullanılmaz (önceki sürüm
+  kararı doğrulandı).
+- **`uuid-ossp` eklentisi gerekmez:** `gen_random_uuid()` PostgreSQL 13+ ile
+  çekirdekte. Mevcut tasarımın `uuid-ossp` kullanımı sadeleştirildi.
+- **Tenant bağlamı işlem başına** (`set_config(..., is_local=true)`) kurulur;
+  oturum boyunca kalan (`false`) kullanım yasaktır.
+- **Testler sahip rolüyle çalışır**, uygulama rolüne `CREATEDB` verilmez;
+  izolasyon `FORCE RLS` sayesinde yine bağlayıcıdır.
+
+### Doğrulanan (gerçek çalıştırma, PostgreSQL 18.6)
+
+Geçici, ajan tarafından yönetilen bir küme (port 5433, `initdb` ile kuruldu ve
+iş bitince silindi) üzerinde:
+
+- `scripts/bootstrap.sh` uçtan uca çalıştı; `SONUC: KIRACI IZOLASYONU
+  DOGRULAMASI BASARILI (A1-A9)`.
+- **A1** uygulama rolü superuser değil, `rolbypassrls=false`, `CREATEDB`/
+  `CREATEROLE` yok, `hr` şemasında `CREATE` yok.
+- **A2** uygulama rolü tablo sahibi değil.
+- **A3** RLS etkin **ve FORCE etkin**.
+- **A4** kiracı bağlamı yokken 0 satır (fail-closed).
+- **A5** A kiracısı yalnızca kendi 1 kaydını görür.
+- **A6** A kiracısı B kiracısı adına yazamaz (`WITH CHECK` ihlali engellendi).
+- **A7** B kiracısının satırı güncellenemedi/silinemedi (0 satır etkilendi).
+- **A8** işlem sonunda bağlam sıfırlandı.
+- **A9** `FORCE RLS` sayesinde **tablo sahibi rol bile** kiracı sınırını aşamadı.
+- Uygulama rolü TCP + parola (scram-sha-256) ile bağlandı; `search_path=hr,public`.
+- `pytest`: **19 test geçti** (8'i veritabanı rol/izolasyon testi), gerçek
+  PostgreSQL üzerinde; test veritabanı otomatik oluşturuldu ve silindi.
+- `manage.py check`, `ruff`, `bandit -c pyproject.toml -r .`, `pip-audit`: temiz.
+
+### Bulgular (düzeltilen gerçek hatalar)
+
+- **PostgreSQL `SET LOCAL` sonrası ayar `NULL` değil boş string'e döner.**
+  Bu yüzden tasarımdaki `NULLIF(current_setting('app.tenant_id', TRUE), '')`
+  kullanımı zorunludur — süs değil. Kanıt A8'dedir.
+- `GRANT ... ON ALL TYPES IN SCHEMA` **PostgreSQL'de yok**; tip yetkileri döngüyle
+  verilir (`02_grant_app_privileges.sql`).
+- `bootstrap.sh` içinde `:-` varsayılanı, açıkça boş verilen `SUPER_USER_CMD`
+  değerini geçersiz kılıyordu; `-` kullanımına çevrildi.
+- Dev `.env` dosyası varken "üretim çerezi güvenli mi" testi yanlış sonuç
+  veriyordu; test artık ayarları temiz ortamda (`.env` devre dışı) yükler.
+- Test veritabanında `hr` şeması ve yetkiler yoktu; conftest ile eklendi.
+
+### Yapılmayan
+
+- `manage.py migrate` çalıştırılmadı: özel kullanıcı modeli (`AUTH_USER_MODEL`)
+  ilk migration'dan önce tanımlanmalıdır. Faz 2'nin ilk işidir.
+- Uygulama modülleri (kiracı, kullanıcı, organizasyon) kodlanmadı.
+- `~/hrsaas_db/` altındaki dosyalara dokunulmadı.
+
+### Sıradaki adım
+
+Kullanıcı sistem kümesinde `bash scripts/bootstrap.sh` çalıştırır; sonra Faz 2:
+`tenancy` ve `accounts` uygulamaları, özel kullanıcı modeli, `hr` şemasını
+oluşturan ilk migration, kimlik doğrulama + RBAC çekirdeği.
+
+---
+
 ## [0.3.0] — 2026-09-11 — Faz 0: ortam kurulumu, depo ve test iskeleti
 
 Karar: Python **3.13** ile devam (bkz. `ARCHITECTURE.md` karar kaydı K11).

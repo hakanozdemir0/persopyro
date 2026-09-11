@@ -62,5 +62,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Test dosyalarında güvenlik kuralları gevşetilir (sabit parola vb.)
-"tests/**" = ["S105", "S106", "S107"]
+# Test dosyalarında güvenlik kuralları gevşetilir: sabit parola kullanımı ve
+# ayarları temiz ortamda yüklemek için bilinçli alt süreç başlatma (girdi sabittir).
+"tests/**" = ["S105", "S106", "S107", "S603", "S607"]
+
+[tool.bandit]
+# Bandit üretim kodunu tarar. Testler bilinçli olarak assert, sahte parola ve
+# alt süreç kullanır; bu bulgular yanlış alarmdır ve ruff tarafından ayrıca denetlenir.
+exclude_dirs = ["tests", ".venv", "migrations"]

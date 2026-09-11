@@ -10,39 +10,52 @@ platformudur.
 
 ## Durum
 
-Faz 0 (ortam kurulumu, depo, test iskeleti) tamamlandı. Uygulama özellikleri
-henüz kodlanmadı. Seçilen teknoloji yığını ve gerekçeleri
-`docs/ARCHITECTURE.md` içindedir.
+Faz 0 (ortam, depo, test iskeleti) ve Faz 1 (veritabanı: roller, `hr` şeması,
+RLS ile kiracı izolasyonu) tamamlandı. Uygulama özellikleri henüz kodlanmadı.
 
-Kurulu olan: Python 3.13.15 sanal ortamı (uv), Django 5.2.17 LTS ve
-`docs/ARCHITECTURE.md` bölüm 19'daki bağımlılıklar, iskelet ayarlar, test
-çalıştırıcı. Kurulu olmayan: PostgreSQL (kurulum `sudo` gerektirir, faz 1'de
-yapılacak).
+- Kurulu: Python 3.13.15 (uv), Django 5.2.17 LTS, bağımlılıklar (`uv.lock`),
+  PostgreSQL 18.6 (localhost, kullanıcı tarafından kuruldu).
+- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9 gerçek PostgreSQL üzerinde
+  geçti; testler 19 adet ve yeşil.
+- **Kalan tek adım (senin çalıştırman gerekiyor, sudo şifresi ister):**
+  `bash scripts/bootstrap.sh` — sistem kümesinde rolleri, veritabanını ve `hr`
+  şemasını kurar, parolaları üretip `.env` yazar ve izolasyon doğrulamasını
+  çalıştırır. Betikler ayrı bir geçici kümede (port 5433) uçtan uca doğrulanmıştır.
 
 ## Geliştirme ortamı
 
 ```bash
-# Bağımlılıkları kur (uv gerekir)
+# 1) Bağımlılıkları kur (uv gerekir)
 uv sync
 
-# Sırları ortamdan ver (koda yazılmaz; hiçbir ortamda koda gömülü yedek yoktur,
-# tanımsızsa uygulama bilinçli olarak başlamaz)
-export DJANGO_SECRET_KEY="$(python3 -c 'import secrets;print(secrets.token_urlsafe(50))')"
-export DJANGO_DEBUG=1
+# 2) Veritabanını kur: roller, veritabanı, hr şeması, yetkiler, .env ve
+#    kiracı izolasyonu (RLS) doğrulaması — sudo şifresi istenir
+bash scripts/bootstrap.sh
 
-# Kontroller
+# 3) Kontroller
 .venv/bin/python manage.py check
-.venv/bin/pytest
+bash scripts/run_tests.sh          # testler (gerçek PostgreSQL üzerinde)
 .venv/bin/ruff check .
-.venv/bin/bandit -r config apps -q
+.venv/bin/bandit -c pyproject.toml -r .
 .venv/bin/pip-audit
 ```
 
-Örnek ortam değişkenleri: `.env.example` (gerçek değerler `.env` dosyasında
-tutulur ve depoya girmez).
+`scripts/` içeriği:
 
-Not: Veritabanı gerektiren komutlar (`migrate`, `runserver` ile veri erişimi)
-PostgreSQL kurulana kadar çalışmaz; ayrıntı `docs/CHANGELOG.md` faz notları.
+| Dosya | Görev | Çalıştıran rol |
+|---|---|---|
+| `01_bootstrap.sql` | Roller, veritabanı, eklentiler | süper kullanıcı |
+| `02_grant_app_privileges.sql` | `hr` şeması ve uygulama rolü yetkileri (saf SQL, her veritabanında çalışır) | sahip |
+| `03_verify_isolation.sql` | Kiracı izolasyonu kanıtı (A1–A9 iddiaları) | süper kullanıcı |
+| `bootstrap.sh` | Yukarıdakileri sırayla çalıştırır, parola üretir, `.env` yazar | kullanıcı |
+| `run_tests.sh` | Testleri doğru rolle çalıştırır | kullanıcı |
+
+Örnek ortam değişkenleri: `.env.example` (gerçek değerler `.env` dosyasında
+tutulur ve depoya girmez; `bootstrap.sh` üretir).
+
+Not: Testler `scripts/run_tests.sh` ile çalıştırılır; çünkü testler kendi test
+veritabanını oluşturmak zorundadır ve uygulama rolüne bilinçli olarak
+veritabanı oluşturma yetkisi verilmemiştir.
 
 ## Dokümantasyon
 

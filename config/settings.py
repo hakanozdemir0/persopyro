@@ -16,6 +16,32 @@ from django.core.exceptions import ImproperlyConfigured
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _load_env_file(path: Path) -> None:
+    """
+    Basit .env yükleyici (ek bağımlılık yok).
+
+    Geliştirme kolaylığı içindir: değerler zaten tanımlıysa üzerine yazılmaz, yani
+    üretimde systemd/secret store tarafından verilen ortam değişkenleri kazanır.
+    Gerçek .env dosyası git'e girmez (.gitignore).
+    """
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key.startswith("export "):
+            key = key.removeprefix("export ").strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+# Farklı bir ortam dosyası göstermek için DJANGO_ENV_FILE kullanılabilir.
+_load_env_file(Path(os.environ.get("DJANGO_ENV_FILE", BASE_DIR / ".env")))
+
+
 def env_bool(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -112,6 +138,13 @@ DATABASES = {
         "CONN_MAX_AGE": int(os.environ.get("POSTGRES_CONN_MAX_AGE", "60")),
     }
 }
+
+# --- Veritabanı rolleri -----------------------------------------------------
+# Rol adları burada sabit isim olarak tutulur: testler bu adların YETKİLERİNİ
+# sınar, oysa testlerin hangi rolle bağlandığı değişebilir (bkz. scripts/run_tests.sh).
+# Bağlanan rol ile yetkisi sınanan rolü karıştırmamak izolasyon denetiminin temelidir.
+APP_DB_ROLE = os.environ.get("POSTGRES_APP_ROLE", "persopyro_app")
+OWNER_DB_ROLE = os.environ.get("POSTGRES_OWNER_USER", "persopyro_owner")
 
 # --- Kimlik doğrulama --------------------------------------------------------
 # NOT: Özel kullanıcı modeli (AUTH_USER_MODEL) faz 2'de tanımlanacak ve

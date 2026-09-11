@@ -165,7 +165,7 @@ parçası eklenir; tüm uygulama SPA'ya çevrilmez.
 
 ### 5.1 Seçim
 
-**PostgreSQL 17** (minimum 15; 18 de kabul edilebilir). Gerekçeler:
+**PostgreSQL 18** (minimum 15; projede kurulu sürüm 18.6). Gerekçeler:
 
 - Mevcut veri tasarımı (`~/hrsaas_db/`) PostgreSQL'e göre yazılmıştır
   (`pgcrypto`, `uuid-ossp`, JSONB, kısıtlar, RLS).
@@ -173,8 +173,9 @@ parçası eklenir; tüm uygulama SPA'ya çevrilmez.
   yalnızca PostgreSQL bu olgunlukta sunar (öncelik 2).
 - Kiracı izolasyonu, kısıtlar (`CHECK`, `UNIQUE`, yabancı anahtar) ve JSONB
   aynı motorda; ek veri deposu gerekmez (öncelik 8).
-- 17, bir yılını doldurmuş, olgun ve araç desteği tam bir sürümdür; PostgreSQL
-  sürümleri 5 yıl topluluk desteği alır.
+- 18, mevcut kararlı sürümdür ve topluluk desteği 2030'a kadar sürer; PostgreSQL
+  sürümleri 5 yıl boyunca desteklenir. Projede kurulu sürüm: **18.6**. En az
+  gereken sürüm 15'tir.
 - Alternatif olarak MySQL/MariaDB reddedildi: RLS yok, izolasyon tamamen
   uygulamaya kalırdı.
 
@@ -531,20 +532,15 @@ Python 3.14.4, uv 0.12.10. Disk 25 GB (12 GB boş), RAM 3,3 GB.
 |---|---|---|
 | Python | **Kuruldu: 3.13.15** (uv) | Karar K11. Proje `.venv` içinde; `requires-python = ">=3.13,<3.14"` |
 | Node/npm | Var | Yalnızca Tailwind derlemesi için gerekli (geliştirme zamanı) |
-| PostgreSQL | **Kurulu değil** (`psql` yok) | Faz 1'de kurulacak; `sudo` şifresi gerektiği için kullanıcı tarafından çalıştırılmalı |
+| PostgreSQL | **Kuruldu ve çalışıyor: 18.6** (127.0.0.1:5432) | Kurulum `sudo` gerektirdiği için kullanıcı tarafından yapıldı. Rol/şema/yetki kurulumu: `bash scripts/bootstrap.sh` |
 | Docker | **Kurulu değil** | Gerekli de değil (bölüm 15) |
 | RAM 3,3 GB | Sınırlı | Yerelde PostgreSQL + 2-4 gunicorn worker + worker süreci sığar; ağır IDE/derleme eşzamanlı çalıştırılmamalı |
 | Disk 12 GB boş | Yeterli | Nesne depolama bu nedenle tercih edildi |
 | Django | **Kuruldu: 5.2.17 LTS** | `pyproject.toml` ile `~=5.2.0` aralığına kilitli |
 
-Kalan kurulum adımı: PostgreSQL 17. `sudo` gerektirdiği için (bu ortamda şifresiz
-sudo yok) kullanıcı tarafından çalıştırılır:
-
-```bash
-sudo apt update && sudo apt install -y postgresql postgresql-contrib
-```
-
-Sonrasında faz 1 (RLS + rol ayrımı spike'ı) yapılabilir.
+Veritabanı sunucusu kuruludur (PostgreSQL 18.6, yalnızca localhost). Sıradaki adım
+tek komuttur: `bash scripts/bootstrap.sh` (roller, veritabanı, `hr` şeması,
+yetkiler, parolalar ve `.env` dosyası; ardından izolasyon doğrulaması çalışır).
 
 ## 19. Bağımlılık envanteri (kasten kısa)
 
@@ -581,7 +577,7 @@ tekrar değerlendirilir.
 |---|---|---|---|
 | K1 | Django + DRF | Kabul | API ağırlığı async I/O'ya kayarsa (yüksek eşzamanlı akış) |
 | K2 | Sunucu taraflı HTML + HTMX | Kabul | Vardiya/gerçek zamanlı ekranlar HTMX ile bakımı zorlaşırsa |
-| K3 | PostgreSQL 17 | Kabul | Yönetimli hizmet sürümü zorunlu kılarsa |
+| K3 | PostgreSQL 18 (kurulu: 18.6) | Kabul ve uygulandı | Yönetimli hizmet sürümü zorunlu kılarsa |
 | K4 | Opak token (knox), JWT yok | Kabul | Üçüncü parti entegrasyon/token paylaşımı gerekirse (OAuth2) |
 | K5 | Redis yok | Kabul | Bölüm 6.2 tetikleyicileri |
 | K6 | django-q2 | Kabul | Görev hacmi veya çok sunucululuk Celery gerektirirse |
@@ -614,7 +610,7 @@ oturmuştur. Proje Python 3.13.15 üzerine kurulmuştur; `pyproject.toml` içind
 | Faz | İçerik | Çıkış ölçütü |
 |---|---|---|
 | 0 | Ortam kurulumu, depo başlatma, test iskeleti — **TAMAMLANDI (2026-09-11)** | `pytest` 10 test geçti, `ruff`/`bandit`/`pip-audit` temiz, `manage.py check` sorunsuz |
-| 1 | Veritabanı spike'ı: RLS + rol ayrımı + tenant bağlamı + enum/uuid kararları | Cross-tenant erişim testi geçer; mevcut SQL ile DDL uyumu doğrulanır |
+| 1 | Veritabanı spike'ı: RLS + rol ayrımı + tenant bağlamı + enum/uuid kararları — **TAMAMLANDI (2026-09-11)** | `scripts/03_verify_isolation.sql` A1–A9 iddialarının tamamı geçti; roller ve yetkiler kurulu; 19 test yeşil |
 | 2 | Kiracı + kullanıcı + kimlik doğrulama + RBAC çekirdeği | Giriş/kilit/MFA/token testleri geçer |
 | 3 | Organizasyon + çalışan | Yetki matrisi testleri geçer |
 | 4 | İzin yönetimi | Bakiye ve onay testleri geçer |

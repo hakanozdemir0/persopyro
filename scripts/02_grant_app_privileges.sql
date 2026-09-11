@@ -1,0 +1,71 @@
+-- ============================================================================
+-- Persopyro — 02: hr şeması ve uygulama rolünün yetkileri
+-- ============================================================================
+-- Çalıştırılması gereken rol: persopyro_owner (veya süper kullanıcı).
+-- Tekrar çalıştırılabilir (idempotent).
+--
+-- Bu dosya SAF SQL'dir: psql'e özgü komut içermez, böylece
+--   * üretimde migration sonrası,
+--   * test veritabanında (tests/conftest.py),
+--   * herhangi bir istemciyle (psycopg) çalıştırılabilir.
+--
+-- KURAL: Uygulama rolü (persopyro_app) tablo sahibi olmamalı ve DDL yetkisi
+-- taşımamalıdır; aksi halde RLS sessizce etkisiz hale gelir.
+-- ============================================================================
+
+-- 1) hr şeması ---------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS hr AUTHORIZATION persopyro_owner;
+
+REVOKE ALL ON SCHEMA hr FROM PUBLIC;
+GRANT USAGE ON SCHEMA hr TO persopyro_app;   -- CREATE verilmez: DDL yalnızca migration'da
+GRANT CREATE ON SCHEMA hr TO persopyro_owner;
+
+-- public şeması: uygulama oraya nesne koymaz.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+-- 2) Varsayılan yetkiler ----------------------------------------------------
+-- Migration'ların ileride oluşturacağı nesnelere uygulama rolü erişebilsin.
+ALTER DEFAULT PRIVILEGES FOR ROLE persopyro_owner IN SCHEMA hr
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO persopyro_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE persopyro_owner IN SCHEMA hr
+    GRANT USAGE, SELECT ON SEQUENCES TO persopyro_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE persopyro_owner IN SCHEMA hr
+    GRANT EXECUTE ON FUNCTIONS TO persopyro_app;
+-- ENUM/domain tipleri için gerekli: USAGE verilmezse uygulama rolü tipi kullanamaz.
+ALTER DEFAULT PRIVILEGES FOR ROLE persopyro_owner IN SCHEMA hr
+    GRANT USAGE ON TYPES TO persopyro_app;
+
+-- 3) Mevcut nesnelerin yetkileri --------------------------------------------
+-- (İlk kurulumda hr boştur; tekrar çalıştırmalarda mevcut nesneleri kapsar.)
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA hr TO persopyro_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA hr TO persopyro_app;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA hr TO persopyro_app;
+
+-- ENUM/domain tipleri: "ALL TYPES IN SCHEMA" biçimi PostgreSQL'de yoktur,
+-- bu yüzden mevcut tipler döngüyle yetkilendirilir.
+DO $$
+DECLARE t record;
+BEGIN
+    FOR t IN
+        SELECT n.nspname AS schema_name, ty.typname AS type_name
+          FROM pg_type ty
+          JOIN pg_namespace n ON n.oid = ty.typnamespace
+         WHERE n.nspname = 'hr'
+           AND ty.typtype IN ('e', 'd')
+    LOOP
+        EXECUTE format('GRANT USAGE ON TYPE %I.%I TO persopyro_app',
+                       t.schema_name, t.type_name);
+    END LOOP;
+END
+$$;
+
+-- 4) Denetim kaydı koruması -------------------------------------------------
+-- denetim kaydı yalnızca eklenip okunabilir; UPDATE/DELETE/TRUNCATE verilmez.
+DO $$
+BEGIN
+    IF to_regclass('hr.audit_logs') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE, TRUNCATE ON hr.audit_logs FROM persopyro_app;
+        GRANT INSERT, SELECT ON hr.audit_logs TO persopyro_app;
+    END IF;
+END
+$$;

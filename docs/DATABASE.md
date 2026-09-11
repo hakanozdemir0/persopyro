@@ -26,7 +26,8 @@ Tasarım yaklaşık 90 tablo ve 16 enum tipi içerir. Kaynak not:
 
 ## 2. Ortak tasarım kuralları
 
-- **UUID birincil anahtar**: `gen_random_uuid()`.
+- **UUID birincil anahtar**: `gen_random_uuid()` (PostgreSQL 13+ çekirdeğinde;
+  `uuid-ossp` eklentisi gerekmez — mevcut tasarım bunu kullanıyordu, artık gereksiz).
 - **Tenant kolonu**: tüm iş tablolarında `tenant_id UUID NOT NULL REFERENCES hr.tenants(id)`.
 - **Zaman damgaları**: her tabloda `created_at` / `updated_at` (`TIMESTAMPTZ`);
   `updated_at` `hr.set_updated_at()` tetikleyicisi ile güncellenir.
@@ -63,7 +64,33 @@ CREATE POLICY tenant_isolation ON hr.<tablo>
     WITH CHECK (tenant_id = hr.current_tenant_id());
 ```
 
-Tenant bağlamı: `SELECT set_config('app.tenant_id', '<uuid>', FALSE);`
+Tenant bağlamı (işlem başına):
+
+```sql
+-- İşlem içinde: SELECT set_config('app.tenant_id', '<uuid>', true);
+--   is_local = true  → işlem bitince etkisiz olur (bağlantı havuzu için doğru yol)
+--   is_local = false → oturum boyunca kalır (sızma riski; kullanılmaz)
+```
+
+### 3.1 Doğrulanmış davranışlar (spike sonuçları)
+
+Bunlar gerçek PostgreSQL 18.6 üzerinde çalıştırılarak kanıtlanmıştır
+(`scripts/03_verify_isolation.sql`, iddialar A1–A9):
+
+- **Kiracı bağlamı yokken hiçbir satır görünmez.** Politika fail-closed çalışır;
+  `tenant_id = NULL` karşılaştırması hiçbir satıra uymaz.
+- **Yazma da engellenir:** A kiracısı, B kiracısı adına `INSERT` yapamaz
+  (`WITH CHECK` ihlali → `insufficient_privilege`). B satırını `UPDATE`/`DELETE`
+  de etkilemez (0 satır).
+- **`FORCE ROW LEVEL SECURITY` zorunludur ve işe yarar:** sahibi rol bile kiracı
+  sınırını aşamaz. FORCE olmadan tablo sahibi tüm politikaları atlar.
+- **`NULLIF(current_setting(...), '')` süsleme değil, zorunludur:** PostgreSQL,
+  `SET LOCAL` ile tanışan özel bir parametreyi işlem sonunda `NULL`'a değil **boş
+  string**'e döndürür. NULLIF olmadan boş string `::uuid` dönüşümünde hata verir
+  veya yanlış davranış üretir.
+- **Rol ayrımı çalışır:** `persopyro_app` superuser değil, RLS'i atlayamaz,
+  veritabanı/rol oluşturamaz ve `hr` şemasında `CREATE` yetkisi yoktur.
+  Uygulama bağlantısı `search_path=hr,public` ile açılır.
 
 ## 4. Kurallar (bağlayıcı)
 
@@ -88,24 +115,35 @@ sağlık/mazeret gerekçesi, ücret bilgisi.
 - Açık görüntüleme ayrı izin gerektirir ve audit log'a yazılır.
 - Dışa aktarma çıktılarında mümkünse toplulaştırılmış veri tercih edilir.
 
-## 6. Doğrulanmamış / açık noktalar
+## 6. Açık noktalar ve geçiş dönemi notları
 
-Bunlar henüz test edilmediği için "doğrulanmış" sayılmaz:
-
-- SQL dosyalarının gerçek bir PostgreSQL örneğinde hatasız çalıştığı
-  doğrulanmamıştır (bu ortamda `psql` kurulu değil).
-- RLS etkinleştirmeleri örnek olarak yorumlanmıştır; hangi tablolarda uygulanacağı
-  kararı verilmemiştir. Karar `ARCHITECTURE.md` bölüm 5.3'teki rol ayrımı ile
-  birlikte, faz 1 spike'ında verilecektir.
-- Şema yönetimi kararı verilmiştir: **şemanın sahibi Django migration'larıdır.**
-  Mevcut SQL dosyaları salt-okunur referans olarak korunur; tetikleyici, fonksiyon
-  ve RLS politikaları migration içinde ham SQL (`RunSQL`) ile yazılır.
-  (Önceki sürümde "migration aracı seçilmedi" notu vardı; bu kararla kapatıldı.)
-- PostgreSQL `ENUM` tipleri ile Django `TextChoices` yaklaşımı arasındaki fark
-  henüz test edilmemiştir; bkz. `ARCHITECTURE.md` bölüm 5.4 madde 2.
-- Uygulama rolü ve `GRANT` planı yazılmamıştır (RLS öncesi zorunlu adım).
+- **PostgreSQL `ENUM` tipleri ile Django `TextChoices` farkı** henüz test
+  edilmedi (mevcut tasarım 16 enum tipi kullanıyor). Karar port sırasında
+  verilecek: `TextChoices` + `CHECK` kısıtı tercih edilir, mevcut tipler
+  korunur (bkz. `ARCHITECTURE.md` bölüm 5.4 madde 2).
+- **DDL uyumu** Django modelleri yazıldıktan sonra mevcut SQL ile karşılaştırılarak
+  doğrulanacak.
+- **`hr` şeması henüz bir migration tarafından oluşturulmuyor.** Şu an
+  `scripts/02_grant_app_privileges.sql` oluşturuyor; testlerde `tests/conftest.py`
+  uygular. Faz 2'de ilk migration `CREATE SCHEMA IF NOT EXISTS hr` çalıştıracak ve
+  bu geçici kurulum sadeleşecek.
 - Örnek veri (`12_seed_indexes.sql`) üretimde kullanılmayacaktır; ayrı bir seed
   stratejisi gereklidir.
+- **Test veritabanı** kendi veritabanını oluşturabilsin diye testler sahip rolüyle
+  (`persopyro_owner`) çalışır; uygulama rolüne bilinçli olarak `CREATEDB`
+  verilmemiştir. İzolasyon bu yüzden gevşemez: `FORCE RLS` sahibi de bağlar
+  (kanıt: iddia A9).
+
+### 6.1 Kapatılan noktalar
+
+- ~~Migration aracı seçilmedi~~ → Django migration'ları şema sahibidir.
+- ~~RLS etkinleştirmeleri örnek olarak yorumlanmıştır~~ → roller ve yetkiler
+  kurulu, RLS davranışı A1–A9 ile kanıtlandı.
+- ~~Uygulama rolü ve `GRANT` planı yazılmamıştır~~ → tekrar çalıştırılabilir
+  betiklerle tanımlı: `scripts/01_bootstrap.sql`,
+  `scripts/02_grant_app_privileges.sql`.
+- ~~`psql` yok / SQL hiç çalıştırılmadı~~ → PostgreSQL 18.6 kurulu; betikler
+  çalıştırıldı.
 
 ## 7. Yedeklilik ve saklama
 
