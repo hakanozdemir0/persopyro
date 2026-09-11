@@ -47,7 +47,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T17** | **Yedek/export üzerinden toplu veri sızması** | **Yüksek** | **Maskeli varsayılan export, kayıtlı/kısıtlı toplu indirme, şifreli yedek** 🔜 |
 | **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **Karar verildi (OD19 — kapalı): `/admin/` kaldırılır, `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez.** Uygulama bekliyor 🔜 |
 | **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
-| **T20** | **Yetki çürümesi: soft-delete edilmiş rol, atama veya izin istisnası yetki vermeye devam ediyor** | **Yüksek** | **OD21 kararı: yetki çözümlemesi `deleted_at IS NULL` uygular; `objects` silinmişi gizler; geri alma açık izin + kayıt gerektirir (F7)** ⚠️ uygulama bekliyor |
+| **T20** | **Yetki çürümesi: soft-delete edilmiş rol, atama veya izin istisnası yetki vermeye devam ediyor** | **Yüksek** | **KAPATILDI (F7, 2026-09-11):** yetki çözümlemesi `deleted_at IS NULL` filtresini **açıkça** uygular (rol, atama, istisna); silinmiş `deny` aktif karar sayılmaz; pasif kullanıcı için izin kümesi boş; `create_default_roles` silinmiş rolü canlandırmaz (`SoftDeletedDefaultRoleError`) ✅ |
 | **T21** | **Kapsamsız/uzun ömürlü API token'ı: token kullanıcının tüm yetkilerini taşır, iptalin denetim izi kalmaz** | **Orta** | **Karar verildi (OD26 — kapalı):** zorunlu `purpose` + `scopes` (katalog doğrulamalı), **kesişim kuralı** (`current_user_permissions ∩ token_scopes`), `revoked_at`/`revoked_reason`, interactive ≤ 30 gün / service ≤ 90 gün, süresiz yasak, toplu iptal. Uygulama bekliyor 🔜 (M29/M30 + F10) |
 
 ---
@@ -219,18 +219,37 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 
 ### 5.1 Açık bulgular (SECURITY FINDING)
 
-**F7 — Soft-delete yetkiyi kaldırmıyor (Yüksek, açık).** Ölçüm:
-`apps/common/models.py` içindeki `SoftDeleteModel` alanı sağlıyor ama **filtreleyen
-yönetici tanımlı değil**; `apps/rbac/services/permissions.py` içindeki
+**F7 — Soft-delete yetkiyi kaldırmıyor (Yüksek) — KAPATILDI ✅ (2026-09-11).**
+Ölçüm: `apps/common/models.py` içindeki `SoftDeleteModel` alanı sağlıyor ama
+filtreleyen yönetici yoktu; `apps/rbac/services/permissions.py` içindeki
 `_active_role_ids`, `RolePermission` ve `UserPermissionOverride` sorguları
-**`deleted_at` filtresi kullanmıyor**. Sonuç: soft-delete edilmiş bir rol, rol
-ataması veya `allow` istisnası **yetki vermeye devam eder** (yetki çürümesi).
-Bugün **aktif bir sömürü yolu yoktur** (silme/geri alma servisi henüz yazılmadı),
-ancak politika ve temel model hazır olduğu için ilk "rolü sil" özelliğiyle birlikte
-gerçek bir açık hâline gelir. Ayrıca `create_default_roles` içindeki `get_or_create`
-silinmiş rolü "var" sayıp atlar (işlevsel hata). **Kapatma yolu (OD21 kararı):**
-`objects` yöneticisi silinmişi gizler, yetki çözümlemesi `deleted_at IS NULL`
-uygular, geri alma açık `*.restore` izni + denetim kaydı gerektirir (T20).
+`deleted_at` filtresi kullanmıyordu → soft-delete edilmiş rol, atama veya `allow`
+istisnası **yetki vermeye devam ediyordu**.
+
+**Düzeltme (uygulandı):** yetki çözümlemesindeki sorgular `deleted_at IS NULL`
+koşulunu **açıkça** uygular (gizli manager davranışına bırakılmadı — denetlenebilir
+ve test edilebilir): `UserRole.objects.filter(user=..., deleted_at__isnull=True)`,
+atamalardan sonra
+`Role.objects.filter(id__in=..., deleted_at__isnull=True)` ve
+`UserPermissionOverride.objects.filter(user=..., deleted_at__isnull=True)`.
+Böylece silinmiş rol/atama/istisna yetki vermez; silinmiş `deny` istisnası da aktif
+karar sayılmaz (etkin `deny` yine `allow`'u ezer). Ek olarak pasif/silinmiş kullanıcı
+için izin kümesi **boş** döner. `create_default_roles` artık `get_or_create`
+kullanmaz: silinmiş varsayılan rol bulunursa **otomatik restore etmez, kopya
+üretmez**, `SoftDeletedDefaultRoleError` ile durur (OD21: geri alma açık `*.restore`
+izni + denetim kaydı gerektirir).
+
+**Ölçüm düzeltmesi:** önceki F7 metni `RolePermission` için de bir `deleted_at`
+filtresi eksikliği bildiriyordu. Gerçek şema: `hr.role_permissions` bir **bağ
+tablosudur** ve `deleted_at` kolonu **yoktur** (kolonlar: `id, created_at,
+updated_at, permission_id, role_id, tenant_id`) — kayıt fiziksel silinir, silinen
+bağ zaten yetki veremez. OD21 bağ tabloları için soft-delete öngörmez.
+
+**Kalan (F7 dışı ergonomi):** ortak `objects`/`all_objects` yönetici standardı
+(`docs/DATABASE.md` M25) uygulanmadı; F7 için gerekli değildir çünkü filtre
+sorgularda açıkça duruyor. `*.restore` izni + silme/geri alma denetim kaydı, ilgili
+silme özelliği yazıldığında eklenecek (M26'nın kalan yarısı).
+Regresyon testleri: `tests/test_rbac_soft_delete.py` (8 test).
 
 **F8 — Tenant API token'ı kapsamsız ve iptal izi yok (Orta) — ÇÖZÜM KARARI VERİLDİ
 (OD26 kapalı, kod bekliyor).** Ölçüm: `hr.api_tokens` alanları `tenant_id, user_id,
@@ -245,15 +264,28 @@ kapsamsız token'lar **iptal edilir** (asla "tüm izinler" sayılmaz). Uygulama 
 **M29/M30** (şema + yetki turu) ve **F10** (veri göçü) — henüz kodlanmadı (T21,
 SECURITY §3.5).
 
-**F9 — Denetim satırı `SET_NULL` ile güncellenebiliyor (Orta, açık).** Ölçüm:
-`apps/audit/models.py` içinde `AuditLog.user` ilişkisi `on_delete=SET_NULL`'dır ve
-veritabanındaki FK `NO ACTION`'dır. `SET_NULL` davranışı kullanıcı silindiğinde
-denetim satırına **UPDATE** yazar; bu, "denetim kaydı değiştirilemez" kuralıyla
-çelişir. Bugün etki: uygulama rolünün `audit_logs` üzerinde UPDATE yetkisi
-olmadığı için kullanıcı silme **hata ile durur** (fail-closed, iyi); ancak yetki
-bir gün gevşetilirse denetim geçmişi sessizce yeniden yazılır. **Kapatma yolu
-(OD23 kararı):** `on_delete` → **`PROTECT`**; kullanıcılar zaten fiziksel olarak
-silinmez (OD21: soft delete).
+**F9 — Denetim satırı `SET_NULL` ile güncellenebiliyor (Orta) — KAPATILDI ✅
+(2026-09-11).** Ölçüm: `apps/audit/models.py` içinde `AuditLog.user` ilişkisi
+`on_delete=SET_NULL`'dı; kullanıcı silindiğinde ORM toplayıcısı denetim satırına
+**UPDATE** yazıyordu (`UPDATE hr.audit_logs SET user_id = NULL`), bu "denetim kaydı
+değiştirilemez" kuralıyla çelişiyordu. Bugünkü etki yalnızca uygulama rolünün
+`audit_logs` üzerinde UPDATE yetkisi olmaması sayesinde durduruluyordu — yani koruma
+**tesadüfiydi**; yetki bir gün gevşese veya sahip rolle bir silme yapılsa denetim
+geçmişi sessizce yeniden yazılırdı.
+
+**Düzeltme (uygulandı):** `on_delete` → **`PROTECT`**; denetim satırı bulunan bir
+kullanıcı silinmek istendiğinde Django **hiçbir SQL üretmeden** `ProtectedError`
+verir. Yeni migration: `apps/audit/migrations/0002_alter_auditlog_user.py`.
+
+**Ölçüm (migration'ın gerçek PostgreSQL sonucu):** Django, foreign key DDL'inde
+`ON DELETE` maddesi **yazmaz** (`sql_create_fk` şablonu; `on_delete` tamamen ORM
+katmanında uygulanır), bu yüzden veritabanı kısıtı zaten `NO ACTION`'dır ve
+`user_id` FK'sinde **bir değişiklik olmaz** (`sqlmigrate audit 0002` → no-op; kısıt
+migrate sonrası `NO ACTION` olarak doğrulandı). Koruma, bağlantı rolünden ve
+yetkilerden **bağımsız** olarak uygulama katmanında devreye girer; ham SQL ile silme
+de `NO ACTION` sayesinde engellenir (FK'lar `DEFERRABLE INITIALLY DEFERRED`
+olduğu için denetim commit anında yapılır). Regresyon testleri:
+`tests/test_audit_integrity.py` (5 test).
 
 **F10 — Prefix/slug taklidi (typosquatting) engellenmiyor (Düşük, açık).** Ölçüm:
 `hr.tenants.slug` yalnızca **tam eşleşme** benzersizliği taşır (mevcut

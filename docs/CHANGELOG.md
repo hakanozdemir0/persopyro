@@ -3,6 +3,92 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.15.0] — 2026-09-11 — F7 ve F9 kapatıldı (kod + migration + test)
+
+**Baseline (değişiklikten önce):** `bash scripts/run_tests.sh` → **97 passed**.
+Bu girişte ilk kez **kod** değişti; diğer bulgulara (F8/F11/M22/organizasyon)
+dokunulmadı.
+
+### Eklenen / değişen
+
+- **F7 — soft-delete yetki çürümesi (KAPATILDI).**
+  `apps/rbac/services/permissions.py`: yetki çözümlemesindeki **her sorgu**
+  `deleted_at IS NULL` koşulunu **açıkça** uygular (`UserRole` → atama; ardından
+  `Role` → rol; `UserPermissionOverride` → istisna). Silinmiş rol, atama, `allow`
+  istisnası yetki vermez; silinmiş `deny` istisnası **aktif karar sayılmaz**; etkin
+  `deny` yine `allow`'u ezer. Pasif/silinmiş kullanıcı için izin kümesi **boş**
+  döner (fail-closed). Gizli bir manager davranışına güvenilmedi — filtre sorguda
+  görünür ve test edilebilir.
+  `apps/rbac/services/roles.py`: `get_or_create` yerine açık sorgu + **ön kontrol**;
+  silinmiş varsayılan rol bulunursa **otomatik restore edilmez, kopya üretilmez**,
+  `SoftDeletedDefaultRoleError` yükseltilir (OD21: geri alma açık `*.restore` izni +
+  denetim kaydı gerektirir).
+- **F9 — denetim satırı bütünlüğü (KAPATILDI).**
+  `apps/audit/models.py`: `AuditLog.user` → **`PROTECT`**. Yeni migration:
+  `apps/audit/migrations/0002_alter_auditlog_user.py` (mevcut migration'lar
+  değiştirilmedi).
+
+### Ölçüm / doğrulama
+
+- **Migration'ın gerçek PostgreSQL sonucu:** `sqlmigrate audit 0002` → **no-op**.
+  Nedeni ölçüldü: Django FK DDL'inde `ON DELETE` **yazmaz**
+  (`sql_create_fk` şablonu; `on_delete` tamamen ORM katmanında). Veritabanı kısıtı
+  bu yüzden zaten `NO ACTION`'dı; migrate öncesi/sonrası değişmedi. Koruma artık
+  ORM katmanında: kullanıcı silinmek istendiğinde **hiç SQL üretilmeden**
+  `ProtectedError`. Ham SQL DELETE de `NO ACTION` nedeniyle engellenir, ancak FK'lar
+  `DEFERRABLE INITIALLY DEFERRED` olduğu için denetim **commit anında** yapılır.
+- `audit` migration'ları uygulandı: `[X] 0001_initial`, `[X] 0002_alter_auditlog_user`.
+- `persopyro_app` yetkileri yeniden doğrulandı: `audit_logs` → UPDATE: **yok**,
+  INSERT/SELECT: var.
+- **Ölçüm düzeltmesi (doküman):** `hr.role_permissions` bir **bağ tablosudur** ve
+  `deleted_at` kolonu **yoktur** (kolonlar: `id, created_at, updated_at,
+  permission_id, role_id, tenant_id`). Önceki F7 metni bu tabloda bir `deleted_at`
+  filtresinin eksik olduğunu varsayıyordu; **yanlıştı** — bağ kayıtları fiziksel
+  silinir ve silinen kayıt yetki veremez (OD21 bağ tabloları için soft-delete
+  öngörmez). Doküman düzeltildi.
+
+### Test
+
+- Yeni **`tests/test_rbac_soft_delete.py`** (8 test): silinmiş rol · silinmiş
+  `UserRole` · kaldırılmış rol-izin bağı · silinmiş `ALLOW` · aktif `DENY` kazanır ·
+  silinmiş `DENY` karar sayılmaz · silinmiş varsayılan rol otomatik restore
+  edilmez · kaldırılmış bağ yeniden kurulabilir.
+- Yeni **`tests/test_audit_integrity.py`** (5 test): ORM ile silme → `ProtectedError`
+  · ham SQL DELETE → `IntegrityError` (`SET CONSTRAINTS ALL IMMEDIATE`) · denetim
+  satırı değişmez (`user_id`, `updated_at`, `changes`) · `persopyro_app` yazma
+  yetkisi yok · denetim kaydı `deleted_at` almaz.
+- **RED→GREEN kanıtı:** düzeltme geçici olarak geri alındığında F7 testlerinden 4'ü
+  kırmızı (`test_silinmis_rol_yetki_vermez`, `test_silinmis_user_role_yetki_vermez`,
+  `test_silinmis_allow_override_izin_eklemez`,
+  `test_silinmis_deny_aktif_karar_sayilmaz`); düzeltmeyle yeşil.
+- **Final:** `bash scripts/run_tests.sh` → **110 passed** (97 + 13). `ruff check`
+  temiz, `ruff format` uygulandı, `bandit` 0 bulgu, `manage.py check` temiz,
+  `makemigrations --check` "No changes detected".
+
+### Değişmeyenler (bilinçli)
+
+- API token modeli ve F8/OD26 işleri (M29/M30), F11, Django Admin kaldırma (M22b–22d),
+  organizasyon modülü, `SoftDeleteManager` standardı (M25: F7 için gerekli değil),
+  `*.restore` izni (M26'nın kalan yarısı; silme özelliği yazıldığında).
+- Küçük not (bulgu değil): `UserRole.granted_by` / `UserPermissionOverride.granted_by`
+  hâlâ `SET_NULL` — fiziksel silmede "kim verdi" bilgisi kaybolur; yetki kararı
+  vermediği için F9 kapsamına alınmadı.
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `apps/rbac/services/permissions.py` | Açık `deleted_at IS NULL` filtreleri + pasif kullanıcı fail-closed |
+| `apps/rbac/services/roles.py` | `get_or_create` kaldırıldı; `SoftDeletedDefaultRoleError` ön kontrolü |
+| `apps/audit/models.py` | `AuditLog.user` → `PROTECT` |
+| `apps/audit/migrations/0002_alter_auditlog_user.py` | **Yeni migration** (SQL no-op) |
+| `tests/test_rbac_soft_delete.py` | Yeni (F7 regresyon) |
+| `tests/test_audit_integrity.py` | Yeni (F9 regresyon) |
+| `docs/SECURITY.md` | F7/F9 kapandı; T20 kapandı; ölçüm düzeltmesi |
+| `docs/DATABASE.md` | `audit` 0001→0002; `role_permissions` soft-delete yok; M20/M25/M26/M28 durumu |
+| `docs/AUTHORIZATION.md` | Açık bulgu listesi güncellendi |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
 ---
 
 ## [0.14.0] — 2026-09-11 — OD26 KAPATILDI: tenant API token modeli (F8 çözüm kararı; kod yok)

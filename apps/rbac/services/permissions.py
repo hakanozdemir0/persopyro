@@ -3,21 +3,59 @@ Yetki çözümleme servisi.
 
 Kural: **varsayılan reddet.** Açık izin yoksa işlem yapılmaz
 (docs/DEVELOPMENT_RULES.md, docs/AUTHORIZATION.md).
+
+Soft-delete (bulgu F7): yetki çözümlemesinde kullanılan **her sorgu** `deleted_at IS
+NULL` koşulunu **açıkça** uygular — silinmiş bir kayıt authorization sonucuna katkı
+sağlamaz. Bu filtre gizli bir manager davranışına bırakılmaz (davranış görünmez
+olmamalıdır): koşul sorgunun içinde, denetlenebilir ve test edilebilir biçimde durur.
+
+Silinmiş kayıtlar:
+  * silinmiş `Role` yetki vermez,
+  * silinmiş `UserRole` (atama) yetki vermez,
+  * silinmiş `allow` istisnası izin eklemez,
+  * silinmiş `deny` istisnası **aktif karar sayılmaz** (yalnızca etkin kayıtlar
+    değerlendirilir); etkin `deny` yine `allow`'u ezer,
+  * pasif/silinmiş kullanıcı için izin hesaplanmaz.
+
+NOT (`RolePermission`): rol-izin bağı bir **bağ tablosudur** ve şemada `deleted_at`
+kolonu **yoktur** (ölçüm: `hr.role_permissions` kolonları `id, created_at,
+updated_at, permission_id, role_id, tenant_id`); kayıt fiziksel silinir. Silinen bağ
+zaten hiçbir satır bırakmadığı için yetki veremez — bu yüzden burada filtrelenecek
+bir `deleted_at` yoktur (OD21 bağ tabloları için soft-delete öngörmez).
 """
 
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.rbac.models import PermissionEffect, RolePermission, UserPermissionOverride, UserRole
+from apps.rbac.models import (
+    PermissionEffect,
+    Role,
+    RolePermission,
+    UserPermissionOverride,
+    UserRole,
+)
 
 
 def _active_role_ids(user) -> list:
-    """Süresi geçmemiş roller."""
+    """
+    Kullanıcının **geçerli** rol kimlikleri.
+
+    Dışarıda bırakılanlar: silinmiş `UserRole` (atama), silinmiş `Role` ve süresi
+    geçmiş atama. İki sorgu bilinçli olarak ayrıdır: `Role` filtresi JOIN'e
+    gizlenmez, açıkça görünür.
+    """
     now = timezone.now()
-    return list(
-        UserRole.objects.filter(user=user)
+    atanan_role_ids = list(
+        UserRole.objects.filter(user=user, deleted_at__isnull=True)
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
         .values_list("role_id", flat=True)
+    )
+    if not atanan_role_ids:
+        return []
+    return list(
+        Role.objects.filter(id__in=atanan_role_ids, deleted_at__isnull=True).values_list(
+            "id", flat=True
+        )
     )
 
 
@@ -26,19 +64,24 @@ def effective_permission_codes(user) -> set[str]:
     Kullanıcının etkin izin kodları.
 
     (rollerin izinleri) + (allow istisnaları) - (deny istisnaları)
+
+    Pasif veya silinmiş kullanıcı için **boş küme** döner (fail-closed): kullanıcı
+    kaydı da yetki çözümlemesinin girdisidir ve silinmiş kayıt katkı sağlamaz.
     """
-    if user is None or not user.is_authenticated:
+    if user is None or not user.is_authenticated or not user.is_active:
         return set()
 
     role_ids = _active_role_ids(user)
     role_codes = set(
+        # `RolePermission` bir bağ tablosudur ve `deleted_at` kolonu yoktur; kayıt
+        # fiziksel silinir, dolayısıyla var olan satır yetki verir (silinmiş satır yok).
         RolePermission.objects.filter(role_id__in=role_ids).values_list(
             "permission__code", flat=True
         )
     )
-    overrides = UserPermissionOverride.objects.filter(user=user).values_list(
-        "permission__code", "effect"
-    )
+    overrides = UserPermissionOverride.objects.filter(
+        user=user, deleted_at__isnull=True
+    ).values_list("permission__code", "effect")
     allowed = {code for code, effect in overrides if effect == PermissionEffect.ALLOW}
     denied = {code for code, effect in overrides if effect == PermissionEffect.DENY}
     return (role_codes | allowed) - denied

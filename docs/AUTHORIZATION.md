@@ -1649,8 +1649,7 @@ tablolar **değişmez**; uygulanmış migration dosyaları **değiştirilmez**.
 - **Karar durumu:** **OD1–OD4, OD19–OD28 KAPATILDI** (2026-09-11).
   Açık: **14 karar** (OD5–OD18). **Engelleyici açık karar yoktur**; OD5
   (departman yöneticisi kapsamı) organizasyon modülü kodlanmadan önce netleşmelidir.
-  Açık **SECURITY FINDING**'ler: F7 (soft-delete yetkiyi kaldırmıyor), F9 (denetim
-  satırı `SET_NULL` ile güncellenebiliyor), F10 (prefix/slug benzerliği —
-  typosquatting, Düşük) ve **F11 (kiracı askıya alınınca erişim kesilmiyor, Yüksek)**.
-  F8 (tenant token kapsamsız/iptal izsiz) **OD26 ile karara bağlandı**; kodlaması
-  M29/M30 + F10 veri göçü olarak planlandı.
+  Açık **SECURITY FINDING**'ler: F8 (tenant token kapsamı — OD26 kararı verildi, kod
+  bekliyor), F10 (prefix/slug benzerliği — typosquatting, Düşük) ve **F11 (kiracı
+  askıya alınınca erişim kesilmiyor, Yüksek)**. **F7 (soft-delete yetkiyi
+  kaldırmıyor) ve F9 (denetim satırı `SET_NULL`) KAPATILDI (2026-09-11).**

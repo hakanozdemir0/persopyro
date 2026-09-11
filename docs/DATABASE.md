@@ -141,6 +141,10 @@ olduğu için etki boş dizinle sınırlıdır).
 - **FOREIGN KEYS:** `role_id → roles.id`, `permission_id → permissions.id`, `tenant_id → tenants.id`
 - **TENANT ISOLATION:** `tenant_id` + `role_id` guard tetikleyicisi · **PERSONAL DATA LEVEL:** K0
 - **RLS:** ✅ + FORCE · **AUDIT REQUIREMENT:** yüksek (izin verilmesi/kaldırılması)
+- **SOFT DELETE:** **yok** — bağ tablosudur, `deleted_at` kolonu **yoktur** (kolonlar:
+  `id, created_at, updated_at, permission_id, role_id, tenant_id`); kayıt fiziksel
+  silinir. OD21 bağ tabloları için soft-delete öngörmez. Bu yüzden yetki
+  çözümlemesinde filtrelenecek bir `deleted_at` yoktur (F7 ölçüm düzeltmesi).
 
 ### `user_roles`
 - **PURPOSE:** Kullanıcıya rol ataması (süreli olabilir — `expires_at`).
@@ -165,7 +169,12 @@ olduğu için etki boş dizinle sınırlıdır).
 - **RLS:** ✅ + FORCE · **Yetkiler:** uygulama rolünde **yalnızca INSERT + SELECT** (UPDATE/DELETE yok ✅ doğrulandı)
 - **Kolonlar (11):** `id, created_at, updated_at, action, table_name, record_id, changes(jsonb), request_id, ip_address, tenant_id, user_id`
 - **Eksik (hedef):** `actor_kind`, `platform_actor_id`, `actor_label`, `access_grant_ref`, `purpose`, zincir özeti ❌ — planlanan alanlar ve `CHECK` kısıtı OD23'te kesinleşti.
-- **Not (bulgu F9):** `user` ilişkisi `SET_NULL`; bu, denetim satırının **UPDATE** edilmesi anlamına gelir ve append-only kuralıyla çelişir (uygulama rolünün UPDATE yetkisi yok → kullanıcı silme bugün hata verir). Hedef: **`PROTECT`**.
+- **Not (bulgu F9 — KAPATILDI ✅ 2026-09-11):** `user` ilişkisi artık **`PROTECT`**.
+  Önceki `SET_NULL`, ORM toplayıcısının denetim satırına **UPDATE** yazması demekti
+  (append-only kuralıyla çelişiyordu; koruma yalnızca uygulama rolünün UPDATE
+  yetkisinin olmamasına dayanıyordu). Django FK DDL'inde `ON DELETE` yazmadığı için
+  veritabanı kısıtı zaten `NO ACTION`'dır; koruma artık uygulama katmanındadır
+  (`ProtectedError`, hiç SQL üretmeden). Migration: `audit/0002`.
 
 ### `api_tokens`
 - **PURPOSE:** Kiracı kullanıcısının API token'ı; yalnızca SHA-256 özeti saklanır.
@@ -280,7 +289,7 @@ Not: Benzersiz indeksler **soft-delete'i dikkate almaz** (bkz. H.4 / OD21).
 | `tenancy` | 0001 → 0007 | `hr` şeması + `tenants`/`current_tenant_id`; RLS etkinleştirme; aynı-kiracı guard'ları; `role_permissions` RLS; slug/domain; (düşürülen) arama fonksiyonları; `tenant_directory` |
 | `accounts` | 0001 → 0002 | `users`; `api_tokens` (+ knox tablosu düşürüldü) |
 | `rbac` | 0001 → 0003 | `roles`, `permissions`, `role_permissions`, `user_roles`, `user_permission_overrides`; `role_permissions.tenant_id`; izin kataloğu seed (29) |
-| `audit` | 0001 | `audit_logs` |
+| `audit` | 0001 → **0002** | `audit_logs`; **0002: `AuditLog.user` → `PROTECT`** (F9 kapandı; SQL düzeyinde no-op, FK zaten `NO ACTION`) |
 
 **Kural (uygulanmış migration değişmez):** Bu dosyalar tarihsel kayıttır; yeni
 ihtiyaç **yeni migration** ile eklenir. Bu belgedeki hiçbir iş kalemi mevcut
@@ -408,7 +417,7 @@ erişim yalnızca `persopyro_platform` rolüyle.
 | `user_roles` | `scope_org_unit_id uuid NULL → departments.id` + guard tetikleyicisi + kısmi benzersizlik | Kapsam daraltma (AUTHORIZATION 4.4) |
 | `user_roles` | `(user_id, role_id)` benzersizliği kısmi | OD21 |
 | `role_permissions` | `(role_id, permission_id)` benzersizliği zaten var; **ek değişiklik yok** | — |
-| `audit_logs` | `actor_kind` (`tenant_user`/`platform_user`/`service`/`system`, NOT NULL), `platform_actor_id` (FK'sız), `actor_label` (snapshot), `access_grant_ref` (FK'sız), `purpose`, `prev_hash`/`entry_hash` (zincirleme). **`user` FK: `SET_NULL` → `PROTECT`** | OD23 (kapalı), K22, OD4; zincirleme (OD13) |
+| `audit_logs` | `actor_kind` (`tenant_user`/`platform_user`/`service`/`system`, NOT NULL), `platform_actor_id` (FK'sız), `actor_label` (snapshot), `access_grant_ref` (FK'sız), `purpose`, `prev_hash`/`entry_hash` (zincirleme) 🔜. **`user` FK → `PROTECT`** ✅ **uygulandı** (`audit/0002`, F9 kapandı) | OD23 (kapalı), K22, OD4; zincirleme (OD13) |
 | `permissions` | `platform.*` kodları eklenecek (modül `platform`); **yazma yetkisi geri alınacak** | Katalog genişletmesi + en az yetki |
 | `tenants` | **`public_id_prefix varchar(20) NOT NULL UNIQUE`** (immutable; değişmezlik tetikleyicisi) — RLS politikası aynı kalır | OD25 (kapalı): public ID ön eki sabit |
 | `api_tokens` | **Genişletilir (OD26 — kapalı):** `token_kind`, `purpose` NOT NULL, `scopes text[]` (katalog doğrulamalı, `platform.*` yasak), `revoked_at` + `revoked_reason`; değişmezlik ve tek yönlü iptal tetikleyicileri. **Yeni token sistemi kurulmaz** | OD26 / bulgu F8 |
@@ -548,7 +557,7 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M17** | `hr.access_requests` + `hr.access_grants` (kiracı içi) + RLS + guard + `PURPOSE_QUALITY` CHECK | Yeni | M12 | DROP TABLE |
 | **M18** | `platform.access_requests` + `platform.access_grants` + onay kayıtları (çift onay) | Yeni | M2 | DROP TABLE |
 | **M19** | `hr.platform_access_notices` + platform servisinin kiracı bağlamıyla yazma yolu | Yeni | M18 | DROP TABLE |
-| **M20** | `hr.audit_logs` genişletme (OD23): `actor_kind` (NOT NULL, default `tenant_user`), `platform_actor_id`, `actor_label`, `access_grant_ref`, `purpose` + `CHECK (actor_kind <> 'platform_user' OR (purpose IS NOT NULL AND access_grant_ref IS NOT NULL))` + `user_id` FK davranışı **`PROTECT`** (+ zincirleme alanları OD13 kararına bağlı) | Şema | M19 | Kolonlar/kısıt DROP |
+| **M20** | `hr.audit_logs` genişletme (OD23): `actor_kind` (NOT NULL, default `tenant_user`), `platform_actor_id`, `actor_label`, `access_grant_ref`, `purpose` + `CHECK (actor_kind <> 'platform_user' OR (purpose IS NOT NULL AND access_grant_ref IS NOT NULL))` + **`user_id` FK davranışı `PROTECT` ✅ uygulandı** (`audit/0002`, F9 kapandı; kalan kolonlar OD23 iş kalemi) (+ zincirleme alanları OD13 kararına bağlı) | Şema | M19 | Kolonlar/kısıt DROP |
 | **M21** | `hr.tenant_directory`'nin `platform.tenant_registry` ile tutarlılığı için test + (OD20 kararı) birleştirme | Test/kod | M4 | — |
 | **M22** | **`/admin/` yolunun kaldırılması + `django.contrib.admin`'in uygulama listesinden çıkarılması** (OD19 kapalı) | Kod + ayar | — | Route/uygulama geri eklenebilir |
 | **M22b** | `auth_group`, `auth_group_permissions`, `auth_permission`, `django_admin_log` tablolarında `persopyro_app` yetkilerinin **tamamen geri alınması** (`REVOKE ALL`) | Yetki | M22 | Yetki geri verilebilir (istenmez) |
@@ -556,10 +565,10 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M22d** | Kaldırma sonrası **sıfırdan kurulum testi** (boş DB → migrate → doğrulama): admin çıkarılınca `django_admin_log` oluşmaz ve kurulum farkı gözlemlenir | Test | M22c | — |
 | **M23** | Test genişletmesi: RLS yapısal testine yeni tablolar; T15–T18 davranış testleri; guard testleri | Test | M10–M20 | — |
 | **M24** | İndeks turu (bölüm E) + `ANALYZE` | Şema | M10–M20 | İndeks DROP |
-| **M25** | **Soft-delete yönetici standardı** (OD21): ortak temelde `objects` = silinmişi **gizler**, `all_objects` = tümü; mevcut modellere (User, Tenant, Role, UserRole, UserPermissionOverride) uygulanır | Kod (şema değişmez) | — | Yönetici tanımı geri alınır |
-| **M26** | **Yetki çözümlemesinde `deleted_at IS NULL`** (`_active_role_ids`, `RolePermission`, `UserPermissionOverride`) + `*.restore` izni + silme/geri alma denetim kaydı → **F7 kapanır** | Kod + test | M25 | Kod geri alınır (bulgu yeniden açılır) |
+| **M25** | **Soft-delete yönetici standardı** (OD21): ortak temelde `objects` = silinmişi **gizler**, `all_objects` = tümü; mevcut modellere (User, Tenant, Role, UserRole, UserPermissionOverride) uygulanır · **DURUM: uygulanmadı — F7 için gerekli değil** (yetki filtreleri sorgularda açık ve test edilmiş; bu adım ergonomi) | Kod (şema değişmez) | — | Yönetici tanımı geri alınır |
+| **M26** | **Yetki çözümlemesinde `deleted_at IS NULL`** (`UserRole`, `Role`, `UserPermissionOverride`) ✅ **UYGULANDI (2026-09-11) — F7 KAPANDI**; kalan: `*.restore` izni + silme/geri alma denetim kaydı (silme özelliği yazıldığında). NOT: `RolePermission` bağ tablosudur, `deleted_at` kolonu **yoktur** (ölçüm düzeltmesi) | Kod + test | — (M25'e bağımlı değil) | Kod geri alınır (bulgu yeniden açılır) |
 | **M27** | `users` e-posta benzersizliğinin **kısmi** hale getirilmesi (`users_tenant_email_uniq` tam indeksi düşürülür, `WHERE deleted_at IS NULL` kısmi kurulur); `tenants` slug/domain **kalıcı rezerve** istisnası olarak korunur | Şema | M5 | Tam indeks geri kurulur |
-| **M28** | Kodlayan: `create_default_roles` içindeki `get_or_create` davranışının silinmiş rolü **canlandırmaması** (M25 ile uyum) | Kod + test | M25 | — |
+| **M28** | Kodlayan: `create_default_roles` içindeki `get_or_create` davranışının silinmiş rolü **canlandırmaması** ✅ **UYGULANDI (2026-09-11):** açık sorgu + ön kontrol; silinmiş rol/izin bağı bulunursa `SoftDeletedDefaultRoleError` (kopya üretilmez, otomatik restore yok) | Kod + test | — | — |
 | **M29** | **Tenant API token modeli (OD26 — kapalı):** `hr.api_tokens`'a `token_kind` (CHECK `interactive`/`service`), `purpose` NOT NULL (`length(btrim())>=10`), `scopes text[]` NOT NULL (boş kapsam yalnızca iptal edilmiş satırda; wildcard yasak), `revoked_at` + `revoked_reason` (kapalı küme, ikisi birlikte NULL/NOT NULL). **İki tetikleyici:** (a) kapsam doğrulama — her değer `hr.permissions.code` içinde olmalı, `platform.*` yasak, tekrar yok; (b) değişmezlik — `scopes`/`purpose`/`expires_at`/`token_kind`/`token_hash`/`tenant_id`/`user_id` değişemez, `revoked_at` NULL'a dönemez (tek yönlü iptal) | Şema | — | Kolon/CHECK/tetikleyici DROP |
 | **M30** | **`api_tokens` yetki turu ve erişim yolu:** uygulama rolü `api_tokens` üzerinde UPDATE **yalnızca** `last_used_at` (ve iptal akışı için `revoked_at`/`revoked_reason`); `delete()` yolu kaldırılır (`TokenLogoutView` → iptal). RLS dışı kalma gerekçesi A.5'te sabit | Yetki + kod | M29 | Yetki/kod geri alınır |
 
