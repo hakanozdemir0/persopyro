@@ -5,6 +5,72 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.7.0] — 2026-09-11 — Yetkilendirme ve erişim kontrolü TASARIMI (kod yok)
+
+Yalnızca tasarım: bu sürümde uygulama kodu yazılmadı, veritabanı/API/frontend
+değişmedi. Amaç, kodlamadan önce yetki modelini ve sınırlarını netleştirmekti.
+
+### Değişen (doküman)
+
+- `docs/AUTHORIZATION.md` baştan yazıldı: 15 bölüm, 16 "OPEN DECISION".
+- `docs/SECURITY.md` yeniden yazıldı: kişisel veri katmanları, ayrıcalıklı erişim
+  (platform/destek), genel kimlik güvenliği, evrak sınıflandırması, denetim
+  bütünlüğü, olay müdahalesi ve 7 yeni tehdit satırı (T11–T17).
+
+### Tasarım kararları
+
+- **Model:** RBAC + kapsam (scope) + kapalı koşul kümesi (hibrit). Tam ABAC
+  (OPA/Cedar benzeri politika motoru) reddedildi; geri gelme tetikleyicileri
+  ölçülebilir şekilde yazıldı (koşul türü > 15, kiracı başına > 40 özel rol,
+  sözleşmesel politika dosyası talebi).
+- **Roller:** 6 rol — 2 platform (`superadmin`, `platform_admin`), 4 kiracı
+  (`tenant_admin`, `tenant_officer`, `dept_manager`, `employee`). Hiyerarşi
+  izin devralma **yaratmaz**; yalnızca yönetim ilişkisini belirler.
+- **Kapsam kodları:** `SYS`, `TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`;
+  etkin kapsam = en dar olan. Rol kapsamı kişi bazında daraltılabilir,
+  genişletilemez.
+- **Permission matrisi:** rol özeti (gör/oluştur/değiştir/sil/onayla/sınır) +
+  9 modül için ayrıntılı matris; SUPERADMIN ve ADMIN kişisel veri sütunlarında
+  `GRANT_VALID`/`—` ile sınırlandı.
+- **Kişisel veri:** K0–K4 sınıflandırması; varsayılan maskeleme (sunucu tarafı);
+  talep → onay → süreli kullanım → kayıt akışı; boş gerekçeyle erişim yok.
+- **Genel kimlik:** `kiracı-XXXXXXXX` (Crockford Base32, 8 rastgele karakter).
+  Sıralı `00XXXX` biçimi **reddedildi**: numaralandırmaya açık.
+- **Evrak:** yüklemede "kişisel veri içeriyor mu?" + gizlilik düzeyi + saklama;
+  "emin değilim" = en kısıtlayıcı politika. "Varlığı bilmek" ≠ "içeriği görmek".
+- **Denetim kaydı:** append-only (mevcut ✅), kişisel verinin değerini taşımaz;
+  `purpose`, `grant_id`, `changed_fields` eklenecek; zincirleme önerildi.
+- **Platform erişimi:** kiracı izolasyonunun tek istisnası; süreli (≤60 dk),
+  gerekçeli, çift kontrol, kiracıya görünür ve kayıtlı.
+
+### Mimari açıdan kritik tespit
+
+Mevcut kod ile yeni tasarım arasında **üç çelişki** var; hiçbiri kod yazılmadan
+çözülmeli:
+
+1. **Platform kullanıcıları barındırılamıyor** (OD3): `users.tenant_id` zorunlu
+   ve RLS korumalı; SUPERADMIN/ADMIN hiçbir kiracıya ait olmamalı. Öneri: ayrı
+   `platform_users` tablosu + ayrı giriş yolu (kiracı politikaları hiç değişmez).
+2. **Kiracılar arası hiçbir okuma yolu yok**: RLS + FORCE tüm tablolarda etkin;
+   SUPERADMIN için koşullu, onay kaydına bağlı politika bayrağı tasarlandı (OD1).
+3. **Rol kodları değişiyor**: `manager` → `dept_manager`, `tenant_officer`
+   ekleniyor; veri migration'ı gerekiyor (uygulanmış migration değiştirilmez).
+
+### Doğrulanan
+
+- Dokümanların mevcut koda uygunluğu ölçümle kontrol edildi: RLS uygulanan
+  tablolar (`tenants`, `users`, `roles`, `role_permissions`, `user_roles`,
+  `user_permission_overrides`, `audit_logs`), mevcut 29 izin kodunun tam listesi
+  ve mevcut rol şablonları (`tenant_admin`, `hr_manager`, `manager`, `employee`)
+  ile karşılaştırıldı; tasarım belgesinde her madde ✅/🔜/⚠️/❓ olarak işaretlendi.
+- Kod değişmediği için test koşusu gerekmedi (önceki durum: 97 test yeşil).
+
+### Kalan (kod aşaması)
+
+`docs/AUTHORIZATION.md` bölüm 13'teki 12 iş kalemi ve bölüm 14'teki kararlar.
+Engelleyici kararlar: **OD3** (platform kullanıcı barındırma), **OD1**
+(SUPERADMIN kişisel veri erişimi), **OD4** (kişisel veri erişimini kim onaylar).
+
 ## [0.6.0] — 2026-09-11 — Faz 2 (2. dilim): istek hattı, kimlik doğrulama uçları, MFA ve token modeli
 
 Bu dilimde uygulama ilk kez **çalışan bir giriş akışına** kavuştu: istek hattı

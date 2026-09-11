@@ -592,6 +592,9 @@ tekrar değerlendirilir.
 | K15 | API token'ları için **kendi model** (knox kaldırıldı) | Kabul ve uygulandı | Token gereksinimleri (ör. OAuth2) değişirse yeniden değerlendirilir |
 | K16 | Giriş öncesi okunan eşleme tabloları **RLS dışı** ama sıkı yetkili (`tenant_directory` salt-okunur, `api_tokens` yalnızca özet) | Kabul ve uygulandı | Bu tablolara kiracı verisi eklenirse tasarım yeniden ele alınmalı |
 | K17 | Cache **veritabanı tablosu** üzerinden (Redis yok) | Kabul ve uygulandı | Bölüm 6.2 tetikleyicileri |
+| K18 | Yetkilendirme modeli: RBAC + kapsam + kapalı koşul kümesi (tam ABAC değil) | Tasarım (2026-09-11, uygulanacak) | Koşul türü > 15, kiracı başına > 40 özel rol, sözleşmesel politika talebi |
+| K19 | Platform (kiracılar arası) erişim: süreli, gerekçeli, çift kontrol, kiracıya görünür ve kayıtlı istisna | Tasarım — **karar bekliyor (OD1/OD3/OD4)** | Karar verilince uygulanır; mekanizma seçilen seçeneğe göre değişir |
+| K20 | Genel kullanıcı kimliği: `kiracı-XXXXXXXX` (rastgele, değişmez, türetilmemiş) | Tasarım (OD2) | Biçim değişirse tüm arayüz/entegrasyon etkilenir |
 
 K11 gerekçesi: Django 5.2.8+ Python 3.14'ü de destekliyor, ancak üçüncü parti
 paketlerin (psycopg, django-q2, argon2-cffi vb.) 3.13 üzerindeki uyumluluğu daha
