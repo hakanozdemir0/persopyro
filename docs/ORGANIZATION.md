@@ -141,21 +141,31 @@ kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`.
 - "Birim ağacının yetki mirası üretmemesi" bu modüllerde de geçerlidir: vardiya/evrak
   yetkisi izin kodundan gelir, unvandan değil.
 
-## 9. Çok şirketli kiracı durumu ❓OD27
+## 9. Çok tüzel kişilik durumu ✅ KARAR (OD27 kapalı)
 
-Referans tasarım bir kiracı içinde **birden fazla tüzel kişilik** (`companies`)
-öngörüyor. OD24 v1 kapsamı bunu **dışarıda bıraktı**; OD27 açık: v1'de tek tüzel
-kişilik (kiracı = şirket) varsayılır, `companies` ihtiyaç doğduğunda eklenir
-(nullable `company_id` → backfill → zorunlu sırasıyla, geri dönüşü kolay).
+**v1: `1 tenant = 1 tüzel şirket / işveren organizasyonu`.** Ayrı `companies` veya
+`legal_entities` tablosu **eklenmez**; `departments`, `positions`, `employees` ve tüm
+ilişkili kayıtlar **doğrudan `tenant_id`'ye** bağlıdır. `company_id` hiçbir tabloda
+yer almaz ve RBAC scope'a şirket katmanı eklenmez. Tüzel kişilik bilgisi zaten
+`hr.tenants` satırındadır (`legal_name`, `tax_number`, adres/iletişim).
 
-**Karar verilmeden `companies` tablosu yazılmaz.** Kapsam çözümleyici bu karara
-bağlıdır (`TENANT`/`UNIT` yeterli mi, yoksa `COMPANY` kapsamı da gerekli mi).
+**Geleceğe açıklık:** ihtiyaç doğarsa ayrı bir `legal_entities` katmanı eklenir;
+`departments`/`employees` ona bağlanır (nullable → backfill → zorunlu). Ancak
+**tenant güvenlik sınırı olmaya devam eder** ve tüzel kişilik **hiçbir zaman** tenant
+izolasyon sınırının yerine geçmez (RLS `tenant_id` üzerinde kalır). Kapsam katmanı
+eklenirse yeni bir kapsam kodu (ör. `COMPANY`) **kararla** tanımlanır.
+
+**Yeniden değerlendirme tetikleyicileri** (herhangi biri): aktif kiracıların ≥ %10'u
+veya ≥ 3 kiracı ikinci işveren şirket istiyorsa; bordro/izin politikalarının tüzel
+kişilik bazında ayrılması sözleşmesel zorunluluk olursa (≥ 1 imzalı sözleşme);
+enterprise satışlarda ardışık ≥ 2 anlaşma bu nedenle bloke olursa; tek kiracıda
+≥ 2 ayrı işveren sicil numarası gerekirse.
 
 ## 10. Referans tasarımdan farklar (bilinçli)
 
 | Referans tasarım | v1 kararı | Gerekçe |
 |---|---|---|
-| `companies` (çok tüzel kişilik) | ❓OD27 — v1'de yok | KOBİ hedefi; kapsam çözümlemesini sadeleştirir |
+| `companies` (çok tüzel kişilik) | **OD27 kapalı: v1'de yok** (tenant = tüzel kişilik) | KOBİ hedefi; kapsam çözümlemesini ve RLS'i tek boyutta tutar |
 | `employment_history` | v1'de yok; geçmiş `employee_manager` tarihleri + denetim kaydıyla tutulur | Ayrı tarihçe tablosu, henüz tanımlı olmayan raporlama ihtiyacı için erken maliyet |
 | `emergency_contacts` | v1'de `employee_personal_data` kapsamında değerlendirilir (ayrı tablo ertelendi) | K2 sınıfı; erişim politikası aynı |
 | `work_schedules` | v1'de `shifts` ile karşılanır | Aynı işlevin iki tabloya bölünmesi gereksiz |
@@ -168,6 +178,6 @@ bağlıdır (`TENANT`/`UNIT` yeterli mi, yoksa `COMPANY` kapsamı da gerekli mi)
 | # | Konu | Durum |
 |---|---|---|
 | **OD5** | Departman yöneticisinin kapsamı: alt ağaç mı, yalnızca doğrudan birim mi? | Açık (öneri: alt ağaç) |
-| **OD27** | Kiracı içinde birden fazla tüzel şirket (`companies`) | Açık — v1 kapsamını belirler |
+| **OD27** | Kiracı içinde birden fazla tüzel şirket (`companies`) | **Kapalı** (2026-09-11) — v1 tek tüzel kişilik; gelecek yolu ve tetikleyiciler bölüm 9'da |
 | **OD24** | Ağaç mekanizması ve döngü garantileri | **Kapalı** (2026-09-11) |
 | — | Organizasyon ağacı için gerçek ölçüm (derinlik, birim sayısı, kapsam sorgu süresi) | Uygulama sonrası ölçülecek (geri dönüş tetikleyicileri bölüm 3'te) |

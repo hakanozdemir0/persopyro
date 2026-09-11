@@ -336,6 +336,7 @@ erişim yalnızca `persopyro_platform` rolüyle.
 - **PERSONAL DATA LEVEL:** K2 (`full_name`, `email`) — erişim yalnızca platform rolünde
 - **RLS:** yok (şema yetkisiyle korunur) · **AUDIT REQUIREMENT:** yüksek (oluşturma, MFA, rol ataması, giriş)
 - **Kolonlar:** `id, public_id, email, full_name, password, status, is_active, failed_login_count, lockout_until, password_changed_at, mfa_enabled, mfa_secret_encrypted, created_at, updated_at, deleted_at, created_by_id`
+- **`public_id` kuralı (OD27/OD28 kapalı):** kiracı dışı oldukları için **rezerve `plt` ön eki** kullanılır (`plt-<8×Crockford>`); kiracı kullanıcılarının `<tenant-prefix>` ad alanıyla **çakışmaz**. `plt` rezerve listede olduğu için hiçbir kiracı bu ön eki alamaz.
 
 ### `platform.roles`
 - **PURPOSE:** `superadmin`, `platform_admin` tanımları.
@@ -410,6 +411,11 @@ erişim yalnızca `persopyro_platform` rolüyle.
 Yetkilendirme modelinin ihtiyaç duyduğu minimum küme tasarlanmıştır; bordro,
 performans, işe alım, faturalama gibi modüller **bu turun kapsamı dışındadır**
 (ileride aynı kurallarla eklenir).
+
+**OD27 (kapalı) sonucu:** v1'de **tek tüzel kişilik** (kiracı = şirket) vardır;
+aşağıdaki tüm tablolar **doğrudan `tenant_id`'ye** bağlıdır ve hiçbirinde
+`company_id`/`legal_entity_id` **bulunmaz**. Gelecekte çok tüzel kişilik gerekirse
+ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (OD27).
 
 ### `hr.departments`
 - **PURPOSE:** Organizasyon birimleri; `UNIT` kapsamının temeli.
@@ -517,17 +523,17 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | # | İş | Şema/Şema dışı | Bağımlılık | Geri alma |
 |---|---|---|---|---|
 | **M1** | `platform` şeması + `persopyro_platform` rolü + yetkiler (betik: `scripts/03_platform_roles.sql`) | DDL (sahip+süper) | — | `DROP SCHEMA platform CASCADE` + `DROP ROLE` |
-| **M2** | `platform.users`, `platform.roles`, `platform.role_permissions`, `platform.user_roles` | Yeni | M1 | DROP TABLE (yeni, veri kaybı yalnızca platform hesabı) |
+| **M2** | `platform.users`, `platform.roles`, `platform.role_permissions`, `platform.user_roles` + **`platform.users.public_id`** (rezerve `plt` ön ekiyle üretim; kiracı kullanıcılarından ayrı ad alanı — OD28 kapalı) | Yeni | M1 | DROP TABLE (yeni, veri kaybı yalnızca platform hesabı) |
 | **M3** | `platform.tokens` (OD22 kararı sonrası) | Yeni | M2 | DROP TABLE |
 | **M4** | `platform.tenant_registry` + `hr.tenants` üzerine yansı tetikleyicisi (SECURITY DEFINER) + backfill | Yeni + tetikleyici | M1 | Tetikleyici + tablo DROP (hr.tenants'a dokunulmaz) |
-| **M5** | `hr.tenants.public_id_prefix` (nullable ekle → slug'tan türet/çakışmada sonek → `NOT NULL` + tam `UNIQUE` + değişmezlik tetikleyicisi) **ve** `hr.users.public_id` (kiracının prefix'inden üretim → `NOT NULL` + global benzersiz indeks) | Şema + veri | — | İndeks/kolon/tetikleyici DROP |
+| **M5** | `hr.tenants.public_id_prefix` (nullable ekle → slug'tan türet/çakışmada sonek → `NOT NULL` + tam `UNIQUE` + değişmezlik tetikleyicisi) **ve** `hr.users.public_id` (kiracının prefix'inden üretim → `NOT NULL` + global benzersiz indeks). **Ayrıca (OD28 tamamlayıcı işler):** üretim fonksiyonları (`hr.generate_public_id_prefix(slug)`, `hr.generate_public_id(tenant_id)`; çakışmada yeniden dener), format `CHECK` (`^[a-z0-9]{3,20}-[0-9A-HJKMNP-TV-Z]{8}$`), **rezerve ad listesi** (slug/prefix olarak reddedilir: `www, api, app, admin, portal, mail, support, hr, platform, plt, system`) | Şema + veri + fonksiyon | — | İndeks/kolon/tetikleyici/fonksiyon DROP |
 | **M6** | `hr.permissions`: `platform.*` kodları (yeni migration, frozen liste) + `REVOKE INSERT/UPDATE/DELETE ON hr.permissions FROM persopyro_app` | Veri + yetki | — | Kodlar silinebilir; yetki geri verilebilir (⚠️ istenmez) |
 | **M7** | Rol kodu göçü: `manager → dept_manager` (kiracı başına, veri) + `tenant_officer` şablon rolünün oluşturulması | Veri | M6 | Ters eşleme (kayıt tutulur) |
 | **M8** | `hr.roles.scope_type` + kısmi benzersizlik (`WHERE deleted_at IS NULL`) | Şema | — | Kolon + indeks geri alınır |
 | **M9** | `hr.user_roles.scope_org_unit_id` (FK) + guard + kısmi benzersizlikler | Şema + tetikleyici | M10 (departments) | Kolon/tetikleyici DROP |
-| **M10** | `hr.departments` + `hr.positions` + RLS + FORCE + guard'lar + indeksler | Yeni | M1 (şema zaten var) | DROP TABLE (veri kaybı kabul, yeni modül) |
+| **M10** | `hr.departments` + `hr.positions` + RLS + FORCE + guard'lar + indeksler. **OD27 kapalı: `company_id`/`legal_entity_id` EKLENMEZ** — tablolar doğrudan `tenant_id`'ye bağlıdır | Yeni | M1 (şema zaten var) | DROP TABLE (veri kaybı kabul, yeni modül) |
 | **M11** | **Organizasyon ağacı garantileri (OD24 kapalı):** `CHECK (parent_id IS DISTINCT FROM id)`, `BEFORE INSERT/UPDATE` **döngü reddi** tetikleyicisi (ata zinciri yürüyüşü, derinlik sınırı 20), `employee_manager` için `CHECK (employee_id <> manager_employee_id)` + aynı tetikleyici, `relation_type='primary'` kısmi benzersizliği. **`path`/closure kolonu EKLENMEZ** | Şema + tetikleyici | M10 | Tetikleyici/kısıt DROP |
-| **M12** | `hr.employees` + `hr.employee_personal_data` (K3 şifreli kolonlar) + RLS + guard'lar | Yeni | M10 | DROP TABLE |
+| **M12** | `hr.employees` + `hr.employee_personal_data` (K3 şifreli kolonlar) + RLS + guard'lar. **OD27 kapalı: `company_id` EKLENMEZ** | Yeni | M10 | DROP TABLE |
 | **M13** | `hr.employee_manager` + RLS + guard + kısmi benzersizlik | Yeni | M12 | DROP TABLE |
 | **M14** | `hr.leave_*`, `hr.approval_steps` + RLS + guard | Yeni | M12 | DROP TABLE |
 | **M15** | `hr.shifts`, `hr.shift_assignments`, `hr.attendance_records` + RLS + guard | Yeni | M12 | DROP TABLE |
@@ -757,8 +763,8 @@ ortaya çıkanlar aynı numaralandırmayla **orada** kayıtlıdır:
 | **OD24** | Organizasyon ağacı DB modeli — **KAPATILDI** (2026-09-11) | Adjacency list (`parent_id`) + özyinelemeli CTE; path/nested set/closure **yok**; döngü DB tetikleyicisiyle yasak (derinlik 20); tek birincil yönetici `employee_manager` ile; ağaç yetki mirası üretmez (M10/M11) |
 | **OD25** | Tenant slug ve public ID prefix ilişkisi — **KAPATILDI** (2026-09-11) | Immutable `tenants.public_id_prefix` (tam UNIQUE, yeniden tahsis yok); `users.public_id` immutable; prefix DB tetikleyicisiyle değişmez; public ID yetki sınırı değil, RLS aynen geçerli (M5/M27, F1) |
 | **OD26** | Tenant API token modelinin hizalanması (kapsam + iptal izi) — **bulgu F8** | Tenant token'a `scope`, `purpose`, `revoked_at` ekle (OD22 ile simetri); geriye dönük uyumlu ara adım `revoked_at` |
-| **OD27** | Kiracı içinde birden fazla tüzel şirket (`companies`) v1'de olacak mı? | (A) v1 tek tüzel kişilik (kiracı = şirket); `companies` ihtiyaç doğunca eklenir |
-| **OD28** | Yeniden markalama sonrası `public_id_prefix` istisnası | (A) v1'de istisna yok; (B) yalnızca sözleşmesel zorunlulukta, denetimli "prefix göçü" (mevcut public ID'ler değişmez) |
+| **OD27** | Kiracı içinde birden fazla tüzel şirket (`companies`) — **KAPATILDI** (2026-09-11) | v1: `1 tenant = 1 tüzel şirket`; `companies`/`legal_entities` **yok**, `company_id` hiçbir tabloda yok; gelecekte ayrı katman (tenant sınırı korunur); tetikleyiciler OD27'de |
+| **OD28** | `public_id_prefix` yeniden markalama istisnası — **KAPATILDI** (2026-09-11) | v1: **immutable**, değiştirme uç noktası yok, istisna **kodlanmaz**; ileride yalnızca platform operasyonu + denetim + `public_id` sabit + eski prefix rezerve (M5 tamamlayıcı işler) |
 
 ---
 

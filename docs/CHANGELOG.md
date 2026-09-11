@@ -5,6 +5,88 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.13.0] — 2026-09-11 — OD27 ve OD28 KAPATILDI (mimari karar; kod yok)
+
+Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:
+`git status` yalnızca `.md` gösterir).
+
+### Kapatılan kararlar
+
+- **OD27 — Tenant içinde birden fazla tüzel şirket.** v1: **`1 tenant = 1 tüzel
+  şirket`**; ayrı `companies`/`legal_entities` tablosu **eklenmez**; `departments`,
+  `positions`, `employees` doğrudan `tenant_id`'ye bağlı kalır; **RBAC kapsamına
+  şirket katmanı eklenmez** ve `company_id` kolonu **hiçbir tabloda oluşturulmaz**.
+  Tüzel kişilik bilgisi zaten `hr.tenants` satırındadır (doğrulandı). Mimari
+  gelecekte çok tüzel kişiliğe **kapalı değil**: ayrı katman + nullable→backfill→NOT
+  NULL geçişi; ancak **tenant güvenlik sınırı olmaya devam eder**. Ölçülebilir
+  tetikleyiciler yazıldı (≥ %10 veya ≥ 3 kiracı talebi; sözleşmesel bordro/izin
+  ayrımı; ardışık ≥ 2 bloke anlaşma; ≥ 2 işveren sicili).
+- **OD28 — `public_id_prefix` yeniden markalama istisnası.** v1'de prefix
+  **immutable**; rebrand/slug değişimi mevcut prefix'i ve `public_id`'leri
+  değiştirmez; **değiştirme uç noktası yoktur** ve **istisna mekanizması v1'de
+  kodlanmaz**. İleride gerekirse yalnızca **platform operasyonu** olarak, denetimli,
+  `public_id`'ler sabit tutularak ve eski prefix rezerve kalacak şekilde tasarlanır
+  (koşullar yazıldı).
+
+### Ek kontroller (istenen)
+
+- **M10–M13 etkisi: DEĞİŞMEDİ.** Ölçüm: migration planında ve hedef şemada hiçbir
+  yerde `company_id`/`legal_entity_id` yoktu; OD27(A) seçildiği için M10
+  (`departments`+`positions`), M11 (ağaç garantileri), M12 (`employees`+
+  `employee_personal_data`), M13 (`employee_manager`) **aynen kalır**. Tablolara
+  "**OD27 kapalı: `company_id` EKLENMEZ**" notu eklendi (yanlışlıkla eklenmesin).
+- **OD28 sonrası eksik görülen işler tamamlandı (kural olarak M2/M5'e eklendi):**
+  (1) `platform.users.public_id` için **rezerve `plt` ön eki** kuralı (kiracı ad
+  alanıyla çakışmaz) → **M2**; (2) üretim fonksiyonları
+  (`hr.generate_public_id_prefix`, `hr.generate_public_id`, çakışmada yeniden
+  deneme); (3) format `CHECK`
+  (`^[a-z0-9]{3,20}-[0-9A-HJKMNP-TV-Z]{8}$`); (4) **rezerve ad listesi**
+  (`www, api, app, admin, portal, mail, support, hr, platform, plt, system`) → **M5**.
+
+### Yeni SECURITY FINDING
+
+- **F10 (Düşük) — Prefix/slug taklidi (typosquatting) engellenmiyor.** `slug`
+  yalnızca tam eşleşme benzersizliği taşıyor; benzer görünen değerler serbest
+  (`acme` / `acme1`). Risk bugün düşük (kiracı açılışı platform operasyonu), ancak
+  `PROJECT.md`'de **self-servis kayıt** planlandığı için o yol açıldığında artar.
+  Azaltım: rezerve ad listesi, prefix ≥ 3 karakter, açılışta manuel inceleme, çok
+  yakın prefix tespitinde uyarı. Kod düzeltilmedi.
+
+### Yeni OPEN DECISION
+
+- **Yok.** Bu turda gerçekten zorunlu yeni bir belirsizlik çıkmadı; iki küçük boşluk
+  (platform kullanıcısı prefix'i, üretim fonksiyonları/format/rezerve adlar)
+  **kural** olarak kapatıldı.
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/AUTHORIZATION.md` | OD27 ve OD28 **KAPALI** (karar, gerekçe, şema/migration etkisi, güvenlik etkisi, çakışma, seçenekler + ölçülebilir tetikleyiciler); durum satırı ve özet sayıları (kapalı 13, açık 15) |
+| `docs/DATABASE.md` | B.4'e OD27 sonucu notu; M10/M12'ye "`company_id` EKLENMEZ"; **M2**'ye `platform.users.public_id` (rezerve `plt` prefix), **M5**'e üretim fonksiyonları + format `CHECK` + rezerve ad listesi; `platform.users` kartına prefix kuralı; bölüm I'de OD27/OD28 kapalı |
+| `docs/ORGANIZATION.md` | §9 **karar** olarak yeniden yazıldı (v1 tek tüzel kişilik, gelecek yolu, tetikleyiciler); referans farklar tablosu ve açık noktalar güncellendi |
+| `docs/SECURITY.md` | §8'e prefix immutability + rezerve adlar + typosquatting notu; §5.1'e **F10** bulgusu |
+| `docs/ARCHITECTURE.md` | **K30, K31** karar kayıtları |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Doğrulanan / doğrulanmayan
+
+- **Doğrulandı (ölçüm):** `docs/` içinde `companies`/`company_id`/`legal_entity`
+  geçen **tüm** satırlar tarandı — migration planında ve hedef şemada `company_id`
+  **hiç yok** (yalnızca karar maddeleri ve referans atıfları); `hr.tenants` tüzel
+  kimlik alanlarını (`legal_name`, `tax_number`, adres/iletişim) zaten taşıyor;
+  mevcut slug benzersizliği yalnızca tam eşleşme (`tenants_slug_..._uniq`).
+- **Doğrulanmadı (kasıtlı):** kod/migration/DB değişikliği yapılmadı; prefix üretim
+  fonksiyonları ve format kısıtı **yazılmadı** (M5 iş kalemi).
+
+### Kalan
+
+M2 (platform kullanıcı public_id), M5 (prefix + public_id + fonksiyonlar + `CHECK` +
+rezerve adlar), M27 (kısmi indeks), M10–M13 (organizasyon/çalışan), M25–M28 (F7).
+Açık kararlar: **OD5** (organizasyon modülünden önce netleşmeli), OD26 (tenant token).
+
+---
+
 ## [0.12.0] — 2026-09-11 — OD23, OD24, OD25 KAPATILDI (mimari karar; kod yok)
 
 Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:

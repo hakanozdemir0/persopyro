@@ -229,6 +229,17 @@ bir gün gevşetilirse denetim geçmişi sessizce yeniden yazılır. **Kapatma y
 (OD23 kararı):** `on_delete` → **`PROTECT`**; kullanıcılar zaten fiziksel olarak
 silinmez (OD21: soft delete).
 
+**F10 — Prefix/slug taklidi (typosquatting) engellenmiyor (Düşük, açık).** Ölçüm:
+`hr.tenants.slug` yalnızca **tam eşleşme** benzersizliği taşır (mevcut
+`tenants_slug_..._uniq`); benzer görünen değerler (`acme` / `acme1` / `acme-inc`)
+serbesttir. Bu, destek ve denetim referanslarında karışıklığa ve sosyal mühendislik
+için uygun bir zemine yol açabilir (kullanıcı, başka şirketin kimliğine benzeyen bir
+`public_id` gösterir). Bugün risk **düşüktür** çünkü kiracı açılışı self-servis
+değil, platform operasyonudur; ancak `docs/PROJECT.md`'de **self-servis kayıt**
+planlandığı için bu yol açıldığında risk artar. **Azaltım (v1):** rezerve ad listesi
+(M5), prefix ≥ 3 karakter, yeni kiracı açılışında manuel inceleme, çok yakın prefix
+tespitinde (düzenleme mesafesi 1) uyarı. Kodlanmadı.
+
 ---
 
 ## 6. Ayrıcalıklı erişim güvenliği (platform ve destek)
@@ -306,6 +317,14 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
 
 - Kimlik **rastgele** üretilir (Crockford Base32, 8 karakter, `secrets`),
   isim/e-posta/ID'den **türetilmez**, kullanıcı tarafından değiştirilemez 🔜.
+- **Ön ek (prefix) immutable ve rezerve:** kiracının `public_id_prefix`'i kiracı
+  oluşturulurken bir kez üretilir ve **değiştirilemez** (OD25/OD28); platform
+  kullanıcıları **rezerve `plt`** ön ekini kullanır; `www, api, app, admin, portal,
+  mail, support, hr, platform, plt, system` **rezerve adlardır** ve slug/prefix
+  olarak kullanılamaz (çakışma ve taklit riskine karşı) 🔜.
+- **Kimlik taklidi (typosquatting) riski:** benzer görünen prefix/slug'lar (ör.
+  `acme` ve `acme1`) teknik olarak engellenmez; yeni kiracı açılışı **platform
+  operasyonu** olduğu için manuel incelemeyle yönetilir (bulgu **F10**).
 - Sıralı/sayılabilir kimlik ❌ reddedilir: numaralandırma saldırısına açıktır.
 - Ters çözümleme (`public_id` → gerçek kişi) izin + gerekçe + kayıt gerektirir;
   **toplu çözümleme API'de desteklenmez** 🔜.

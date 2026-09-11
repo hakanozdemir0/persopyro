@@ -839,8 +839,8 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1–OD4 ve OD19–OD25 KAPATILDI** (11 karar). Kararlar
-aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
+**Durum (2026-09-11):** **OD1–OD4, OD19–OD25, OD27 ve OD28 KAPATILDI** (13 karar).
+Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
 
@@ -1403,37 +1403,92 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   geriye dönük uyumludur ve denetim izini geri kazandırır; **kapsam (A)** karar
   gerektirir.
 
-### OD27 — Kiracı içinde birden fazla tüzel şirket (`companies`) 🆕
+### OD27 — Kiracı içinde birden fazla tüzel şirket (`companies`) — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** `docs/ORGANIZATION.md` referans tasarımı bir kiracı içinde birden
-  çok tüzel kişilik (`companies`) öngörüyor; OD24 v1 temel kaynağı yalnızca
-  `departments`/`positions`/`employees`/`employee_manager` olarak kabul etti ve
-  `companies` (ve `employment_history`) **bu turun dışında bırakıldı**. Kapsam
-  belirsizliği: departman ve çalışanlar hangi tüzel kişiliğe ait olacak, raporlama
-  ve kapsam hangi seviyede kısıtlanacak?
-- **Seçenekler:** (A) v1 **tek tüzel kişilik** varsayar (kiracı = şirket); `companies`
-  tablosu eklenmez, ihtiyaç doğduğunda eklenir. (B) `companies` v1'de eklenir;
-  `departments.company_id` ve `employees.company_id` zorunlu olur. (C) v1'de
-  opsiyonel `company_id` (nullable) eklenir, kısıt uygulanmaz.
-- **Öneri:** (A). Gerekçe: hedef kitle KOBİ; tek tüzel kişilik en sade modeldir ve
-  kapsam çözümlemesini (UNIT/TENANT) karmaşıklaştırmaz. (B) sonradan eklenebilir
-  (nullable → backfill → zorunlu), geri dönüşü kolaydır.
-- **Etki:** `docs/DATABASE.md` (B.4, M10–M13), `docs/ORGANIZATION.md` bölüm 7,
-  kapsam çözümleyici. **Karar verilmeden `companies` tablosu yazılmaz.**
+- **KARAR (v1):** **`1 tenant = 1 tüzel şirket / işveren organizasyonu`.** Ayrı
+  `companies` veya `legal_entities` tablosu **EKLEMEZ**.
+  - `departments`, `positions`, `employees` doğrudan **`tenant_id`**'ye bağlı kalır.
+  - Organizasyon ağacı **tenant altında** çözülür; izin politikaları, vardiyalar ve
+    evrak **tenant kapsamında** kalır.
+  - **RBAC scope'a `company_id` katmanı eklenmez**; `tenant_id` yanında gereksiz
+    `company_id` kolonları **oluşturulmaz**.
+  - Tüzel kişilik bilgisi zaten `hr.tenants` satırındadır (`legal_name`,
+    `tax_number`, `email`, `phone`, `country`, `city`, `address`) — v1 için ek tablo
+    gerekmez (doğrulandı).
+- **Geleceğe açıklık (bağlayıcı ilkeler):** Multi-company desteği **eklenebilir**
+  olmalıdır; ancak:
+  1. `legal_entities` benzeri ayrı bir **katman** olarak eklenir (tenant'ın yerine
+     geçmez), `departments`/`employees` uygun şekilde ona bağlanır.
+  2. **`tenant` güvenlik sınırı olmaya devam eder**; legal entity **hiçbir zaman**
+     tenant izolasyon sınırının yerine geçmez (RLS `tenant_id` üzerinde kalır).
+  3. Geçiş şekli: `legal_entity_id` **nullable** eklenir → tek tüzel kişilik için
+     geri doldurulur → `NOT NULL` (geri dönüşü kolay; uygulanmış migration değişmez).
+  4. Kapsam katmanı eklenecekse **yeni bir kapsam kodu** (ör. `COMPANY`) tanımlanır ve
+     izin matrisi güncellenir; mevcut kapsam kodları bozulmaz.
+- **Ölçülebilir yeniden değerlendirme tetikleyicileri** (herhangi biri):
+  (a) aktif kiracıların **≥ %10'u** veya **≥ 3 kiracı** aynı hesap altında ikinci bir
+  işveren şirket talep ediyorsa; (b) bordro/izin politikalarının **tüzel kişilik
+  bazında** ayrılması sözleşmesel zorunluluk haline gelirse (**≥ 1 imzalı sözleşme**);
+  (c) enterprise satışlarda bu nedenle **ardışık ≥ 2 anlaşma** bloke olursa; (d) tek
+  kiracıda **≥ 2 ayrı işveren sicil numarası** ile çalışma ihtiyacı doğarsa.
+- **Gerekçe:** Hedef kitle KOBİ. İkinci bir kapsam katmanı, RLS'i ve her izin
+  kontrolünü iki boyutlu hale getirir (tenant + company) ve yanlış yapılandırma
+  yüzeyini büyütür. Tenant satırı zaten tüzel kimlik alanlarını taşıdığı için v1'de
+  kayıp yoktur; ihtiyaç ölçümle doğrulandığında ekleme maliyeti düşüktür.
+- **Şema/migration etkisi:** **Yok** — M10–M13 aynen kalır (aşağıdaki ek kontrole
+  bakınız); `company_id` hiçbir tabloda yer almaz. B.4 ve organizasyon şeması
+  değişmez.
+- **Güvenlik etkisi:** Tek kapsam boyutu (tenant) korunur → RLS politikası, guard
+  tetikleyicileri ve izin çözümlemesi sade kalır; "iki kapsam boyutundan birini
+  atlama" sınıfı hatalar oluşmaz.
+- **Mevcut kodla çakışma:** Yok — `departments`/`positions`/`employees` modelleri
+  henüz yazılmadı ve hiçbir yerde `company_id` planlanmadı (ölçüm: `docs/` içinde
+  yalnızca bu karar maddesi ve referans tasarım atıfları geçiyor).
+- **Seçenekler (kayıt için):** (A) v1 tek tüzel kişilik. (B) `companies` v1'de. (C)
+  opsiyonel nullable `company_id`. → **(A) seçildi**; (C) "kullanılmayan ama şemada
+  duran kolon" yarattığı için reddedildi.
 
-### OD28 — Tenant yeniden markalama ve `public_id_prefix` istisnası 🆕
+### OD28 — `public_id_prefix` yeniden markalama istisnası — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** OD25 prefix'i **kalıcı ve değişmez** kıldı; ancak gerçek hayatta
-  şirket birleşmesi/unvan değişikliği gibi durumlarda prefix'in değişmesi talep
-  edilebilir. Mevcut kararda **istisna prosedürü tanımlı değildir**.
-- **Seçenekler:** (A) İstisna yok: prefix v1'de asla değişmez (yalnızca `slug` ve
-  görünen ad değişir). (B) Platform tarafından yürütülen, denetlenen ve nadir bir
-  "prefix göçü" işlemi: yeni prefix tahsis edilir, **mevcut public ID'ler değişmez**,
-  eski prefix kalıcı olarak rezerve kalır. (C) Yeniden üretim: tüm public ID'ler
-  değişir (reddedildi — denetim izini ve dış referansları kırar).
-- **Öneri:** (A) v1 için; (B) yalnızca sözleşmesel zorunluluk doğarsa, ayrı bir
-  kararla ve kayıtlı bir prosedürle.
-- **Etki:** `docs/DATABASE.md` (M27, F1), destek/dış referans süreçleri.
+- **KARAR (v1):** `public_id_prefix` **immutable**dır.
+  - Rebranding / tenant adı / `slug` değişmesi **mevcut prefix'i değiştirmez**,
+    **mevcut `public_id`'leri değiştirmez** ve **yeni kullanıcılar da aynı sabit
+    prefix** ile üretilir.
+  - **Normal API/UI üzerinden prefix değiştirme uç noktası YOKTUR.** Değişmezlik
+    veritabanı tetikleyicisiyle zorlanır (OD25).
+  - **V1'de istisna mekanizması kodlanmaz** (ne uç nokta ne servis).
+- **İleride istisna gerekirse (yalnızca tasarım; v1'de yapılmaz) — bağlayıcı koşullar:**
+  1. **`public_id`'ler geriye dönük değiştirilmez** (kimlik değişmezliği korunur).
+  2. Bir **authorization mekanizması değildir**; erişim kararı vermez, yalnızca
+     görünen referansı değiştirir.
+  3. **Denetlenir**: talep, gerekçe, eski/yeni prefix, onay ve etkilenen kullanıcı
+     sayısı denetim kaydına yazılır.
+  4. **Yalnızca platform operasyonu** olarak yürütülür (kiracı kendi kendine
+     değiştiremez; kontrollü tek seferlik prosedür, ayrı migration/CLI).
+  5. Yeni prefix **çakışmaz** ve **daha önce kullanılmış/rezerve edilmiş olamaz**
+     (eski prefix kalıcı olarak rezerve kalır).
+  6. İşlem sonrası **iki prefix de anlamlı kalır** (eski public ID'ler eski prefix'i
+     taşımaya devam eder) → destek ve denetim aramasında her iki biçim de çalışır.
+- **Yeniden değerlendirme tetikleyicileri:** (a) yasal unvan/birleşme değişikliği
+  sözleşmeyle prefix değişimini zorunlu kılıyorsa; (b) müşteri prefix'i marka olarak
+  kullanıyorsa ve değişim talebi **≥ 3 kez** tekrarlanmışsa; (c) prefix kaynaklı
+  destek karışıklığı ölçülürse (yanlış kiracıya yönlendirilen **≥ 5 talep**).
+- **Gerekçe:** Kimlik değişmezliği, denetim izinin ve dış referansların (destek
+  talepleri, entegrasyonlar, raporlar) bütünlüğünün ön koşuludur. İstisna mekanizmasını
+  erken kodlamak, "prefix değiştirilebilir" beklentisi yaratır ve kimlik kaymasını
+  normalleştirir.
+- **Şema/migration etkisi:** **Yok** — OD25/M5/M27/F1 planı değişmez; istisna bir iş
+  kalemi olarak **eklenmez** (v1 kapsamı dışı). Migration planındaki eksik görülen
+  küçük işler (üretim fonksiyonları, format `CHECK`, rezerve adlar, platform
+  kullanıcısı prefix'i) `docs/DATABASE.md` M2/M5'e **kural** olarak eklendi.
+- **Güvenlik etkisi:** Prefix değişimi bir yetki yükseltme yolu (privilege escalation)
+  değildir; istisna prosedürü platform-only, denetimli ve `public_id` sabit tutulduğu
+  için kimlik üzerinden erişim kazanılamaz (OD25 madde 6).
+- **Mevcut kodla çakışma:** Yok — prefix bugün hiç yok; uygulanacak karar M5/M27/F1'de.
+- **Seçenekler (kayıt için):** (A) v1'de istisna yok. (B) Denetimli platform "prefix
+  göçü". (C) Yeniden üretim (tüm public ID'ler değişir). → **(A) seçildi**; (B)
+  yalnızca tetikleyici gerçekleşirse ayrı kararla; (C) **reddedildi** (denetim izi ve
+  dış referanslar kırılır).
 
 ---
 
@@ -1455,8 +1510,9 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **Karar durumu:** **OD1–OD4 ve OD19–OD25 KAPATILDI** (2026-09-11). Açık:
-  **17 karar** (OD5–OD18, OD26–OD28). **Engelleyici açık karar yoktur**; OD27
-  (tüzel kişilik/`companies`) v1 kapsamını belirlediği için **kod yazımından önce**
-  netleştirilmelidir. Açık **SECURITY FINDING**'ler: F7 (soft-delete yetkiyi
-  kaldırmıyor) ve F9 (denetim satırı `SET_NULL` ile güncellenebiliyor).
+- **Karar durumu:** **OD1–OD4, OD19–OD25, OD27 ve OD28 KAPATILDI** (2026-09-11).
+  Açık: **15 karar** (OD5–OD18, OD26). **Engelleyici açık karar yoktur**; OD5
+  (departman yöneticisi kapsamı) organizasyon modülü kodlanmadan önce netleşmelidir.
+  Açık **SECURITY FINDING**'ler: F7 (soft-delete yetkiyi kaldırmıyor), F9 (denetim
+  satırı `SET_NULL` ile güncellenebiliyor) ve F10 (prefix/slug benzerliği —
+  typosquatting, Düşük).
