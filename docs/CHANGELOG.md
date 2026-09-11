@@ -3,6 +3,80 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.20.0] — 2026-09-11 — OD5 kapandı: `dept_manager` organizasyon kapsamı kesinleşti (yalnızca doküman)
+
+**Baseline (son commit `827fef2`):** çalışma ağacı temiz. Bu girişte **kod, migration
+veya veritabanı değişikliği YAPILMADI** — yalnızca mimari karar (OD5) kesinleştirildi
+ve ilgili dokümanlar güncellendi.
+
+### Karar (özet)
+
+- **OD5 — KAPALI ✅:** `dept_manager` kapsamı = **atandığı organizasyon birimi + tüm alt
+  birimleri** (kapsam kodu **`UNIT`**, seçenek A). `UNIT_DIRECT` kodu korunur,
+  `dept_manager` için kapalı davranış `UNIT`'tir; "birim bazında yapılandırma" ihtiyacı
+  **yeni kod üretmeden** karşılandı: kapsam **tipi** rol düzeyinde (`roles.scope_type`),
+  **birim** atama düzeyinde (`user_roles.scope_org_unit_id`).
+- **İki eksen ayrı:** RBAC *"hangi işlem"*, kapsam *"hangi kayıt"* → karar
+  **`izin ∧ kapsam`**; kapsam izin **üretmez**. Biri yoksa **reddet** (fail-closed).
+- **NULL = fail-closed:** `UNIT`/`UNIT_DIRECT` tipli rolde `scope_org_unit_id IS NULL`
+  ise atama **hiç kapsam üretmez**; NULL **asla** "tüm kiracı" değildir. Kiracı geneli
+  yetki `TENANT` tipli rolle (mevcut kodlar: `tenant_admin`, `tenant_officer`).
+- **Alt ağaç:** OD24 modeli — `departments.parent_id` **adjacency list** + `WITH
+  RECURSIVE` CTE; **closure/materialized path/nested set yok**; derinlik **20**; döngü
+  **DB tetikleyicisiyle** engellenir.
+- **Çoklu atama:** aynı kiracı içinde birden fazla atama **birleşir (union)**; **kiracılar
+  arası birleşim yok**; soft-delete edilmiş/süresi geçmiş atama ve pasif kullanıcı
+  **kapsam üretmez**; kullanıcı kendi kapsamını **yükseltemez**.
+- **`employee_manager` ≠ `dept_manager`:** biri çalışan bazlı raporlama/onay ilişkisi,
+  diğeri RBAC rolünün birim kapsamı; **biri diğerini türetmez** (birincil yönetici olmak
+  izin seti kazandırmaz, `dept_manager` olmak `employee_manager` satırı üretmez).
+  `departments.manager_employee_id` de yetki üretmez.
+- **Kişisel veri sınırı:** "çalışanı yönetebilir" ≠ "K2/K3'ü görebilir"; `employees` PII
+  içermez, K2/K3 için ayrı izin + koşul (maskeleme, `MFA_OK`, `PURPOSE_GIVEN`,
+  gerekirse `GRANT_VALID`) aynen geçerli.
+- **Soft-delete/restore:** birim silinirse atama satırı kalır ama **kapsam üretmez**;
+  birim restore edilse bile atama **sessizce** yeniden etkinleşmez (OD21) — açık
+  `*.restore` + `role.manage` + denetim kaydı gerekir; "silinmiş birim + etkin atama"
+  tutarlılık denetiminde raporlanır (otomatik onarım yok).
+- **Taşıma (move):** kapsam **güncel** alt ağaçtır → taşıma kapsamı yeniden hesaplar
+  (büyüyebilir/küçülebilir); **bilinçli** kabul edildi. Karşı önlemler: önbellek
+  geçersiz kılma + taşımanın **yüksek etkili denetim olayı** olarak kaydı + döngü/derinlik
+  ihlalinin DB'de reddi.
+
+### Doğrulanan (ölçüm)
+
+- **Kod tarafı çakışma yok:** `hr.roles` kolonları `id, created_at, updated_at,
+  deleted_at, name, code, role_type, description, is_assignable, tenant_id` — **`scope_type`
+  yok**; `hr.user_roles` — **`scope_org_unit_id` yok**; mevcut izin çözümleyicisi
+  (`apps/rbac/services/permissions.py`) **yalnızca izin kodlarını** hesaplar, kapsam
+  boyutunu **hiç** uygulamaz. Yani OD5 yeni bir katman tanımlar, mevcut davranışı
+  bozmaz.
+- **Kapsam kodları belgede mevcuttu** (`SYS`, `TENANT`, `UNIT`, `UNIT_DIRECT`,
+  `ASSIGNED`, `SELF`) → **yeni kod/ isim uydurulmadı**.
+- Kiracı rol kataloğunda `manager` şablonu (7 izin) ve `dept_manager` henüz **yok**;
+  M7 göçü OD5 kapandığı için **uygulanabilir** durumda.
+
+### Kalan / uygulanmadı (bilinçli)
+
+`M7` (rol kodu göçü + kapsam tipi ataması), `M8` (`roles.scope_type`), `M9`
+(`user_roles.scope_org_unit_id` + guard + `NULLS NOT DISTINCT` benzersizlik),
+`M10–M13` (departments/positions/employees/employee_manager), **organization scope
+resolver** ve testleri bu turda **uygulanmadı** — karar sonucunda bekleyen işler olarak
+`docs/DATABASE.md` M7/M8/M9 satırlarına ve `docs/AUTHORIZATION.md` bölüm 13'e yazıldı.
+
+### SECURITY FINDING
+
+**Yeni bulgu yok.** Karar, iki bilinen riske karşı önlem içeriyor: (a) bayat kapsam
+önbelleği (taşıma sonrası eski alt ağaç) → önbellek geçersiz kılma + test, (b) birim
+taşıma ile **dolaylı** kapsam büyümesi → denetim kaydı + yalnızca açık yönetim işlemiyle
+gerçekleşmesi.
+
+### OPEN DECISION
+
+**Yeni OD açılmadı.** OD5 kapandı; açık karar sayısı **14 → 13** (OD6–OD18). Paket
+kapalı kararlarla uyumludur (OD5, OD21/K25 soft-delete, OD24 ağaç, OD27 tek tüzel kişilik,
+AUTHORIZATION §4.3/§4.4/§6.2A).
+
 ## [0.19.0] — 2026-09-11 — Platform authorization paketi (M6 + M31–M33)
 
 **Baseline (son commit `d8b3906`):** `bash scripts/run_tests.sh` → **207 passed**

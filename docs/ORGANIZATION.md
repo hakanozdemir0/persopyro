@@ -65,6 +65,11 @@ ne" sorusu (K2/K3) **farklı izinlerle** yanıtlanır.
   TTL ile tutulur; birim taşıma veya yönetici değişiminde **geçersiz kılınır**.
 - **Geri dönüş tetikleyicileri:** derinlik > 20, kiracı başına birim > 5.000 veya
   kapsam sorgusu p95 > 50 ms → closure tablosu ayrı bir kararla değerlendirilir.
+- **Taşıma ve kapsam (OD5 kapalı):** dept_manager kapsamı **güncel alt ağaçtır**;
+  birim taşındığında kapsam yeni yapıya göre yeniden hesaplanır (büyüyebilir/
+  küçülebilir). Bu nedenle taşıma (a) önbelleği **geçersiz kılar** ve (b) **yüksek
+  etkili denetim olayı** olarak kaydedilir (aktör, eski/yeni `parent_id`, gerekçe).
+  Döngü/derinlik ihlali veritabanında reddedilir (bölüm 4).
 
 ## 4. Döngü ve tutarlılık kuralları (veritabanı garantileri)
 
@@ -96,7 +101,7 @@ mesajı için).
 |---|---|
 | `tenant_admin` | Kiracının tamamı |
 | `tenant_officer` | Yetkilendirildiği modüller (şirket geneli, izin bazlı) |
-| `dept_manager` | Kendi birimi **ve alt birimleri** (kapsam: `UNIT`) ❓OD5 |
+| `dept_manager` | Kendi birimi **ve alt birimleri** (kapsam: `UNIT`) ✅ **OD5 kapalı (2026-09-11)** — kapsam kaynağı `user_roles.scope_org_unit_id`; NULL ise **fail-closed** |
 | `employee` | Kendi kaydı + kendi biriminin **genel** bilgileri (ad, unvan, birim) |
 
 - Organizasyon şeması görünümü (ağaç) **kişisel veri içermez**: ad yerine **genel
@@ -104,6 +109,27 @@ mesajı için).
 - Onay yönlendirmesi: `approval_steps` adımları ya bir **kişiye** (`approver_user_id`)
   ya da bir **role/kapsama** (`approver_role_code` + `UNIT` kapsamı) bağlanır; onaylayan
   kendi talebini onaylayamaz (`SEPARATE_ACTOR`).
+
+### 5.1 Kapsam kararı (OD5 — kapalı) ✅
+
+- **Dept_manager kapsamı: atandığı birim + tüm alt ağaç (`UNIT`)**; kapsam kaynağı
+  `hr.user_roles.scope_org_unit_id`. `scope_org_unit_id IS NULL` ise atama **hiçbir
+  kapsam üretmez** (fail-closed; NULL "tüm tenant" **değildir** — kiracı geneli yetki
+  `TENANT` tipli rolle, `tenant_admin`/`tenant_officer`).
+- **Karar kuralı:** `izinli = (izin kodu var) ∧ (kayıt etkin kapsamda)`. Kapsam izin
+  üretmez; izin de kapsam üretmez. Biri yoksa **reddet**.
+- **Çoklu atama:** aynı kiracı içinde birden fazla atama **birleşir (union)**;
+  kiracılar arası birleşim **yok**. Soft-delete edilmiş, süresi geçmiş atama veya
+  pasif kullanıcı **kapsam üretmez**.
+- **Kapsam = güncel alt ağaç:** birim taşınırsa kapsam yeni yapıya göre yeniden
+  hesaplanır (önbellek geçersiz kılınır) ve taşıma **yüksek etkili denetim olayı**
+  olarak yazılır.
+- **Kişisel veri:** "çalışanı yönetebilir" ≠ "K2/K3'ü görebilir". `employees` PII
+  içermez; kişisel veri ayrı izin + koşul (maskeleme, `MFA_OK`, `PURPOSE_GIVEN`,
+  gerekirse `GRANT_VALID`) gerektirir — kapsam bu kuralları **gevşetmez**.
+- **Soft-delete/restore:** birim silinirse atama kapsam üretmez; birim **restore
+  edilse bile** atama **sessizce** yeniden etkinleşmez (OD21) — açık `*.restore` +
+  denetim kaydı gerekir.
 
 ## 6. Birincil yönetici ve ek ilişkiler
 
@@ -115,6 +141,20 @@ mesajı için).
 - Yetki devri (delege) ayrı bir türdür ve **sürelidir**; süre bitince ilişki
   kendiliğinden geçersiz olur.
 - Yönetici ataması **yetki etkisi taşıdığı için** denetim kaydına yazılır.
+
+**`employee_manager` ≠ `dept_manager` (OD5 ile kesinleşti ✅):**
+
+| | `employee_manager` | `dept_manager` |
+|---|---|---|
+| Ne tanımlar | **Çalışan bazlı** raporlama/onay ilişkisi (`primary`/`secondary`/`delegate`, tarihli) | **RBAC rolünün organizasyon birimi kapsamı** (`UNIT`) |
+| Yetki üretir mi | **Hayır** — yalnızca ilişki/onay yönlendirmesi | **Evet**, yalnızca RBAC izin setiyle birlikte (izin ∧ kapsam) |
+| Kaynağı | `employee_manager` satırı | `user_roles` + `scope_org_unit_id` |
+
+- Bir çalışanın **birincil yöneticisi olmak `dept_manager` izin seti KAZANDIRMAZ**;
+  **`dept_manager` rolü olmak `employee_manager` satırı ÜRETMEZ**.
+- `departments.manager_employee_id` (birim sorumlusu) da **yetki üretmez**.
+- İki bilgi onay akışında **birlikte** kullanılabilir (ör. `ASSIGNED` koşulu +
+  `UNIT` kapsamı) ama **authorization kaynakları ayrıdır**.
 
 ## 7. Çalışanın yaşam döngüsü
 
@@ -177,7 +217,7 @@ enterprise satışlarda ardışık ≥ 2 anlaşma bu nedenle bloke olursa; tek k
 
 | # | Konu | Durum |
 |---|---|---|
-| **OD5** | Departman yöneticisinin kapsamı: alt ağaç mı, yalnızca doğrudan birim mi? | Açık (öneri: alt ağaç) |
+| **OD5** | Departman yöneticisinin kapsamı: alt ağaç mı, yalnızca doğrudan birim mi? | **Kapalı** (2026-09-11) — **(A) alt ağaç** (`UNIT`): atandığı birim + tüm alt birimler; kapsam kaynağı `user_roles.scope_org_unit_id`, NULL **fail-closed** (asla "tüm tenant" değil); ayrıntı `docs/AUTHORIZATION.md` OD5 §5.1–5.11 |
 | **OD27** | Kiracı içinde birden fazla tüzel şirket (`companies`) | **Kapalı** (2026-09-11) — v1 tek tüzel kişilik; gelecek yolu ve tetikleyiciler bölüm 9'da |
 | **OD24** | Ağaç mekanizması ve döngü garantileri | **Kapalı** (2026-09-11) |
 | — | Organizasyon ağacı için gerçek ölçüm (derinlik, birim sayısı, kapsam sorgu süresi) | Uygulama sonrası ölçülecek (geri dönüş tetikleyicileri bölüm 3'te) |

@@ -198,6 +198,17 @@ barındırma, kiracı RLS politikasını platform için gevşetme.
 Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 
 - Model **RBAC + kapsam + kapalı koşul kümesi**; varsayılan **reddetme** ✅.
+- **Kapsam (OD5 — kapalı ✅, 2026-09-11):** karar **izin ∧ kapsam**dır; kapsam izin
+  üretmez, izni daraltır. `dept_manager` kapsamı **atandığı birim + tüm alt ağaç**
+  (`UNIT`; OD24 adjacency + recursive CTE, derinlik ≤ 20) ve kaynağı
+  `hr.user_roles.scope_org_unit_id`'dir. **`scope_org_unit_id IS NULL` → fail-closed**
+  (NULL **asla** "tüm kiracı" değildir; kiracı geneli yetki `TENANT` tipli rolden gelir).
+  Aynı kiracı içindeki çoklu atamalar **birleşir** (kiracılar arası birleşim **yok**);
+  silinmiş/süresi geçmiş atama ve silinmiş birim **kapsam üretmez**; birim taşıma
+  kapsamı yeniden hesaplar → **önbellek geçersiz kılınır** ve taşıma **denetim kaydına**
+  yazılır (yetki kapsamı büyüyebildiği için). Kapsam **kişisel veri erişimi üretmez**:
+  `employees` PII içermez, K2/K3 için ayrı izin + koşul (`MFA_OK`, `PURPOSE_GIVEN`,
+  maskeleme) aynen geçerlidir (§7).
 - Kod `<kaynak>.<işlem>` biçimindedir ✅; kapsam ve koşul koda gömülmez.
 - Çakışmada **reddet kazanır** ✅ (kişiye özel yasak, rol iznini geçersiz kılar).
 - Yetki kontrolü dört katmanda: uç nokta → servis → nesne → veritabanı (RLS) ✅.
