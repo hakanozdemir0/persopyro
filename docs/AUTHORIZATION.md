@@ -880,6 +880,15 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
 
 ### OD3 — Platform kullanıcılarının barındırılması — **KAPALI** ✅ (2026-09-11)
 
+**Uygulama durumu (2026-09-11 — M1–M5):** **şema/rol tarafı UYGULANDI ✅** —
+`platform.users` (kiracı tablosuyla birleşmez; `tenant_id` kolonu **yok**,
+`hr.users` FK'si **yok**, `is_staff`/`is_superuser` **yok**), `platform.roles`
+(kapalı küme: `superadmin`, `platform_admin`), `platform.role_permissions`
+(`hr.permissions` kataloguna bağlanır, `hr.roles`'a **bağlanmaz**),
+`platform.user_roles`; ayrı DB rolü `persopyro_platform`
+(`NOBYPASSRLS`) ve `persopyro_app` için platform şemasında **sıfır yetki**.
+Kalan: erişim talebi/onay katmanı (M17–M19) ve platform uç noktaları.
+
 - **KARAR:** SUPERADMIN ve ADMIN için **ayrı `platform_users` modeli** kullanılır.
   Bu kullanıcılar **kiracıya bağlı olmaz**; kiracı kullanıcıları ile platform
   kullanıcıları **aynı kimlik/kiracı tablosunda zorla birleştirilmez**. Kiracı
@@ -1101,6 +1110,15 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
 
 ### OD20 — Kiracı üst verisinin sahibi (platform kaydı) — **KAPALI** ✅ (2026-09-11)
 
+**Uygulama durumu (2026-09-11 — M4):** **UYGULANDI ✅** — `platform.tenant_registry`
+(minimum alanlar; PII kopyalanmaz), tek yönlü `hr.tenants` → registry yansısı
+`platform.sync_tenant_registry()` `SECURITY DEFINER` tetikleyicisiyle **aynı işlem
+içinde**; yansı yazılamazsa kaynak yazımı **geri alınır** (fail-closed; regresyon
+testi kasten çakıştırılmış registry satırıyla yapılır). Ters yön **yok**: platform
+rolü `hr.tenants` üzerinde yazma yetkisine sahip değil; registry'nin
+`plan_code`/`billing_ref`/`internal_note` alanları yansı tarafından **ezilmez**.
+Kalan: M21 tutarlılık testi + tutarsızlık düzeltme akışı.
+
 - **KARAR:** `hr.tenants` **canonical / source-of-truth** kalır. `platform.tenant_registry`
   tenant verisinin ikinci tam kopyası **değildir**; platform operasyonları için gereken
   **minimum referans indeksi**dir. **İki bağımsız mutable tenant kaynağı oluşturulmaz.**
@@ -1197,6 +1215,18 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   reddedildi.**
 
 ### OD22 — Platform API token'larının yeri ve kuralları — **KAPALI** ✅ (2026-09-11)
+
+**Uygulama durumu (2026-09-11 — M3):** **şema/guard tarafı UYGULANDI ✅** —
+`platform.tokens`: ham token **yok** (SHA-256 özeti, `UNIQUE`); `platform_user_id`
+(owner) ve `purpose` (≥10 karakter) zorunlu; `scope` NOT NULL ve **boş olamaz**;
+joker `*` yasak; `token_kind` kapalı küme; `expires_at` NOT NULL **ve** TTL tavanı
+DB `CHECK`'iyle zorlanır (`interactive` ≤ 24 saat, `service` ≤ 90 gün — süresiz
+token imkânsız); iptal **tek yönlü** ve kayıt silinmez; kapsam/purpose/süre/tür/
+hash/owner **değişmez**; **service token superadmin izin kümesiyle üretilemez**
+(tetikleyici). Servis katmanı: `apps/platform/services.py`
+(`validate_purpose`/`validate_scope`/`validate_ttl`/`issue_platform_token`/
+`revoke_platform_token`/`token_is_usable`). Kalan: platform oturum/açma-kapama
+uç noktaları ve `last_used_at` güncelleme yolu (bu paketin kapsamı dışında).
 
 - **KARAR:**
   1. Platform API/service token'ları **yalnızca `platform.tokens`** tablosunda tutulur.
@@ -1345,6 +1375,16 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   (B)/(C) v1 için gereksiz karmaşıklık, tetikleyicilerle ertelendi.
 
 ### OD25 — Tenant slug ve public user ID prefix ilişkisi — **KAPALI** ✅ (2026-09-11)
+
+**Uygulama durumu (2026-09-11 — M5):** **UYGULANDI ✅** — `hr.tenants.public_id_prefix`
+(nullable ekle → geri doldur → `NOT NULL` + **tam UNIQUE** + format/rezerve `CHECK`
++ immutability tetikleyicisi) ve `hr.users.public_id` (`<prefix>-<8×Crockford>`,
+**global** UNIQUE indeks, format `CHECK`, immutability tetikleyicisi). Üretim
+fonksiyonları: `hr.generate_public_id_prefix(slug)`, `hr.generate_public_id(tenant_id)`,
+`hr.crockford_suffix(n)` (Crockford alfabesi: `I/L/O/U` yok), `hr.is_reserved_name()`;
+rezerve adlar (`www, api, app, admin, portal, mail, support, hr, platform, plt,
+system`) slug/prefix olarak **reddedilir**; kiracı bağlamı yoksa public ID
+**üretilmez** (fail-closed). Ölçüm: `demo-3A8EAQ9B`, `askida-1CY29715`.
 
 - **KARAR:**
   1. Public ID ön eki **canlı `slug` değerine bağlı değildir**: `hr.tenants`'a
@@ -1593,6 +1633,15 @@ tablolar **değişmez**; uygulanmış migration dosyaları **değiştirilmez**.
   duran kolon" yarattığı için reddedildi.
 
 ### OD28 — `public_id_prefix` yeniden markalama istisnası — **KAPALI** ✅ (2026-09-11)
+
+**Uygulama durumu (2026-09-11 — M5):** **UYGULANDI ✅ (v1: istisna yok)** — prefix
+**immutable** (DB tetikleyicisi `tenants_public_id_prefix_guard`); **değiştirme uç
+noktası yok**; slug/rebrand değişimi prefix'i ve mevcut `public_id`'leri değiştirmez
+(regresyon testi: slug değişir, prefix ve eski kullanıcı kimlikleri sabit kalır, yeni
+kullanıcı **eski** prefix'le üretilir); prefix **tam UNIQUE** olduğu için soft-delete
+edilen kiracının prefix'i **kalıcı rezerve**dir (yeniden tahsis edilmez). İstisna
+mekanizması (platform operasyonu + denetim + eski prefix rezerve) **kodlanmadı** —
+karar gereği v1'de yok.
 
 - **KARAR (v1):** `public_id_prefix` **immutable**dır.
   - Rebranding / tenant adı / `slug` değişmesi **mevcut prefix'i değiştirmez**,

@@ -3,6 +3,226 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.18.0] — 2026-09-11 — Platform temeli (M1–M5) + kalıcı sıfırdan kurulum doğrulaması
+
+**Baseline (son commit `45db412`):** `bash scripts/run_tests.sh` → **171 passed**;
+çalışma ağacı temiz; migration durumu tam uygulanmış (`accounts/0004`).
+
+Bu girişte **iki kontrollü iş** yapıldı: (A) sıfırdan kurulum doğrulamasının kalıcı
+betiği, (B) `docs/DATABASE.md` M1–M5 platform temel şeması. **Kapsam dışı ve
+dokunulmadı:** organizasyon tabloları, employee/department/position, yeni tenant RBAC
+tasarımı, açık OD5–OD18 kararları, mevcut tenant RLS politikaları. Hiçbir uygulanmış
+migration değiştirilmedi; **hiçbir yere `BYPASSRLS` verilmedi**.
+
+### A — `scripts/verify_fresh_install.sh` (yeni, kalıcı) ✅
+
+Geçici `/tmp/fresh_verify.sh` mantığı repoya taşındı ve sertleştirildi:
+
+- **Disposable DB:** `persopyro_verify_<UTC-zaman>_<pid>` (rastgele/benzersiz); hedef
+  ad her kritik komutta **açıkça** verilir; `.env`'in `POSTGRES_DB`'sini ezmesi
+  engellenir (`DJANGO_ENV_FILE=/dev/null` + açık `POSTGRES_*` env'i).
+- **Güvenlik kalkanı:** `hedef_db_dogrula()` hedef adı `persopyro_verify...` desenine
+  uymuyorsa **veya canlı DB'ye eşitse** betiği anında durdurur; canlı DB asla DROP/RESET
+  edilmez.
+- **Cleanup trap:** hata olsa da çalışır (EXIT trap) — runserver süreci + benzersiz
+  port temizlenir, geçici DB (`WITH (FORCE)`) ve `test_<db>` silinir, yeniden denenir,
+  kalan sayısı raporlanır, geçici `.env`/günlük silinir.
+- **Ölçüm sağlamlığı:** yok olan tablo yüzünden patlamaz (`to_regclass`); süreç/port
+  artığı kalmaz (benzersiz port + PID + `pkill` yedek kalkanı).
+- **Kapsam:** migrate sıfırdan → `createcachetable` → `scripts/02_grant_app_privileges.sql`
+  → (varsa süper kullanıcı ile `scripts/03_platform_roles.sql`) → yetki ölçümleri
+  (app platform'da yetkisiz; OD19 dört teknik tablo; M30 `api_tokens`; RLS/FORCE ve
+  politika ifadeleri) → `manage.py check` + `makemigrations --check` + denetim
+  komutları → demo verisi + **gerçek HTTP** (health 200, ready 200, `/admin/` 404,
+  token 201 / logout 204 / aynı token 401) → **tam test suite** → özet + temizlik.
+- **CI uyumu:** mutlak geliştirici yolu yok (repo kökü betiğin konumundan, `PYTHON`
+  otomatik: `.venv` varsa o, yoksa `python3`); `SUPER_USER_CMD`, `VERIFY_PORT`,
+  `KEEP_DB`, `SKIP_TESTS` değişkenleriyle yapılandırılabilir.
+- **Ölçüm (bu makinede, gerçek çalıştırma):** **205 passed, 2 skipped**; tüm adımlar
+  `OK`; sonuç `SONUÇ: OK — sıfırdan kurulum doğrulandı (canlı veritabanı değiştirilmedi)`;
+  **kalan geçici veritabanı = 0**; açık süreç/port yok.
+
+### M1 — `platform` şeması + `persopyro_platform` rolü ve yetkileri ✅
+
+- Şema **migration ile** oluşturulur (`CREATE SCHEMA IF NOT EXISTS platform
+  AUTHORIZATION persopyro_owner`; `REVOKE ALL ... FROM PUBLIC`) → sıfırdan kurulumda
+  tek başına çalışır.
+- Rol ve yetki turu **`scripts/03_platform_roles.sql`** (yeni, **süper kullanıcı**
+  gerektirir: `CREATE ROLE`; `persopyro_owner` `NOCREATEROLE`'dur). Betik saf SQL
+  (psql'e özgü komut yok) ve **idempotent**; parola **atamaz** (sır repoya yazılmaz).
+- Rol: `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`. `PUBLIC` şemada yetkisiz.
+- Yetki turu **tablo bazlı allowlist** (`users, roles, role_permissions, user_roles,
+  tokens, tenant_registry`); **`GRANT ALL ON ALL TABLES IN SCHEMA platform`
+  kullanılmaz** ve platform için **`ALTER DEFAULT PRIVILEGES` tanımlanmaz**.
+- `persopyro_app` (kiracı runtime yolu): platform şemasında **USAGE dâhil hiçbir
+  yetki yok** — `scripts/02_grant_app_privileges.sql`'e açık **daraltma** bloğu
+  eklendi (yeni platform bölümü).
+
+### M2 — `platform.users` / `roles` / `role_permissions` / `user_roles` ✅
+
+`apps/platform/migrations/0001_od3_platform_users_roles.py` (ham SQL).
+
+- `platform.users`: **`tenant_id` kolonu yok**, **`hr.users` FK'si yok**,
+  `is_staff`/`is_superuser`/`groups` **yok** (OD19/OD3: Django yetki alanları platform
+  yetkisi değildir); `public_id` = `plt-<8×Crockford>` (rezerve `plt`, OD27/OD28);
+  e-posta global UNIQUE + küçük harf `CHECK`; kilitlenme/MFA kolonları.
+- `platform.roles`: kodlar **kapalı küme** (`CHECK code IN ('superadmin',
+  'platform_admin')`) + UNIQUE; seed **idempotent** — **demo kullanıcıya bağlanmaz**.
+- `platform.role_permissions`: FK → `platform.roles` + **`hr.permissions`** (paylaşılan
+  katalog); **`hr.roles`'a bağlanmaz**.
+- `platform.user_roles`: FK → `platform.users` + `platform.roles`; `expires_at`
+  opsiyonel ama `> granted_at`.
+- `apps/platform/` uygulaması: **ORM modeli yok** (platform nesneleri `platform`
+  şemasında; Django'nun `db_table` şema hack'i yerine ham SQL + servis katmanı
+  bilinçli seçildi), `constants.py` (kapalı kümeler) + `services.py` (OD22 token
+  kuralları).
+
+### M3 — `platform.tokens` (OD22 birebir) ✅
+
+`0002_od22_platform_tokens.py` + `apps/platform/services.py`.
+
+- Ham token **saklanmaz**: yalnızca SHA-256 özeti, `UNIQUE`; düz metin yalnızca
+  üretim anında döner.
+- `platform_user_id` (owner) ve `purpose` (≥10 karakter) zorunlu; `scope text[]`
+  NOT NULL **ve boş olamaz** (`cardinality >= 1`), joker `*` yasak; `token_kind`
+  kapalı küme.
+- `expires_at` **NOT NULL** + **TTL tavanı DB `CHECK`'iyle**: `interactive` ≤ 24 saat,
+  `service` ≤ 90 gün → **süresiz token imkânsız**; `expires_at > created_at`.
+- İptal **tek yönlü** (`revoked_at`/`revoked_reason`, kapalı küme, ikisi birlikte
+  NULL/NOT NULL); kayıt **silinmez**; kapsam/purpose/süre/tür/hash/owner **değişmez**
+  (tetikleyici).
+- **`service` token superadmin izin kümesiyle üretilemez** — `platform.role_permissions`
+  + `hr.permissions` üzerinden kontrol eden `BEFORE INSERT` tetikleyicisi.
+- Endpoint **eklenmedi** (bu paketin kapsamı değil); yalnızca şema/guard/servis/test.
+
+### M4 — `platform.tenant_registry` + tek yönlü yansı (OD20) ✅
+
+`0003_od20_tenant_registry.py`.
+
+- Yalnızca **minimum** alanlar: `tenant_id, slug, domain, status, max_users,
+  max_storage_mb, plan_code, billing_ref, internal_note, created_at, updated_at,
+  deleted_at`. **PII kopyalanmaz** (`name/legal_name/tax_number/email/phone/address/
+  country/city/settings` yok) — test kolon kümesini tam olarak sabitler.
+- `hr.tenants` **canonical** kalır; yansı `platform.sync_tenant_registry()`
+  `SECURITY DEFINER` tetikleyicisiyle **aynı işlem içinde** yazılır; fonksiyonun
+  `search_path`'i **sabit** (`pg_catalog, pg_temp`) ve tüm nesneler tam nitelikli
+  (search_path ele geçirme / enjeksiyon yüzeyi yok).
+- **Fail-closed kanıtı:** yansı yazımı başarısız olursa (test: kasten çakıştırılmış
+  registry `slug`'ı) kiracı INSERT'i **tümden geri alınır** — `hr.tenants` ve
+  `tenant_directory`'de satır oluşmaz (regresyon testi).
+- **Ters yön yok:** platform rolü `hr.tenants` üzerinde INSERT/UPDATE/DELETE
+  yetkisine sahip değil (ölçüm + test); platform fonksiyonlarının gövdesinde
+  `hr.tenants` yazımı yok.
+- `plan_code`/`billing_ref`/`internal_note` **tek sahibi platformdur** — yansı bu
+  alanları **ezmez** (test).
+- Backfill: mevcut kiracılar (ölçüm: 2 kiracı — `demo` aktif, `askida` suspended)
+  registry'ye taşındı; dizin ve registry satır sayıları eşit.
+
+### M5 — `hr.tenants.public_id_prefix` + `hr.users.public_id` (OD25/OD28) ✅
+
+`tenancy/0008_od25_public_id_helpers.py` (fonksiyonlar) →
+`tenancy/0009_od25_public_id_columns.py` (prefix) → `accounts/0005_od25_user_public_id.py`
+(public ID). M5 iki uygulamaya dağıldığı için üç migration'a bölündü; sıra bağımlılığı
+ölçülerek belirlendi (aşağıdaki not).
+
+- `hr.tenants.public_id_prefix`: nullable ekle → **mevcut kiracılar geri dolduruldu**
+  → `NOT NULL` + **tam UNIQUE** (`tenants_public_id_prefix_key`) + format `CHECK`
+  (`^[a-z0-9]{3,20}$`) + rezerve `CHECK` + **immutability tetikleyicisi**
+  (`tenants_public_id_prefix_guard`); üretim tetikleyicisi
+  (`tenants_public_id_prefix_assign`, slug'tan türetir).
+- **Kalıcı rezerve:** UNIQUE **tam** (kısmi değil) → soft-delete edilen kiracının
+  prefix'i yeniden tahsis edilmez (test).
+- `hr.users.public_id`: `<prefix>-<8×Crockford>`; **global UNIQUE indeks**
+  (`users_public_id_uniq_idx`), format `CHECK` (`^[a-z0-9]{3,20}-[0-9A-HJKMNP-TV-Z]{8}$`),
+  immutability tetikleyicisi; üretim `hr.generate_public_id(tenant_id)` +
+  `hr.crockford_suffix(n)` (alfabe `I/L/O/U` **hariç**).
+- **Fail-closed:** kiracı bağlamı yoksa `generate_public_id` `NULL` döner →
+  `NOT NULL` ihlali; sessizce kapsamsız kimlik üretilmez (test).
+- **Rezerve adlar** (`www, api, app, admin, portal, mail, support, hr, platform, plt,
+  system`) hem slug hem prefix olarak DB `CHECK`'iyle reddedilir (`hr.is_reserved_name`).
+- **Slug/rebrand değişimi kimliği kaydırmaz:** prefix ve mevcut kullanıcı
+  `public_id`'leri sabit kalır; yeni kullanıcı **eski** prefix'le üretilir (test).
+- Ölçüm (canlı DB, geri doldurma sonrası): prefix'ler `demo`, `askida`; kullanıcı
+  kimlikleri `demo-3A8EAQ9B`, `askida-1CY29715`; `public_id` boş kullanıcı **0**.
+
+### Yetki ölçümü (canlı DB) — platform ve korunan daraltmalar
+
+- `persopyro_app` → `platform` şeması: USAGE **`false`**; altı platform tablosunda
+  SELECT/INSERT/UPDATE/DELETE **hepsi `false`** (ölçüm + test).
+- OD19 daraltmaları korundu: `auth_permission`, `auth_group`, `auth_group_permissions`,
+  `django_admin_log` → app rolü tüm yetkilerde `false`.
+- M30 daraltmaları korundu: `hr.api_tokens` tablo UPDATE/DELETE `false`, kolon
+  UPDATE yalnızca `last_used_at`/`revoked_at`/`revoked_reason` `true`.
+- Platform rolü (`persopyro_platform`): ayrı rol, `NOSUPERUSER`/`NOBYPASSRLS`;
+  `hr` şemasında **yalnızca** `hr.permissions` SELECT (global katalog); kiracı
+  tablolarına yetki **yok** — RLS'e tabi kiracı erişimi erişim-onay katmanıyla
+  (M17–M19) açılır: **şema varlığı erişim yetkisi değildir**.
+
+### RLS / BYPASSRLS doğrulaması ✅
+
+- Kiracı RLS politikaları **değişmedi**: 7 tabloda `rls=true` **ve** `force_rls=true`,
+  her birinde `tenant_isolation` politikası var ve ifadesi `current_tenant_id`
+  içeriyor (test + fresh-install ölçümü).
+- `persopyro_app` ve `persopyro_platform`: `rolsuper=false`, `rolbypassrls=false`.
+- Platform tablolarına **tenant RLS kopyalanmadı** (platform şeması RLS'siz; kiracı
+  verisi taşımaz) — kiracı bağlamı enjekte ederek platform verisine ulaşılamaz.
+
+### Sıfırdan kurulum / mevcut DB yükseltme / HTTP smoke
+
+- **Mevcut DB upgrade:** `bash scripts/migrate.sh` → `tenancy/0008`, `tenancy/0009`,
+  `accounts/0005`, `platform/0001`, `platform/0002`, `platform/0003` uygulandı;
+  ardından 02 yetki betiği tazelendi.
+- **Sıfırdan kurulum:** `scripts/verify_fresh_install.sh` → **205 passed, 2 skipped**;
+  `/admin/` 404, health/ready 200, token 201 → logout 204 → aynı token 401; geçici
+  DB'ler silindi (kalan 0).
+- **HTTP smoke (canlı DB, `scripts/smoke.sh`):** health 200, ready 200, `/admin/` 404,
+  giriş 201, çıkış 204, çıkış sonrası token 401, geçersiz token 401, askıdaki kiracı
+  403 — **bozulma yok**.
+
+### Kalite
+
+`bash scripts/run_tests.sh` → **205 passed, 2 skipped** (baseline 171 → +34 yeni test);
+`ruff check .` → *All checks passed*; `bandit -q -r apps config` → **0 bulgu**;
+`manage.py check` temiz; `makemigrations --check --dry-run` → *No changes detected*.
+
+### Bilinçli sınırlar / doğrulanmayanlar (dürüstlük kaydı)
+
+1. **`persopyro_platform` rolü süper kullanıcı adımına bağlıdır.** Bu ortamda sudo
+   etkileşimli parola istediği için `scripts/03_platform_roles.sql` **çalıştırılmadı**;
+   rol oluşturma ve platform rolü yetki ölçümü testleri bu yüzden **atlandı (2 skip)**.
+   Betik ve testler hazırdır: `sudo -u postgres psql -d persopyro -f
+   scripts/03_platform_roles.sql` çalıştırıldığında testler atlanmadan geçer.
+   Şema/tablolar, `persopyro_app` daraltmaları, RLS ve registry davranışı **bu adımdan
+   bağımsız olarak** doğrulandı.
+   **Ek kanıt (rol dışı kısım gerçekten çalıştırıldı):** geçici DB'de (migrate
+   uygulanmış) `psql -f scripts/03_platform_roles.sql` sahip rolüyle çalıştırıldı;
+   **tek hata türü** `persopyro_platform` rolünün yokluğundan kaynaklanan
+   `permission denied to create role` + `role "persopyro_platform" does not exist`.
+   Başka hata/sözdizimi sorunu **yok**: şema/blok/allowlist döngüsü/fonksiyon turu ve
+   son doğrulama bloğu koştu (idempotent), geçici DB silindi (kalan 0). Yani betik
+   yalnızca süper kullanıcı adımına bağlıdır.
+2. **Platform → kiracı erişimi bu pakette yoktur** (kasıtlı): platform rolüne kiracı
+   tablolarında yetki verilmedi; erişim talebi/onay katmanı (M17–M19) ayrı iş kalemi.
+3. **`hr.generate_public_id` çakışma denemesi RLS görünürlüğüyle sınırlıdır**
+   (fonksiyon `SECURITY INVOKER`); global tekillik garantisi UNIQUE indekstir,
+   çakışmada INSERT **fail-closed** hata verir (olasılık ~32⁻⁸).
+4. **Sıra sapması (ölçülmüş, karar gereği değil teknik zorunluluk):** M2 migration'ı
+   `hr.crockford_suffix` kullandığı için **M5'in yardımcı fonksiyonları M2'den önce**
+   çalışır (`tenancy/0008` → `platform/0001`). M5'in kolon işleri farklı uygulamalara
+   ait olduğu için iki migration'a bölündü.
+
+### SECURITY FINDING
+
+**Yok.** Bu turda beklenmeyen yeni yetki yolu, RLS gevşemesi veya yetki yükseltme
+yüzeyi bulunmadı; platform sınırı **ölçüm + testle** sabitlendi (app için sıfır
+platform yetkisi, `NOBYPASSRLS`, allowlist yetki turu, fail-closed registry yansısı).
+
+### OPEN DECISION
+
+**Yok.** M1–M5 dokümanlardaki kapalı kararlarla (OD3/OD20/OD22/OD25/OD28) uygulandı;
+yeni karar gerekmedi. Not: M5'in `hr.permissions`'a `platform.*` kodları ekleyen
+**M6** iş kalemi hâlâ açıktır — bu turda kapsam dışı bırakıldı.
+
 ## [0.17.0] — 2026-09-11 — OD19 uygulandı: Django Admin ve `auth_*` paralel yetki yolu kapatıldı (M22–M22d)
 
 **Baseline (son commit `2e38952`):** `bash scripts/run_tests.sh` → **150 passed**

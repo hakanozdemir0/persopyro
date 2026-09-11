@@ -96,6 +96,9 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.rbac",
     "apps.audit",
+    # Platform katmanı (OD3/OD20/OD22/OD25): AYRI GÜVENLİK SINIRI — kiracı
+    # tablolarıyla birleşmez, ORM modeli yoktur (ham SQL migration + servis).
+    "apps.platform",
 ]
 
 MIDDLEWARE = [
@@ -159,6 +162,10 @@ DATABASES = {
 # Bağlanan rol ile yetkisi sınanan rolü karıştırmamak izolasyon denetiminin temelidir.
 APP_DB_ROLE = os.environ.get("POSTGRES_APP_ROLE", "persopyro_app")
 OWNER_DB_ROLE = os.environ.get("POSTGRES_OWNER_USER", "persopyro_owner")
+# Platform rolü (OD3/M1): AYRI güvenlik sınırı. Yalnızca süper kullanıcı
+# oluşturabilir (`scripts/03_platform_roles.sql`); kiracı runtime yolu bu rolle
+# bağlanmaz.
+PLATFORM_DB_ROLE = os.environ.get("PLATFORM_DB_ROLE", "persopyro_platform")
 
 # --- Kimlik doğrulama --------------------------------------------------------
 # Özel kullanıcı modeli. Bu ayar İLK MIGRATION'DAN ÖNCE yapılmalıdır; sonradan

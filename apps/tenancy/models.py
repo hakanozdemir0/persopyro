@@ -33,6 +33,16 @@ class Tenant(UUIDModel):
         blank=True,
         help_text="Varsa bu alan adı doğrudan kiracıya çözümlenir (ör. ik.acme.com).",
     )
+    public_id_prefix = models.CharField(
+        "public ID ön eki",
+        max_length=20,
+        blank=True,
+        editable=False,
+        help_text=(
+            "OD25/OD28: immutable; DB tetikleyicisi üretir ve değişimini "
+            "reddeder (yanlışlıkla ORM ile yazılan boş değer doldurulur)."
+        ),
+    )
     legal_name = models.CharField("tüzel unvan", max_length=250, blank=True)
     tax_number = models.CharField("vergi numarası", max_length=50, blank=True)
     email = models.EmailField("e-posta", max_length=190, blank=True)

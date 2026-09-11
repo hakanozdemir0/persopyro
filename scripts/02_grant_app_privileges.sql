@@ -119,3 +119,23 @@ BEGIN
     END IF;
 END
 $$;
+
+-- 6) Platform şeması (OD3/M1–M5) --------------------------------------------
+-- AYRICALIKLI SINIR: `persopyro_app` (kiracı runtime yolu) platform şemasını
+-- GÖREMEZ ve oradaki hiçbir tabloda yetkiye sahip olamaz. Bu bölüm bilinçli
+-- olarak **allowlist'tir**: `GRANT ALL ON ALL TABLES IN SCHEMA platform`
+-- KULLANILMAZ ve platform için `ALTER DEFAULT PRIVILEGES` TANIMLANMAZ (gelecekte
+-- eklenecek platform tabloları sessizce geniş yetki almamalı). Platform rolünün
+-- yetkileri `scripts/03_platform_roles.sql` içinde (süper kullanıcı) verilir.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'platform') THEN
+        REVOKE ALL ON SCHEMA platform FROM PUBLIC;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'persopyro_app') THEN
+            REVOKE ALL ON SCHEMA platform FROM persopyro_app;
+            REVOKE ALL ON ALL TABLES IN SCHEMA platform FROM persopyro_app;
+            REVOKE ALL ON ALL FUNCTIONS IN SCHEMA platform FROM persopyro_app;
+        END IF;
+    END IF;
+END
+$$;

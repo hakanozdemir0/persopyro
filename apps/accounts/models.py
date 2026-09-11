@@ -298,6 +298,16 @@ class User(UUIDModel, AbstractBaseUser):
         verbose_name="kiracı",
     )
     email = models.EmailField("e-posta", max_length=190)
+    public_id = models.CharField(
+        "public ID",
+        max_length=32,
+        blank=True,
+        editable=False,
+        help_text=(
+            "OD25: <kiracı-prefix>-<8×Crockford>; DB tetikleyicisi üretir, "
+            "sonradan değiştirilemez."
+        ),
+    )
     first_name = models.CharField("ad", max_length=100)
     last_name = models.CharField("soyad", max_length=100)
     phone = models.CharField("telefon", max_length=30, blank=True)

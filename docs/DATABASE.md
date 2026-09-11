@@ -28,7 +28,7 @@ atıf yapılmalıdır (`DATABASE.md F10` = token iptali; `SECURITY.md F10` = typ
 
 | Ölçüm | Sonuç |
 |---|---|
-| Şemalar | `hr`, `public` (başka şema yok; platform şeması **yok**) |
+| Şemalar | `hr`, `public` + **`platform` ✅** (M1–M5 uygulandı — ayrı güvenlik sınırı, ayrı DB rolü) |
 | `hr` içindeki tablo sayısı | **21** (10 uygulama tablosu + 11 Django/teknik tablo) |
 | Kiracıya bağlı (`tenant_id`) ve RLS'li tablo | **7** (`tenants`, `users`, `roles`, `role_permissions`, `user_roles`, `user_permission_overrides`, `audit_logs`) — hepsinde `rls=true` **ve** `force_rls=true` |
 | RLS'siz tablo | `permissions` (global), `tenant_directory` (giriş dizini), `api_tokens`, `cache_table` + Django tabloları |
@@ -336,12 +336,12 @@ Yeni veritabanı rolü:
 
 | Rol | SUPERUSER | BYPASSRLS | Yetkiler |
 |---|---|---|---|
-| `persopyro_platform` | ❌ | ❌ | `platform` şemasında tam DML; `hr` şemasında yalnızca **RLS'e tabi** SELECT/DML (ayrıcalığı yok), `hr.audit_logs` INSERT/SELECT, `hr.tenant_directory` SELECT |
+| `persopyro_platform` | ❌ | ❌ | `platform` şemasında tam DML (tablo bazlı **allowlist**: `users`, `roles`, `role_permissions`, `user_roles`, `tokens`, `tenant_registry`) ✅; `hr` şemasında **yalnızca izin kataloğu okuma** (`USAGE` + `SELECT ON hr.permissions`) ✅. Kiracı tablolarına (`hr.tenants`, `hr.users`, `hr.audit_logs`, ...) **bu pakette yetki verilmez** — RLS'e tabi kiracı erişimi **erişim-onay katmanıyla** (M17–M19, OD1/OD4) ve denetim kaydıyla açılır; **şema varlığı erişim yetkisi değildir** |
 
 `persopyro_app` **`platform` şemasını göremez** (USAGE yok) → kiracı isteğinden
 platform verisine yol yoktur. (Test: T17.)
 
-## B.2 Platform tabloları (yeni) 🔜
+## B.2 Platform tabloları ✅ (M1–M5 uygulandı: `users`, `roles`, `role_permissions`, `user_roles`, `tokens`, `tenant_registry`)
 
 Kart biçiminde; hepsi `platform` şemasında, RLS **yok** (kiracı verisi taşımaz),
 erişim yalnızca `persopyro_platform` rolüyle.
@@ -393,7 +393,7 @@ erişim yalnızca `persopyro_platform` rolüyle.
 - **AUDIT:** durum/limit değişikliği (kaynak `hr.tenants` üzerinden)
 - **Tutarlılık:** registry ↔ `hr.tenants` sapması için düzenli kontrol + test (M21, H2)
 
-### `platform.access_requests` / `platform.access_grants`
+### `platform.access_requests` / `platform.access_grants` 🔜 (M18–M19 — bu turda **uygulanmadı**)
 - **PURPOSE:** Platform kaynaklı kişisel veri erişim talebi ve süreli izni (OD1/OD4).
 - **`access_requests`:** `id, requested_by (platform_user_id), target_tenant_id, resource_type, resource_ids uuid[], field_list text[], purpose text NOT NULL, status (pending/approved/rejected/expired/cancelled), approvals jsonb, created_at, decided_at, expires_after_minutes`
   - **Kısıt:** `purpose` için **asgari uzunluk + anlamlılık** kontrolü (`PURPOSE_QUALITY`) — uygulama katmanı + `CHECK (length(btrim(purpose)) >= 20)`.
@@ -540,11 +540,11 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 
 | # | İş | Şema/Şema dışı | Bağımlılık | Geri alma |
 |---|---|---|---|---|
-| **M1** | `platform` şeması + `persopyro_platform` rolü + yetkiler (betik: `scripts/03_platform_roles.sql`) | DDL (sahip+süper) | — | `DROP SCHEMA platform CASCADE` + `DROP ROLE` |
-| **M2** | `platform.users`, `platform.roles`, `platform.role_permissions`, `platform.user_roles` + **`platform.users.public_id`** (rezerve `plt` ön ekiyle üretim; kiracı kullanıcılarından ayrı ad alanı — OD28 kapalı) | Yeni | M1 | DROP TABLE (yeni, veri kaybı yalnızca platform hesabı) |
-| **M3** | `platform.tokens` (OD22 kararı sonrası) | Yeni | M2 | DROP TABLE |
-| **M4** | `platform.tenant_registry` + `hr.tenants` üzerine yansı tetikleyicisi (SECURITY DEFINER) + backfill | Yeni + tetikleyici | M1 | Tetikleyici + tablo DROP (hr.tenants'a dokunulmaz) |
-| **M5** | `hr.tenants.public_id_prefix` (nullable ekle → slug'tan türet/çakışmada sonek → `NOT NULL` + tam `UNIQUE` + değişmezlik tetikleyicisi) **ve** `hr.users.public_id` (kiracının prefix'inden üretim → `NOT NULL` + global benzersiz indeks). **Ayrıca (OD28 tamamlayıcı işler):** üretim fonksiyonları (`hr.generate_public_id_prefix(slug)`, `hr.generate_public_id(tenant_id)`; çakışmada yeniden dener), format `CHECK` (`^[a-z0-9]{3,20}-[0-9A-HJKMNP-TV-Z]{8}$`), **rezerve ad listesi** (slug/prefix olarak reddedilir: `www, api, app, admin, portal, mail, support, hr, platform, plt, system`) | Şema + veri + fonksiyon | — | İndeks/kolon/tetikleyici/fonksiyon DROP |
+| **M1** | `platform` şeması + `persopyro_platform` rolü + yetkiler (betik: `scripts/03_platform_roles.sql`) — **✅ UYGULANDI (2026-09-11):** şema migration ile (fresh install'da tek başına çalışır), rol/yetkiler süper kullanıcı betiğiyle (`CREATE ROLE` süper kullanıcı gerektirir; `persopyro_owner` `NOCREATEROLE`). Rol: `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`; `PUBLIC`'in şemada yetkisi yok; `persopyro_app` şemayı **göremez**; yetki turu **tablo bazlı allowlist** (geniş `ALL TABLES` ve `ALTER DEFAULT PRIVILEGES` **bilinçli olarak yok**) | DDL (sahip+süper) | — | `DROP SCHEMA platform CASCADE` + `DROP ROLE` |
+| **M2** | `platform.users`, `platform.roles`, `platform.role_permissions`, `platform.user_roles` + **`platform.users.public_id`** (rezerve `plt` ön ekiyle üretim; kiracı kullanıcılarından ayrı ad alanı — OD28 kapalı) — **✅ UYGULANDI** (`apps/platform/migrations/0001_od3_platform_users_roles.py`): `tenant_id` kolonu **yok**; `is_staff`/`is_superuser` kolonu **yok**; rol kodları kapalı küme (`CHECK code IN ('superadmin','platform_admin')`); rol/permission FK'leri `platform.roles` + `hr.permissions` (kiracı RBAC'ine bağlanmaz); `user_roles.expires_at` opsiyonel ama `> granted_at` | Yeni | M1, M5 (yardımcı fonksiyonlar; sıra bağımlılığı) | DROP TABLE (yeni, veri kaybı yalnızca platform hesabı) |
+| **M3** | `platform.tokens` (OD22 kararı sonrası) — **✅ UYGULANDI** (`0002_od22_platform_tokens.py`): ham token yok (SHA-256, UNIQUE); `purpose` ≥10 karakter; `scope` NOT NULL ve **boş olamaz** (`cardinality >= 1`), joker `*` yasak; `token_kind` kapalı küme; `expires_at` NOT NULL **ve TTL tavanı DB CHECK'iyle** (`interactive` ≤ 24 saat, `service` ≤ 90 gün); iptal tek yönlü; kapsam/purpose/süre/tür/hash/owner değişmez; **service token superadmin izin kümesiyle üretilemez** (tetikleyici). Servis katmanı: `apps/platform/services.py` (§ OD22 TTL/kapsam kuralları) | Yeni | M2 | DROP TABLE |
+| **M4** | `platform.tenant_registry` + `hr.tenants` üzerine yansı tetikleyicisi (SECURITY DEFINER) + backfill — **✅ UYGULANDI** (`0003_od20_tenant_registry.py`): yalnızca minimum alanlar (PII **yok**: `name/legal_name/tax_number/email/phone/address/settings` kopyalanmaz); tek yönlü `hr.tenants` → registry, `platform.sync_tenant_registry()` `SECURITY DEFINER` + **sabit `search_path = pg_catalog, pg_temp`** + tam nitelemeli SQL; `plan_code`/`billing_ref`/`internal_note` yalnızca platformun (yansı onları ezmez); yansı yazımı başarısızsa kaynak yazımı **geri alınır** (test: kasten çakıştırılmış registry slug'ı → kiracı INSERT'i tümden rollback) | Yeni + tetikleyici | M1 | Tetikleyici + tablo DROP (hr.tenants'a dokunulmaz) |
+| **M5** | `hr.tenants.public_id_prefix` (nullable ekle → slug'tan türet/çakışmada sonek → `NOT NULL` + tam `UNIQUE` + değişmezlik tetikleyicisi) **ve** `hr.users.public_id` (kiracının prefix'inden üretim → `NOT NULL` + global benzersiz indeks). **Ayrıca (OD28 tamamlayıcı işler):** üretim fonksiyonları (`hr.generate_public_id_prefix(slug)`, `hr.generate_public_id(tenant_id)`; çakışmada yeniden dener), format `CHECK` (`^[a-z0-9]{3,20}-[0-9A-HJKMNP-TV-Z]{8}$`), **rezerve ad listesi** (slug/prefix olarak reddedilir: `www, api, app, admin, portal, mail, support, hr, platform, plt, system`) — **✅ UYGULANDI** (`tenancy/0008` yardımcılar + `tenancy/0009` prefix + `accounts/0005` public ID). Ölçüm (canlı DB): kiracı prefiksleri `demo`, `askida`; kullanıcı `public_id` örnekleri `demo-3A8EAQ9B`, `askida-1CY29715` (Crockford, `I/L/O/U` yok); `public_id'siz` kullanıcı **0**. Kalıcı rezerve: prefix **tam UNIQUE** (soft-delete'te geri alınmaz); değişmezlik iki tetikleyiciyle (`tenants_public_id_prefix_guard`, `users_public_id_guard`); üretim tetikleyicilerle (`..._assign`) — kiracı bağlamı yoksa `NULL` → `NOT NULL` ihlali (fail-closed, sessiz üretim yok). NOT: `hr.generate_public_id`'nin çakışma denemesi **RLS görünürlüğüyle** sınırlıdır; global tekillik garantisi `users_public_id_uniq_idx` UNIQUE indeksidir (kalan çakışma olasılığı ~32⁻⁸) | Şema + veri + fonksiyon | — | İndeks/kolon/tetikleyici/fonksiyon DROP |
 | **M6** | `hr.permissions`: `platform.*` kodları (yeni migration, frozen liste) + `REVOKE INSERT/UPDATE/DELETE ON hr.permissions FROM persopyro_app` | Veri + yetki | — | Kodlar silinebilir; yetki geri verilebilir (⚠️ istenmez) |
 | **M7** | Rol kodu göçü: `manager → dept_manager` (kiracı başına, veri) + `tenant_officer` şablon rolünün oluşturulması | Veri | M6 | Ters eşleme (kayıt tutulur) |
 | **M8** | `hr.roles.scope_type` + kısmi benzersizlik (`WHERE deleted_at IS NULL`) | Şema | — | Kolon + indeks geri alınır |
@@ -576,7 +576,13 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 
 **Uygulama sırası önerisi (3 parti):**
 1. **Parti 1 (platform temeli):** M1–M5, M22 — kiracı verisine dokunmayan, geri
-   alması kolay işler.
+   alması kolay işler. — **M1–M5 ✅ UYGULANDI (2026-09-11)**, M22(M22–M22d) ✅
+   UYGULANDI. **Sıra notu (ölçülmüş):** M2 migration'ı `hr.crockford_suffix`
+   yardımcısını kullandığı için **M5'in yardımcı fonksiyonları M2'den önce**
+   çalışır (`tenancy/0008` → `platform/0001`); M5'in kolon işleri iki uygulamaya
+   dağıldığı için `tenancy/0009` (prefix) + `accounts/0005` (public_id) olarak
+   bölündü. M1'in rol adımı (`scripts/03_platform_roles.sql`) **süper kullanıcı**
+   ile çalıştırılır; migration tarafı şemayı ayrıca garanti eder.
 2. **Parti 2 (kimlik/rol/kapsam):** M6–M9, M17, M20 — mevcut tablolara ekleme +
    veri göçü (küçük hacim).
 3. **Parti 3 (iş tabloları):** M10–M16, M18–M19, M21, M23–M24.

@@ -223,9 +223,12 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
   PRIVILEGES` ile gelen geniş DML her yeni tabloda daraltılır 🔜
   (`docs/DATABASE.md` D.6).
 
-- **Platform rolleri ayrı kimlik alanında yaşar** 🔜 KARAR (OD3 — kapalı): platform
-  kullanıcıları kiracı kullanıcı tablosunda barındırılmaz; kiracı RLS politikaları
-  onlar için gevşetilmez.
+- **Platform rolleri ayrı kimlik alanında yaşar** — KARAR (OD3 — kapalı),
+  **şema tarafı UYGULANDI ✅ (M1–M5)**: platform kullanıcıları kiracı kullanıcı
+  tablosunda barındırılmaz (`platform.users`; `tenant_id` kolonu **yok**, `hr.users`
+  FK'si **yok**); kiracı RLS politikaları onlar için gevşetilmez (ölçüm: 7 kiracı
+  tablosunda `rls=true` + `force_rls=true` ve politika ifadeleri değişmedi).
+  Erişim talebi/onay akışı hâlâ 🔜 (M17–M19).
 - **Gerekçe niteliği ve çift onay denetlenir** 🔜 KARAR (OD4 — kapalı): boş veya
   anlamsız gerekçeyle erişim talebi açılamaz; platform tarafında iki farklı
   onaylayıcı aranır.
@@ -368,7 +371,13 @@ erişim.
   verisi görünmez; bu kural **SUPERADMIN için de geçerlidir** 🔜 (OD1 — kapalı).
 - **Ayrı katman ve ayrı veritabanı rolü:** platform erişimi kiracı istek
   hattından bağımsızdır; kiracı RLS politikaları gevşetilmez ve `BYPASSRLS`
-  kullanılmaz 🔜 (OD3 — kapalı, bölüm 4.2).
+  kullanılmaz — **şema/rol tarafı UYGULANDI ✅ (M1–M5)** (`OD3 — kapalı`, bölüm
+  4.2): `platform` şeması + `persopyro_platform` rolü (`NOSUPERUSER`,
+  `NOBYPASSRLS`); kiracı runtime rolü `persopyro_app` platform şemasında **hiç
+  yetkili değil** (USAGE dâhil) ve `platform.*` tablolarında SELECT/INSERT/UPDATE/
+  DELETE ölçümü **tümü `false`**. Yetki turu **tablo bazlı allowlist**; platform
+  için `ALTER DEFAULT PRIVILEGES` **tanımlanmaz** (gelecekteki tablolar sessizce
+  yetki almaz) — testle sabitlendi. Kiracı verisine platform erişimi 🔜 (M17–M19).
 - **Çift onay:** platform tarafındaki kişisel veri erişimini **iki farklı**
   onaylayıcı onaylar; talebi açan onaylayamaz 🔜 (OD4 — kapalı).
 - **Ayrılık ilkesi:** bir kişi hem platform hem kiracı yöneticisi rolü taşımaz
@@ -388,7 +397,14 @@ erişim.
   `interactive` TTL ≤ 24 saat, `service` TTL ≤ 90 gün ve **superadmin izin kümesiyle
   üretilemez**; boş kapsamla üretim reddedilir. **Platform token'ı tenant RLS sınırını
   hiçbir koşulda aşamaz** (platform rolü `NOBYPASSRLS`); kiracı verisi gerektiğinde
-  erişim onayı mekanizmasından geçer. Uzun ömürlü sınırsız SUPERADMIN token **yasaktır**. 🔜
+  erişim onayı mekanizmasından geçer. Uzun ömürlü sınırsız SUPERADMIN token **yasaktır**.
+  **Şema/guard tarafı UYGULANDI ✅ (M3):** `platform.tokens` — ham token yok
+  (SHA-256, `UNIQUE`); `purpose` ≥ 10 karakter; `scope` NOT NULL ve boş olamaz
+  (`cardinality >= 1`), joker `*` yasak; `token_kind` kapalı küme; `expires_at`
+  NOT NULL **ve TTL tavanı DB `CHECK`'iyle** (`interactive` ≤ 24 sa, `service` ≤ 90 gün);
+  iptal **tek yönlü** (DB tetikleyicisi + kayıt silinmez); kapsam/purpose/süre/tür/
+  hash/owner **değişmez**; `service` token'ın **superadmin izin kümesiyle** üretimi
+  DB tetikleyicisiyle reddedilir. Endpoint/oturum akışı 🔜 (bu paketin kapsamı dışı).
 - **Acil durum (break-glass):** önceden onay alınamayan gerçek acil durumlarda
   erişim açılabilir; ancak **sonradan gözden geçirme** zorunludur ve kayıt
   silinemez. Sınırları (kim kullanabilir, nasıl incelenir) **OD17** kararına
@@ -433,10 +449,14 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
 - Kimlik **rastgele** üretilir (Crockford Base32, 8 karakter, `secrets`),
   isim/e-posta/ID'den **türetilmez**, kullanıcı tarafından değiştirilemez 🔜.
 - **Ön ek (prefix) immutable ve rezerve:** kiracının `public_id_prefix`'i kiracı
-  oluşturulurken bir kez üretilir ve **değiştirilemez** (OD25/OD28); platform
-  kullanıcıları **rezerve `plt`** ön ekini kullanır; `www, api, app, admin, portal,
-  mail, support, hr, platform, plt, system` **rezerve adlardır** ve slug/prefix
-  olarak kullanılamaz (çakışma ve taklit riskine karşı) 🔜.
+  oluşturulurken bir kez üretilir ve **değiştirilemez** (OD25/OD28) — **UYGULANDI ✅
+  (M5)**: DB tetikleyicisi değişimi reddeder; platform kullanıcıları **rezerve `plt`**
+  ön ekini kullanır (`platform.users.public_id` = `plt-<8×Crockford>`); `www, api,
+  app, admin, portal, mail, support, hr, platform, plt, system` **rezerve adlardır**
+  ve slug/prefix olarak DB `CHECK`'iyle reddedilir (çakışma ve taklit riskine karşı).
+  Prefix **tam UNIQUE**'tir: soft-delete edilen kiracının prefix'i **yeniden tahsis
+  edilmez** (kalıcı rezerve); slug/rebrand değişimi prefix'i ve mevcut kullanıcı
+  public ID'lerini **değiştirmez** (testle sabitlendi).
 - **Kimlik taklidi (typosquatting) riski:** benzer görünen prefix/slug'lar (ör.
   `acme` ve `acme1`) teknik olarak engellenmez; yeni kiracı açılışı **platform
   operasyonu** olduğu için manuel incelemeyle yönetilir (bulgu **F10**).
@@ -592,7 +612,29 @@ listelenmiştir (OD1–OD28).
 
 - **G1** — platform erişiminin teknik mekanizması (OD1/OD3 kapalı): **ayrı
   servis/authorization katmanı + ayrı veritabanı rolü, kiracı RLS politikaları
-  değişmez, `BYPASSRLS` yasak** (bölüm 4.2).
+  değişmez, `BYPASSRLS` yasak** (bölüm 4.2). **Şema/rol tarafı uygulandı ✅
+  (M1–M5, 2026-09-11):** `platform` şeması + `persopyro_platform` rolü
+  (`NOSUPERUSER`/`NOCREATEDB`/`NOCREATEROLE`/`NOBYPASSRLS`), tablo bazlı yetki
+  allowlist'i, `persopyro_app` için sıfır platform yetkisi. Kiracı verisine
+  platform erişimi (talep/onay/süre/denetim) 🔜 M17–M19.
+
+**Bu turun denetim notları (M1–M5, 2026-09-11) — bulgu değil, bilinçli sınırlar:**
+
+- `persopyro_platform` rolü **süper kullanıcı adımı** gerektirir
+  (`scripts/03_platform_roles.sql`; `CREATE ROLE`); migration rolü `NOCREATEROLE`
+  olduğu için bu adım migration'a alınamaz. Adım çalıştırılmadıysa platform şeması
+  ve tablolar vardır ama **platform rolü ve yetkileri yoktur** → ilgili testler
+  atlanır (sessiz geçmez, raporda görünür).
+- Platform rolüne `hr` şemasında **yalnızca** `hr.permissions` SELECT verildi
+  (global katalog, kiracı verisi değil). `hr.tenants/users/audit_logs` üzerinde
+  yetki **kasıtlı olarak yok**: RLS'e tabi kiracı erişimi erişim-onay katmanıyla
+  (M17–M19) ve denetim kaydıyla açılır — "şema var" ≠ "erişim var".
+- `hr.generate_public_id(tenant_id)` çakışma denemesi **RLS görünürlüğüne** tabidir
+  (fonksiyon `SECURITY INVOKER`); global tekillik garantisi UNIQUE indekstir.
+  Çakışma olasılığı 32⁻⁸ mertebesindedir ve çakışmada INSERT **fail-closed** hata verir.
+- Registry yansısı **aynı işlemde** ve `SECURITY DEFINER` ile yazılır; fonksiyonun
+  `search_path`'i sabittir (`pg_catalog, pg_temp`) ve tüm nesneler tam niteliklidir
+  (search_path ele geçirme ve SQL enjeksiyonu yüzeyi yok).
 - **G8** — Django'nun paralel yetki yolu (OD19 kapalı, **uygulandı ✅**): **`/admin/`
   kaldırıldı (`GET /admin/` → 404), `django.contrib.admin` uygulama listesinden
   çıkarıldı, `auth_*` tablolarının yetkileri geri alındı, `is_staff`/`is_superuser`
