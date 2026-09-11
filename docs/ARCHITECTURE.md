@@ -275,7 +275,7 @@ API'de opak (DB'de hash'li saklanan) token.**
 | Kullanıcı modeli | Özel User: e-posta ile giriş, `tenant_id` alanı | E-posta girişi İK kullanımına uygun; tenant alanı izolasyonun çekirdeği; ilk migration'dan önce kararlaştırılmalı |
 | Parola hash | Argon2id (mevcut bcrypt hash'ler için uyumluluk hasher'ı açık) | Bellek sertliği yüksek; Argon2 Django'da birinci sınıf destekli |
 | Web oturumu | HttpOnly + Secure + SameSite çerez, CSRF koruması | Token tarayıcı JS'inden erişilemez |
-| API kimlik doğrulama | django-rest-knox: her cihaz için ayrı, DB'de **hash'li**, süreli token | JWT'nin iptal edilememe sorunu yok; token çalınırsa DB'den okunamaz; cihaz bazlı çıkış mümkün |
+| API kimlik doğrulama | Kendi `ApiToken` modelimiz: her cihaz için ayrı, DB'de **SHA-256 özeti**, süreli, cihaz bazlı iptal | JWT'nin iptal edilememe sorunu yok; düz metin token saklanmaz. Üçüncü parti paket (knox) kullanılmaz çünkü doğrulama sırasında RLS ile çakışır (K15) |
 | JWT | Kullanılmaz | İptal/geri alma zor; kısa ömür + refresh akışı ek karmaşıklık; token içeriği sızdırılabilir |
 | Başarısız giriş | Sayaç + hesap kilitleme | Mevcut şemada alanlar hazır (`failed_login_count`, `lockout_until`) |
 | Çok faktörlü doğrulama | TOTP; `tenant_admin` ve `super_admin` için zorunlu | Yönetici hesapları en kritik risk; ek servis maliyeti yok |
@@ -551,8 +551,8 @@ yetkiler, parolalar ve `.env` dosyası; ardından izolasyon doğrulaması çalı
 | Django (5.2 LTS) | Çekirdek çatı |
 | djangorestframework | API katmanı |
 | psycopg (3.x) | PostgreSQL sürücüsü |
-| django-rest-knox | API token kimlik doğrulaması (hash'li, süreli, iptal edilebilir) |
 | django-q2 | Arka plan görevleri (ORM broker) |
+| cryptography | Alan şifreleme (TOTP sırrı gibi değerler için; Fernet) |
 | boto3 | Nesne depolama erişimi |
 | argon2-cffi | Argon2id parola hash'leme |
 | pyotp (veya django-otp) | TOTP ile çok faktörlü doğrulama |
@@ -589,6 +589,9 @@ tekrar değerlendirilir.
 | K12 | E-posta **kiracı başına tekil** (global değil) + özel auth backend | Kabul ve uygulandı | Global tekil e-posta zorunlu olursa (o zaman kullanıcı adı politikası değişir) |
 | K13 | Kiracılar arası referans **guard tetikleyicisiyle** engellenir | Kabul ve uygulandı | PostgreSQL'de bileşik yabancı anahtar desteği Django'ya gelirse tetikleyici yerine kısıt kullanılabilir |
 | K14 | Bağlam yokken **fail-closed**: DB 0 satır döndürür, uygulama açık hata verir | Kabul ve uygulandı | — (güvenlik davranışı; değiştirilmez) |
+| K15 | API token'ları için **kendi model** (knox kaldırıldı) | Kabul ve uygulandı | Token gereksinimleri (ör. OAuth2) değişirse yeniden değerlendirilir |
+| K16 | Giriş öncesi okunan eşleme tabloları **RLS dışı** ama sıkı yetkili (`tenant_directory` salt-okunur, `api_tokens` yalnızca özet) | Kabul ve uygulandı | Bu tablolara kiracı verisi eklenirse tasarım yeniden ele alınmalı |
+| K17 | Cache **veritabanı tablosu** üzerinden (Redis yok) | Kabul ve uygulandı | Bölüm 6.2 tetikleyicileri |
 
 K11 gerekçesi: Django 5.2.8+ Python 3.14'ü de destekliyor, ancak üçüncü parti
 paketlerin (psycopg, django-q2, argon2-cffi vb.) 3.13 üzerindeki uyumluluğu daha
@@ -614,7 +617,7 @@ oturmuştur. Proje Python 3.13.15 üzerine kurulmuştur; `pyproject.toml` içind
 |---|---|---|
 | 0 | Ortam kurulumu, depo başlatma, test iskeleti — **TAMAMLANDI (2026-09-11)** | `pytest` 10 test geçti, `ruff`/`bandit`/`pip-audit` temiz, `manage.py check` sorunsuz |
 | 1 | Veritabanı spike'ı: RLS + rol ayrımı + tenant bağlamı + enum/uuid kararları — **TAMAMLANDI (2026-09-11)** | `scripts/03_verify_isolation.sql` A1–A9 iddialarının tamamı geçti; roller ve yetkiler kurulu; 19 test yeşil |
-| 2 | Kiracı + kullanıcı + kimlik doğrulama + RBAC çekirdeği — **1. dilim TAMAMLANDI (2026-09-11)**: modeller, migration'lar, RLS + guard tetikleyicileri, kimlik doğrulama backend'i, izin çözümleme servisi, 57 test | Kalan dilim: istek hattı (middleware), görünümler/API, MFA uçları, parola sıfırlama |
+| 2 | Kiracı + kullanıcı + kimlik doğrulama + RBAC çekirdeği — **1. ve 2. dilim TAMAMLANDI (2026-09-11)**: modeller, migration'lar, RLS + guard tetikleyicileri, istek hattı (middleware), oturum ve token uçları, MFA (TOTP), izin kataloğu + varsayılan roller, 97 test | Kalan dilim: parola sıfırlama + e-posta, MFA kayıt ucu, süresi geçmiş oturum/token temizliği, kullanıcı CRUD uçları |
 | 3 | Organizasyon + çalışan | Yetki matrisi testleri geçer |
 | 4 | İzin yönetimi | Bakiye ve onay testleri geçer |
 | 5 | Vardiya + devam | Çakışma/hesaplama testleri geçer |

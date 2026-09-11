@@ -5,6 +5,150 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.6.0] — 2026-09-11 — Faz 2 (2. dilim): istek hattı, kimlik doğrulama uçları, MFA ve token modeli
+
+Bu dilimde uygulama ilk kez **çalışan bir giriş akışına** kavuştu: istek hattı
+kiracı bağlamını kuruyor, oturum ve token uçları parola + MFA doğruluyor, izinler
+kataloğu ve varsayılan roller veritabanında. **Yedi gerçek hata** ölçümle
+bulundu ve düzeltildi; biri (2 numaralı bulgu) üretimdeki TÜM girişleri
+kırıyordu.
+
+### Eklenen — istek hattı
+
+- `apps/tenancy/middleware.py`:
+  - `RequestIdMiddleware` — her isteğe kimlik verir, `X-Request-ID` döner.
+  - `TenantContextMiddleware` — kiracıyı OTURUMDAN, yoksa ALAN ADINDAN çözer ve
+    istek boyunca bağlamı kurar. Oturum ile alan adı uyuşmazsa istek reddedilir
+    (oturum taşıma saldırısına karşı).
+- `apps/accounts/middleware.py`: `ApiTokenTenantMiddleware` — token ile gelen
+  isteklerde kiracıyı token'dan çözer.
+- SIRA: üçü de `AuthenticationMiddleware`'ten ÖNCE çalışır (aksi halde oturumdan
+  kullanıcı yüklenemez; RLS satırı gizler).
+
+### Eklenen — kiracı çözümleme
+
+- `Tenant.slug` (tekil) ve `Tenant.domain` (tekil, opsiyonel).
+- `hr.tenant_directory`: slug/alan adı → kiracı kimliği eşlemesi. **RLS dışıdır**
+  (gerekçe aşağıda), uygulama rolü yalnızca OKUR; dizini tetikleyici
+  (`hr.sync_tenant_directory`, SECURITY DEFINER) günceller. Böylece bir kiracı
+  başkasının alan adı eşlemesini ele geçiremez.
+- `apps/tenancy/context.py`: `tenant_id_by_slug`, `tenant_id_by_domain`.
+
+### Eklenen — kimlik doğrulama uçları (`/api/v1/auth/`)
+
+| Uç nokta | Yöntem | Notlar |
+|---|---|---|
+| `login` | POST | Oturum çerezi (HttpOnly) + **CSRF korumalı** |
+| `logout` | POST | Oturumu kapatır |
+| `token` | POST | API token üretir (çerez yok, CSRF gerekmez) |
+| `token/logout` | POST | Yalnızca o cihazın token'ını iptal eder |
+
+- Hata mesajları GENEL tutulur (kullanıcı/kiracı numaralandırmasına karşı);
+  "MFA gerekli" bilgisi yalnızca parola doğruysa döner.
+- Kimlik doğrulama uçları en katı hız sınırı sınıfındadır (`throttle_scope="auth"`).
+- Ayrıca `/api/health` (canlılık) ve `/api/ready` (veritabanı hazır olma) uçları.
+
+### Eklenen — MFA (TOTP)
+
+- `apps/accounts/mfa.py`: kod doğrulama (`valid_window=1`), kayıt için anahtar
+  üretimi. TOTP sırrı veritabanında **şifreli** saklanır
+  (`FIELD_ENCRYPTION_KEY`, Fernet; `apps/common/crypto.py`).
+- MFA, OTURUM ve TOKEN yollarının İKİSİNDE de uygulanır (ortak yardımcı).
+- Anahtar yoksa/çözülemezse giriş reddedilir (fail-closed).
+
+### Eklenen — API token modeli (knox kaldırıldı)
+
+- `apps/accounts/models.py`: `ApiToken` — SHA-256 özeti, zorunlu süre, etiket,
+  son kullanım, cihaz bazlı iptal. Düz metin token **saklanmaz**.
+- `apps/accounts/authentication.py`: `ApiTokenAuthentication` (401 dönebilmesi
+  için `authenticate_header` tanımlı).
+- `django-rest-knox` bağımlılıktan **çıkarıldı** ve knox tablosu migration ile
+  düşürüldü.
+
+### Eklenen — RBAC kataloğu ve varsayılan roller
+
+- `apps/rbac/permission_catalog.py` + `rbac.0003_seed_permissions` (29 izin kodu).
+- `create_default_roles(tenant)`: `tenant_admin`, `hr_manager`, `manager`,
+  `employee`. Kataloğda olmayan izin sessizce atlanmaz, hata verir.
+- `apps/rbac/permissions.py`: `HasPermissionCodes` (**varsayılan reddet**; izin
+  listesi tanımsızsa erişim verilmez) ve `AnyPermissionCode`.
+
+### Eklenen — altyapı
+
+- `CACHES`: veritabanı cache'i (paylaşımlı; hız sınırlama sayaçları için gerekli).
+  Tablo `createcachetable` ile oluşur; `scripts/migrate.sh` bunu çalıştırır.
+- `SESSION_ENGINE`: veritabanı oturumları.
+
+### Verilen kararlar
+
+- **K15** — API token'ları için üçüncü parti paket kullanılmaz; kendi `ApiToken`
+  modelimiz kullanılır (gerekçe: bulgu 3).
+- **K16** — Giriş ÖNCESİ okunması gereken eşleme tabloları RLS dışıdır, ancak
+  sıkı kurallarla: `tenant_directory` yalnızca okunur (yazma tetikleyicide);
+  `api_tokens` yalnızca özet + kiracı kimliği tutar, düz metin token saklamaz.
+- **K17** — Cache veritabanı üzerinden (süreç-yerel bellek yerine), Redis yok.
+- Kiracı çözümleme sırası: oturum → alan adı → token. Çakışma (oturum ≠ alan adı)
+  reddedilir.
+
+### Doğrulanan (gerçek çalıştırma)
+
+- **pytest: 97 test geçti** (önceki 57 → +40). Yeni testler: kiracı bağlamı ve
+  alan adı çözümleme, oturum/token girişi, CSRF, kilitlenme, MFA (kodsuz/yanlış/
+  doğru kod, token yolunda da MFA), token hash/süre/iptal, izin sınıfı (izin yok →
+  403; izin tanımsız uç → 403), varsayılan roller, hız sınırı, kiracı dizini
+  güvenliği.
+- **Sıfırdan kurulum doğrulandı**: boş bir veritabanında `migrate` çalıştırıldı;
+  7 kiracıya bağlı tabloda `rls=true force=true`, `api_tokens` ve
+  `tenant_directory` bilinçli olarak RLS dışı, uygulama rolü `audit_logs` UPDATE
+  ve `tenant_directory` INSERT yapamıyor.
+- `ruff`, `bandit` (0 bulgu), `manage.py check`,
+  `makemigrations --check` ("No changes detected") temiz.
+
+### Bulgular (ölçümle bulunan ve düzeltilen gerçek hatalar)
+
+1. **FORCE RLS, SECURITY DEFINER fonksiyonu da bağlıyor.** Kiracıyı slug ile
+   çözen fonksiyon, tablo sahibi olarak çalışsa bile satırı göremedi (FORCE tablo
+   sahibini de kapsar). Çözüm: RLS dışı, salt-okunur **dizin tablosu** (K16).
+2. **`login()` sinyali kiracı bağlamı dışında çalışıyordu** → kullanıcı satırını
+   güncelleyen sinyal 0 satır etkiliyor ve "Save with update_fields did not affect
+   any rows" hatası veriyordu. Yani üretimde **hiçbir oturum girişi çalışmazdı.**
+   Oturum kurulumu `tenant_context` içine alındı.
+3. **knox, RLS ile çalışmıyor**: token doğrularken kullanıcıyı `select_related`
+   ile çekiyor, o anda kiracı bağlamı olmadığı için RLS satırı gizliyor ve token
+   asla doğrulanamıyordu (401). Kendi token modelimize geçildi (K15).
+4. **Aynı tuzak kendi modelimizde tekrarlandı**: `select_related("user")`
+   kullanınca token yine doğrulanamadı; ilişki yalnızca bağlam kurulduktan sonra
+   yükleniyor.
+5. **`authenticate_header` eksikti** → DRF kimlik doğrulama hatalarında 401 yerine
+   403 dönüyordu.
+6. **Uygulanmış migration'a sonradan sütun eklenmişti** (`tenancy.0002` içindeki
+   `role_permissions`), bu yüzden **sıfırdan kurulum bozuluyordu**: temiz bir
+   veritabanında RLS, `role_permissions.tenant_id` oluşmadan çalışıyordu. Dosya
+   ilk hâline döndürüldü; RLS ayrı migration'da (`0004`). Sıfırdan kurulum artık
+   ayrıca test ediliyor.
+7. **SlugField'ın `db_index` davranışı**: iki adımlı alan eklemede PostgreSQL'in
+   `_like` indeksi iki kez yaratılmaya çalışıldı ("relation already exists").
+   İlk adım `CharField`, son adım `SlugField` olacak şekilde düzeltildi.
+8. **`fetchone()` boş sonuçta TypeError** → eşlemesi olmayan HER istekte 500
+   (ör. localhost). Boş sonuç artık normal kabul ediliyor.
+9. **`CACHES` tanımsızdı** → hız sınırlama sayaçları süreç-yerel bellekte
+   tutuluyordu; çok işçili kurulumda tutarsız olurdu. Veritabanı cache'ine
+   geçildi (K17).
+10. **DRF hız oranları sınıf özniteliğine bağlanır**; ayar değiştirmek yetmiyor.
+    Testler bu yüzden yanlış kurulmuştu; test kurulumu düzeltildi.
+11. **`check --deploy`**: üretilen secret 43 karakterdi (50'den kısa). Üretim artık
+    64 karakterlik secret üretir.
+
+### Kalan (Faz 2'nin 3. dilimi)
+
+- Parola sıfırlama akışı ve e-posta gönderimi (kuyruk üzerinden).
+- MFA **kayıt** ucu (QR/anahtar gösterimi) ve kapatma akışı.
+- Süresi geçmiş oturum/token temizliği (periyodik görev), kullanıcı CRUD uçları.
+- Nesne seviyesi yetki kapsamı (kendi kaydı / kendi ekibi) — organizasyon
+  modülüyle birlikte (faz 3).
+
+---
+
 ## [0.5.0] — 2026-09-11 — Faz 2 (1. dilim): veri modeli, ilk migration, RLS ve kimlik doğrulama çekirdeği
 
 Bu sürümde ilk kez uygulama modelleri ve migration'lar yazıldı; veritabanı

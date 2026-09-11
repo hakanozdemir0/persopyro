@@ -35,13 +35,21 @@ backend = TenantScopedModelBackend()
 
 @pytest.fixture
 def izinler(db):  # noqa: ANN001, ANN201
-    return {
-        "employee.read": Permission.objects.create(code="employee.read", name="Çalışan görme"),
-        "leave.request.approve": Permission.objects.create(
-            code="leave.request.approve", name="İzin onaylama"
-        ),
-        "role.manage": Permission.objects.create(code="role.manage", name="Rol yönetimi"),
-    }
+    """
+    Test izinleri.
+
+    NOT: Bu kodlar üretimde `rbac.0003_seed_permissions` veri migration'ı ile
+    gelir; testler migration'ı varsayar ve `get_or_create` kullanır.
+    """
+    tanimlar = [
+        ("employee.read", "Çalışan görme"),
+        ("leave.request.approve", "İzin onaylama"),
+        ("role.manage", "Rol yönetimi"),
+    ]
+    sonuc = {}
+    for kod, ad in tanimlar:
+        sonuc[kod], _ = Permission.objects.get_or_create(code=kod, defaults={"name": ad})
+    return sonuc
 
 
 # --- RBAC çözümlemesi -------------------------------------------------------

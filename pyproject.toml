@@ -10,8 +10,12 @@ dependencies = [
     "djangorestframework>=3.16",
     # PostgreSQL sürücüsü (psycopg 3)
     "psycopg[binary]>=3.2",
-    # API kimlik doğrulama: opak, DB'de hash'li, süreli, iptal edilebilir token
-    "django-rest-knox>=5.1",
+    # Alan şifreleme (TOTP anahtarı gibi sırların veritabanında şifreli saklanması)
+    "cryptography>=43.0",
+    # NOT: API token'ları için üçüncü parti paket (knox) KULLANILMAZ; kendi
+    # `ApiToken` modelimiz kullanılır. Gerekçe: token doğrulaması kiracı bağlamı
+    # kurulmadan yapılır ve knox doğrulama sırasında kullanıcıyı `select_related`
+    # ile çektiği için RLS satırı gizler (bkz. apps/accounts/models.py).
     # Arka plan görevleri: Django ORM broker (Redis/Celery gerekmez)
     "django-q2>=1.10",
     # Nesne depolama (S3 uyumlu) erişimi

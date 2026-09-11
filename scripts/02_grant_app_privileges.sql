@@ -59,13 +59,25 @@ BEGIN
 END
 $$;
 
--- 4) Denetim kaydı koruması -------------------------------------------------
--- denetim kaydı yalnızca eklenip okunabilir; UPDATE/DELETE/TRUNCATE verilmez.
+-- 4) Denetim kaydı ve dizin koruması ----------------------------------------
+-- Denetim kaydı yalnızca eklenip okunabilir; UPDATE/DELETE/TRUNCATE verilmez.
 DO $$
 BEGIN
     IF to_regclass('hr.audit_logs') IS NOT NULL THEN
         REVOKE UPDATE, DELETE, TRUNCATE ON hr.audit_logs FROM persopyro_app;
         GRANT INSERT, SELECT ON hr.audit_logs TO persopyro_app;
+    END IF;
+END
+$$;
+
+-- Kiracı dizini (slug/domain eşlemesi) yalnızca OKUNUR. Yazma yetkisi verilmez;
+-- dizini tetikleyici (SECURITY DEFINER) günceller. Aksi halde bir kiracı başka
+-- kiracının alan adı eşlemesini ele geçirebilirdi.
+DO $$
+BEGIN
+    IF to_regclass('hr.tenant_directory') IS NOT NULL THEN
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON hr.tenant_directory FROM persopyro_app;
+        GRANT SELECT ON hr.tenant_directory TO persopyro_app;
     END IF;
 END
 $$;

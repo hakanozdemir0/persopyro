@@ -49,6 +49,25 @@ nokta bu dokümana eklenir.
 | `/api/v1/audit` | Denetim kayıtları (salt okunur) | `audit.read` |
 | `/api/v1/billing` | Abonelik ve faturalar | `billing.manage` |
 
+### 4.1 Uygulanmış uç noktalar (faz 2)
+
+| Uç nokta | Yöntem | Kimlik doğrulama | Notlar |
+|---|---|---|---|
+| `/api/v1/auth/login` | POST | Yok (giriş) | Gövde: `tenant`, `email`, `password`, `totp_code?`. Oturum çerezi (HttpOnly) döner; **CSRF korumalı** |
+| `/api/v1/auth/logout` | POST | Oturum | Oturumu kapatır; denetim kaydı yazar |
+| `/api/v1/auth/token` | POST | Yok (giriş) | Aynı gövde; opak API token döner (201) |
+| `/api/v1/auth/token/logout` | POST | Token | Yalnızca isteği yapan token'ı iptal eder |
+| `/api/health` | GET | Yok | Canlılık (veritabanına dokunmaz) |
+| `/api/ready` | GET | Yok | Veritabanı erişilebilir mi (503 dönebilir) |
+
+Giriş uçlarının davranışı:
+
+- Kiracı bulunamazsa veya parola yanlışsa **aynı** yanıt döner
+  (`invalid_credentials`) — kullanıcı numaralandırmasına karşı.
+- MFA açıksa kod zorunludur: kod yoksa `mfa_required`, kod yanlışsa `mfa_invalid`.
+  Bu bilgi yalnızca parola doğrulandıktan sonra döner.
+- Bu uçlar en katı hız sınırı sınıfındadır (`auth`); sınır aşımında `429`.
+
 ## 5. Yanıt biçimi
 
 Başarılı tekil kayıt:

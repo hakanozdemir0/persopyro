@@ -131,6 +131,29 @@ Yeni bir kiracıya bağlı yabancı anahtar eklendiğinde
 `apps/tenancy/migrations/0003_same_tenant_guard.py` içindeki `GUARDS` listesine
 eklenmelidir.
 
+### 3.4 Giriş ÖNCESİ okunan tablolar (RLS dışı, gerekçeli)
+
+Kiracı bağlamı, kiracı kimliği bilinmeden kurulamaz; bazı bilgiler ise tam da
+bağlam yokken okunmak zorundadır. Bu tablolar bilinçli olarak RLS dışıdır ve
+kiracı verisi içermez:
+
+| Tablo | İçerik | Uygulama rolünün yetkisi | Gerekçe |
+|---|---|---|---|
+| `tenant_directory` | `tenant_id`, `slug`, `domain` | **Yalnızca SELECT** (yazma tetikleyicide) | Giriş sayfası hangi kiracıya ait olduğunu bilmeli; yazma yetkisi verilseydi bir kiracı başkasının alan adını ele geçirebilirdi |
+| `api_tokens` | `tenant_id`, `user_id`, token **özeti**, süre | SELECT/INSERT/DELETE (düz metin token saklanmaz) | Token doğrulanırken kiracı bağlamı henüz yoktur; token'ın kendisi bağlamı taşır |
+| `permissions` | İzin kodları | SELECT | Global tanım tablosu |
+| `cache_table` | Django cache kayıtları | Tam | Teknik altyapı |
+
+**Neden SECURITY DEFINER fonksiyon değil?** Denendi ve ölçüldü: `FORCE ROW LEVEL
+SECURITY` tablo sahibini de bağladığı için SECURITY DEFINER bir fonksiyon bile
+kiracı satırını göremez (bkz. `docs/CHANGELOG.md` 0.6.0, bulgu 1). Bu yüzden
+eşleme bilgisi ayrı, dar kapsamlı tablolarda tutulur.
+
+Yapısal test (`test_tum_tenant_tablolarinda_rls_ve_force_etkin`) bu tabloları
+istisna olarak tanır; istisnaların gerekçesi test dosyasında ve buradadır.
+`ApiToken` için ayrıca davranışsal testler vardır: düz metin saklanmaz, süresi
+geçen token reddedilir, iptal edilen token çalışmaz.
+
 ## 4. Kurallar (bağlayıcı)
 
 1. Yeni tablo eklenirse `tenant_id` zorunludur (platform geneli tablolar hariç,

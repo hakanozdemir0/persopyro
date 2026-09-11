@@ -60,6 +60,40 @@ def database_tenant_id() -> uuid.UUID | None:
         return cur.fetchone()[0]
 
 
+def tenant_id_by_slug(slug: str) -> uuid.UUID | None:
+    """
+    Slug → kiracı kimliği.
+
+    Giriş öncesi (kiracı bağlamı yokken) çağrılır. Kiracı tablosu RLS + FORCE ile
+    korunduğu ve FORCE tablo sahibini de bağladığı için doğrudan sorgulanamaz;
+    bu yüzden yalnızca eşleme tutan `hr.tenant_directory` tablosu kullanılır
+    (RLS yok, uygulama rolü yalnızca okur).
+    """
+    return _lookup_tenant("SELECT tenant_id FROM hr.tenant_directory WHERE slug = %s", slug)
+
+
+def tenant_id_by_domain(domain: str) -> uuid.UUID | None:
+    """Alan adı → kiracı kimliği (aynı gerekçe; istek hattında kullanılır)."""
+    return _lookup_tenant(
+        "SELECT tenant_id FROM hr.tenant_directory WHERE domain = %s", domain
+    )
+
+
+def _lookup_tenant(sql: str, value: str) -> uuid.UUID | None:
+    """
+    Eşleme sorgusu; kayıt yoksa None döner.
+
+    DİKKAT: Eşleme bulunamaması NORMAL bir durumdur (ör. localhost'un bir
+    kiracıya bağlı olmaması). Bu yüzden boş sonuç hata değildir.
+    """
+    if not value:
+        return None
+    with connection.cursor() as cur:
+        cur.execute(sql, [value.strip().lower()])
+        satir = cur.fetchone()
+        return satir[0] if satir else None
+
+
 @contextmanager
 def tenant_context(tenant_id: uuid.UUID | str | None) -> Iterator[None]:
     """

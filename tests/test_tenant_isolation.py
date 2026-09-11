@@ -29,11 +29,20 @@ from apps.tenancy.models import Tenant
 
 pytestmark = pytest.mark.django_db
 
-# RLS beklenmeyen tablolar: yalnızca GLOBAL tanım tablosu (kiracı verisi içermez).
+# RLS beklenmeyen tablolar: GLOBAL tanım tabloları ve giriş ÖNCESİ okunan
+# eşleme tabloları (kiracı verisi içermez).
+#
+# Gerekçeli istisnalar:
+#   * `permissions`     : izin kodları (global tanım, kiracı verisi yok).
+#   * `api_tokens`      : token doğrulaması kiracı bağlamı KURULMADAN yapılır;
+#                         tablo yalnızca token özeti + kiracı kimliği tutar,
+#                         düz metin token saklamaz (bkz. apps/accounts/models.py).
+#   * `cache_table`     : Django'nun veritabanı cache tablosu (teknik altyapı).
+#
 # NOT: `role_permissions` burada DEĞİLDİR — ilk tasarımda tanım tablosu sayılmıştı,
 # bir test bunun çapraz kiracı açığı oluşturduğunu gösterdi ve tablo tenant_id
 # kazanıp RLS'e alındı (bkz. apps/rbac/migrations/0002_rolepermission_tenant.py).
-TANIM_TABLOLARI = {"permissions"}
+TANIM_TABLOLARI = {"permissions", "api_tokens", "cache_table"}
 
 
 def _rls_durumu(tablo: str) -> tuple[bool, bool]:
@@ -51,9 +60,15 @@ def _rls_durumu(tablo: str) -> tuple[bool, bool]:
 
 def _kiracıya_bagli_tablolar() -> set[str]:
     """tenant alanı olan yerel modellerin tabloları (+ tenants tablosu)."""
+    # RLS DIŞI bırakılan modeller: giriş ÖNCESİ okunmaları gerekir ve kiracı
+    # verisi içermezler (yalnızca eşleme/özet). Gerekçe için TANIM_TABLOLARI'na
+    # ve ilgili model belgelerine bakın.
+    haric_modeller = {"ApiToken"}
     tablolar: set[str] = set()
     for model in apps.get_models():
         if model._meta.app_label not in {"tenancy", "accounts", "rbac", "audit"}:
+            continue
+        if model.__name__ in haric_modeller:
             continue
         tablo = model._meta.db_table
         if model is Tenant or any(f.name == "tenant" for f in model._meta.get_fields()):
@@ -98,6 +113,66 @@ def test_tanim_tablolari_rls_disi_tutuldu() -> None:
     for tablo in TANIM_TABLOLARI:
         rls, _ = _rls_durumu(tablo)
         assert rls is False, f"{tablo} tanım tablosudur, RLS beklenmiyor"
+
+
+def test_tenant_dizini_rls_disi_ama_yazilamaz() -> None:
+    """
+    Kiracı dizini (slug/domain eşlemesi) RLS dışıdır (kiracı verisi içermez),
+    ancak uygulama rolü ona YAZAMAZ: dizini yalnızca tetikleyici günceller.
+    Aksi halde bir kiracı, başka kiracının alan adı eşlemesini ele geçirebilirdi.
+    """
+    from django.conf import settings
+
+    app_role = settings.APP_DB_ROLE
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n "
+            "ON n.oid = c.relnamespace WHERE n.nspname = 'hr' "
+            "AND c.relname = 'tenant_directory'"
+        )
+        assert cur.fetchone()[0] is False
+        cur.execute(
+            "SELECT has_table_privilege(%s, 'hr.tenant_directory', 'SELECT'), "
+            "has_table_privilege(%s, 'hr.tenant_directory', 'INSERT'), "
+            "has_table_privilege(%s, 'hr.tenant_directory', 'UPDATE'), "
+            "has_table_privilege(%s, 'hr.tenant_directory', 'DELETE')",
+            [app_role, app_role, app_role, app_role],
+        )
+        sec, ekle, guncelle, sil = cur.fetchone()
+    assert sec is True, "dizin okunabilmeli (giriş öncesi çözümleme için gerekli)"
+    assert (ekle, guncelle, sil) == (False, False, False), "dizin yazılamamalı"
+
+
+def test_kiracı_slug_ve_domain_ile_cozulur(tenant_a) -> None:  # noqa: ANN001
+    from apps.tenancy.context import tenant_id_by_domain, tenant_id_by_slug
+
+    assert tenant_id_by_slug("kiraci-a") == tenant_a.id
+    with tenant_context(tenant_a.id):
+        tenant_a.domain = "ik.kiraci-a.test"
+        tenant_a.save(update_fields=["domain", "updated_at"])
+    assert tenant_id_by_domain("ik.kiraci-a.test") == tenant_a.id
+
+
+def test_slug_degisince_dizin_guncellenir(tenant_a) -> None:  # noqa: ANN001
+    from apps.tenancy.context import tenant_id_by_slug
+
+    with tenant_context(tenant_a.id):
+        tenant_a.slug = "yeni-slug"
+        tenant_a.save(update_fields=["slug", "updated_at"])
+    assert tenant_id_by_slug("yeni-slug") == tenant_a.id
+    assert tenant_id_by_slug("kiraci-a") is None
+
+
+def test_silinmis_kiracı_dizinden_cikarilir(tenant_a) -> None:  # noqa: ANN001
+    """Soft-delete edilen kiracı artık slug ile çözümlenemez."""
+    from django.utils import timezone
+
+    from apps.tenancy.context import tenant_id_by_slug
+
+    with tenant_context(tenant_a.id):
+        tenant_a.deleted_at = timezone.now()
+        tenant_a.save(update_fields=["deleted_at", "updated_at"])
+    assert tenant_id_by_slug("kiraci-a") is None
 
 
 # --- 2. Davranışsal güvence -------------------------------------------------
@@ -196,7 +271,9 @@ def test_role_permission_capraz_kiracı_engellenir(tenant_a, tenant_b) -> None: 
     """Başka kiracının rolüne izin kaydı eklenemez (guard tetikleyicisi)."""
     from apps.rbac.models import Permission, RolePermission
 
-    izin = Permission.objects.create(code="employee.read", name="Çalışan görme")
+    izin, _ = Permission.objects.get_or_create(
+        code="employee.read", defaults={"name": "Çalışan görme"}
+    )
     with tenant_context(tenant_b.id):
         rol_b = Role.objects.create(tenant=tenant_b, name="İK B", code="hr_manager")
 

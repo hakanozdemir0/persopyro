@@ -46,7 +46,9 @@ else
 fi
 
 gen_secret() {
-    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+    # 48 bayt → 64 karakter: Django'nun `check --deploy` uyarısı (W009) 50
+    # karakterden kısa anahtarları reddeder.
+    python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 }
 
 echo "== 0/5 Süper kullanıcı erişimi sınanıyor =="
@@ -83,6 +85,8 @@ if [ -e "$ENV_FILE" ]; then
     echo "    mevcut .env yedeklendi: $BAK"
 fi
 DJANGO_SECRET_KEY="$(gen_secret)"
+# Alan şifreleme anahtarı (TOTP sırrı gibi değerler için; Fernet uyumlu 32 bayt)
+FIELD_ENCRYPTION_KEY="$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
 umask 077
 cat > "$ENV_FILE" <<ENVEOF
 # Persopyro yerel ortam değişkenleri — scripts/bootstrap.sh tarafından üretildi.

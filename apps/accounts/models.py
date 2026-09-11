@@ -14,6 +14,9 @@ Kritik kararlar (docs/ARCHITECTURE.md bölüm 7, docs/AUTHORIZATION.md):
 """
 
 
+from datetime import timedelta
+
+from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
@@ -25,6 +28,86 @@ class UserStatus(models.TextChoices):
     ACTIVE = "active", "Aktif"
     INACTIVE = "inactive", "Pasif"
     ARCHIVED = "archived", "Arşiv"
+
+
+class ApiToken(UUIDModel):
+    """
+    API erişim token'ı (opak, hash'li, süreli, cihaz bazlı iptal edilebilir).
+
+    NEDEN KENDİ MODELİMİZ (knox yerine): Token doğrulaması, kiracı bağlamı
+    KURULMADAN yapılır — çünkü bağlamı token'ın kendisinden öğreniriz. knox,
+    doğrulama sırasında kullanıcıyı `select_related` ile çeker; kullanıcı tablosu
+    RLS ile korunduğu için o an satır görünmez ve token asla doğrulanamaz
+    (ölçüldü: 401). Bu yüzden token satırı `tenant_id` taşır.
+
+    Güvenlik özellikleri:
+      * Düz metin token SAKLANMAZ; yalnızca SHA-256 özeti (yüksek entropili
+        rastgele değer olduğu için hızlı özet yeterlidir).
+      * Süre (`expires_at`) zorunludur; süresi geçen token reddedilir.
+      * Cihaz bazlı iptal: çıkış yalnızca o token'ı siler.
+      * Bu tablo RLS DIŞIDIR (giriş öncesi okunur), kiracı verisi içermez.
+        Yapısal RLS testindeki istisna listesinde gerekçesiyle birlikte yer alır.
+    """
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant",
+        on_delete=models.CASCADE,
+        related_name="api_tokens",
+        verbose_name="kiracı",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="api_tokens",
+        verbose_name="kullanıcı",
+    )
+    token_hash = models.CharField("token özeti (SHA-256)", max_length=64, unique=True)
+    label = models.CharField("cihaz/etiket", max_length=80, blank=True)
+    expires_at = models.DateTimeField("bitiş")
+    last_used_at = models.DateTimeField("son kullanım", null=True, blank=True)
+    created_at = models.DateTimeField("oluşturma", auto_now_add=True)
+
+    class Meta:
+        db_table = "api_tokens"
+        verbose_name = "API token"
+        verbose_name_plural = "API tokenları"
+        indexes = [
+            models.Index(fields=["tenant", "user"], name="api_tokens_tenant_user_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.label or 'token'} ({self.user_id})"
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at <= timezone.now()
+
+    @classmethod
+    def issue(cls, user, label: str = "") -> tuple["ApiToken", str]:
+        """
+        Yeni token üretir.
+
+        Döner: (kayıt, düz_metin_token). Düz metin yalnızca bu anda gösterilir;
+        bir daha elde edilemez.
+        """
+        import hashlib
+        import secrets
+
+        duz_metin = secrets.token_urlsafe(32)
+        kayit = cls.objects.create(
+            tenant_id=user.tenant_id,
+            user=user,
+            token_hash=hashlib.sha256(duz_metin.encode()).hexdigest(),
+            label=label,
+            expires_at=timezone.now() + timedelta(hours=settings.API_TOKEN_TTL_HOURS),
+        )
+        return kayit, duz_metin
+
+    @staticmethod
+    def hash_token(duz_metin: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(duz_metin.encode()).hexdigest()
 
 
 class UserManager(BaseUserManager):

@@ -13,15 +13,17 @@ Mevcut veritabanı tasarımındaki RBAC tabloları esas alınır.
 - **Giriş, kiracı bağlamı kurulmadan yapılamaz.** Kiracı belirlenemezse giriş
   reddedilir (fail-closed). Kiracı; oturum/alan adı üzerinden çözümlenir ve
   backend'e açıkça verilir — istemci gövdesinden okunmaz.
-- **Önkoşul (istek hattı):** kiracı bağlamı, Django'nun `AuthenticationMiddleware`
-  adımından ÖNCE kurulmalıdır; aksi halde oturumdan kullanıcı yüklenemez (RLS
-  satırı gizler). Bu adım faz 2'nin 2. diliminde eklenir.
-- Hatalı parola denemeleri `failed_login_count` ile sayılır, sınır aşılırsa
-  `lockout_until` ile hesap kilitlenir (`LOGIN_MAX_FAILED_ATTEMPTS`,
-  `LOGIN_LOCKOUT_MINUTES`). Kilitliyken doğru parola da kabul edilmez.
-- Oturumlar kısa ömürlü token ile yönetilir; token yenileme ayrı uç noktadır.
-- `multi_factor_enabled` alanı desteklenir; kritik roller için zorunlu kılınması
-  önerilir.
+- **Önkoşul (istek hattı) — UYGULANDI:** kiracı bağlamı, Django'nun
+  `AuthenticationMiddleware` adımından ÖNCE kurulur
+  (`RequestIdMiddleware` → `TenantContextMiddleware` → `ApiTokenTenantMiddleware`).
+  Kiracı sırası: oturum → alan adı → token. Oturum ile alan adı uyuşmazsa istek
+  reddedilir.
+- Oturumlar kısa ömürlüdür (varsayılan 12 saat) ve veritabanında tutulur.
+- API token'ları kendi `ApiToken` modelimizle yönetilir: SHA-256 özeti saklanır,
+  süresi zorunludur (varsayılan 30 gün) ve çıkış yalnızca o cihazın token'ını
+  iptal eder. Üçüncü parti token paketi kullanılmaz (K15).
+- MFA (TOTP) **uygulanmıştır**: hem oturum hem token girişinde zorunludur; TOTP
+  sırrı veritabanında şifreli saklanır. Anahtar okunamazsa giriş reddedilir.
 - Parola sıfırlama: `password_reset_tokens` üzerinden tek kullanımlık, süreli token.
 - Her giriş/çıkış/başarısız deneme `audit_logs` tablosuna yazılır.
 - Kullanıcı numaralandırmasına karşı: kullanıcı bulunamasa da parola doğrulaması

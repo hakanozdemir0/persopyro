@@ -19,6 +19,20 @@ class Tenant(UUIDModel):
     """
 
     name = models.CharField("şirket adı", max_length=200)
+    slug = models.SlugField(
+        "kısa ad (slug)",
+        max_length=60,
+        unique=True,
+        help_text="Kiracıyı tanımlayan kısa ad; giriş ve alt alan adı için kullanılır.",
+    )
+    domain = models.CharField(
+        "özel alan adı",
+        max_length=190,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Varsa bu alan adı doğrudan kiracıya çözümlenir (ör. ik.acme.com).",
+    )
     legal_name = models.CharField("tüzel unvan", max_length=250, blank=True)
     tax_number = models.CharField("vergi numarası", max_length=50, blank=True)
     email = models.EmailField("e-posta", max_length=190, blank=True)

@@ -14,13 +14,14 @@ Faz 0 (ortam, depo, test iskeleti) ve Faz 1 (veritabanı: roller, `hr` şeması,
 RLS ile kiracı izolasyonu) tamamlandı. Uygulama özellikleri henüz kodlanmadı.
 
 - Kurulu: Python 3.13.15 (uv), Django 5.2.17 LTS, bağımlılıklar (`uv.lock`),
-  PostgreSQL 18.6 (localhost), roller + `hr` şeması + RLS.
-- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9; 57 test yeşil; şema
-  Django migration'larının sahibi.
-- Faz 2'nin ilk dilimi tamamlandı: kiracı/kullanıcı/RBAC modelleri, RLS ve
-  kiracılar arası referans guard'ı, kimlik doğrulama backend'i ve izin
-  çözümleme servisi. Kalan: istek hattı, görünümler/API, MFA uçları,
-  parola sıfırlama (`docs/CHANGELOG.md` 0.5.0).
+  PostgreSQL 18.6 (localhost), roller + `hr` şeması + RLS + kiracı dizini.
+- Çalışan: giriş/çıkış (oturum **ve** API token), MFA (TOTP), rol/izin yönetimi
+  altyapısı, kiracı bağlamı istek hattı.
+- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9; **97 test yeşil**; sıfırdan
+  kurulum (boş veritabanı) ayrıca doğrulandı; şema Django migration'larının sahibi.
+- Kalan (faz 2, 3. dilim): parola sıfırlama + e-posta, MFA kayıt ucu, süresi
+  geçmiş oturum/token temizliği, kullanıcı CRUD uçları
+  (`docs/CHANGELOG.md` 0.6.0).
 
 ## Geliştirme ortamı
 

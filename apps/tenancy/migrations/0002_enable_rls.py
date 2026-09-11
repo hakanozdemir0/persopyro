@@ -21,11 +21,16 @@
 from django.db import migrations
 
 # RLS uygulanacak tablolar ve politikanın dayandığı sütun.
+#
+# DİKKAT: Bu dosya zaten UYGULANMIŞ bir migration'dır; listesi DEĞİŞTİRİLMEZ.
+# Yeni bir kiracıya bağlı tablo eklendiğinde RLS'i AYRI bir migration ile
+# etkinleştirin (örnek: `0004_rls_role_permissions.py`). Aksi halde sıfırdan
+# kurulumlarda migration sırası bozulur: burada listelenen bir tablonun sütunu,
+# bu migration çalıştığı anda henüz oluşmamış olabilir (ölçüldü ve düzeltildi).
 RLS_TABLES: dict[str, str] = {
     "tenants": "id",
     "users": "tenant_id",
     "roles": "tenant_id",
-    "role_permissions": "tenant_id",
     "user_roles": "tenant_id",
     "user_permission_overrides": "tenant_id",
     "audit_logs": "tenant_id",

@@ -38,6 +38,9 @@ export POSTGRES_PASSWORD="${POSTGRES_OWNER_PASSWORD:-}"
 echo "== Migration'lar çalıştırılıyor (rol: $POSTGRES_USER) =="
 .venv/bin/python manage.py migrate "$@"
 
+echo "== Cache tablosu hazırlanıyor (createcachetable) =="
+.venv/bin/python manage.py createcachetable
+
 echo "== Uygulama rolü yetkileri tazeleniyor =="
 if command -v psql >/dev/null 2>&1; then
     PGPASSWORD="$POSTGRES_PASSWORD" psql \

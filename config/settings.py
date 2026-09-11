@@ -83,7 +83,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Üçüncü parti
     "rest_framework",
-    "knox",
     "django_q",
     # Yerel uygulamalar
     "apps.tenancy",
@@ -97,12 +96,16 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
+    # Kiracı bağlamı, kimlik doğrulamadan ÖNCE kurulmalıdır: oturumdan kullanıcı
+    # yüklenirken RLS'in satırı gizlememesi buna bağlıdır.
+    "apps.tenancy.middleware.RequestIdMiddleware",
+    "apps.tenancy.middleware.TenantContextMiddleware",
+    # Token ile gelen isteklerde kiracıyı token'dan çözer (bağlamı isteğin
+    # geri kalanı için kurar).
+    "apps.accounts.middleware.ApiTokenTenantMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # NOT: Kiracı bağlamı (tenant_id) ara yazılımı faz 1/2'de buraya eklenir.
-    # Eklendiğinde "tenant bağlamı yoksa sorgu çalışmasın" kuralı zorunlu olacaktır
-    # (docs/ARCHITECTURE.md bölüm 2.3).
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -167,6 +170,12 @@ AUTHENTICATION_BACKENDS = ["apps.accounts.backends.TenantScopedModelBackend"]
 LOGIN_MAX_FAILED_ATTEMPTS = int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
 
+# API token ömrü (saat). Token süresi zorunludur.
+API_TOKEN_TTL_HOURS = int(os.environ.get("API_TOKEN_TTL_HOURS", "720"))  # 30 gün
+
+# Oturum ömrü: kısa tutulur; kullanıcı yeniden giriş yapar.
+SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", "43200"))  # 12 saat
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
@@ -188,7 +197,7 @@ PASSWORD_HASHERS = [
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "knox.auth.TokenAuthentication",
+        "apps.accounts.authentication.ApiTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
@@ -251,6 +260,24 @@ STORAGE_S3_BUCKET = os.environ.get("S3_BUCKET", "")
 STORAGE_S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "")
 STORAGE_S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
 STORAGE_SIGNED_URL_TTL_SECONDS = int(os.environ.get("S3_SIGNED_URL_TTL_SECONDS", "300"))
+
+# --- Cache -------------------------------------------------------------------
+# Karar (docs/ARCHITECTURE.md bölüm 6.1): Redis yok. Paylaşımlı cache, veritabanı
+# tablosu üzerinden sağlanır. Bu, hız sınırlama sayaçlarının tüm işçi süreçlerinde
+# ortak olması için gereklidir (süreç-yerel bellek yeterli olmaz).
+# Tablo, migration sonrası `manage.py createcachetable` ile oluşturulur
+# (bkz. scripts/migrate.sh).
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "cache_table",
+        "TIMEOUT": int(os.environ.get("CACHE_TIMEOUT", "300")),
+    }
+}
+
+# Oturumlar veritabanında tutulur (ek servis gerekmez; iptal edilebilir).
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
 
 # --- Uluslararasılaştırma / zaman -------------------------------------------
 
