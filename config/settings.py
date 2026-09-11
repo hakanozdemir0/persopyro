@@ -32,16 +32,17 @@ def env_list(name: str, default: str = "") -> list[str]:
 # Varsayılan olarak üretim davranışı (DEBUG kapalı). Geliştirmede DJANGO_DEBUG=1.
 DEBUG = env_bool("DJANGO_DEBUG", False)
 
-# Secret koda yazılmaz. Geliştirme dışında tanımlı olması zorunludur.
+# Secret koda yazılmaz ve hiçbir ortam için koda gömülü yedek değer bulunmaz.
+# Her ortamda (geliştirme dahil) ortam değişkeninden okunur; tanımsızsa uygulama
+# bilinçli olarak başlamaz. Geliştirmede: export DJANGO_SECRET_KEY=...
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
-    if DEBUG:
-        SECRET_KEY = "dev-only-insecure-key"  # nosec B105 - yalnızca DEBUG=1 iken
-    else:
-        raise ImproperlyConfigured(
-            "DJANGO_SECRET_KEY ortam değişkeni tanımlı değil. "
-            "Secret'lar kaynak koda yazılmaz (bkz. docs/DEVELOPMENT_RULES.md)."
-        )
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY ortam değişkeni tanımlı değil. "
+        "Secret'lar kaynak koda yazılmaz (bkz. docs/DEVELOPMENT_RULES.md). "
+        "Geliştirme için: export DJANGO_SECRET_KEY=$(python3 -c "
+        "'import secrets;print(secrets.token_urlsafe(50))')"
+    )
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 

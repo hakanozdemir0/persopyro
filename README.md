@@ -25,7 +25,8 @@ yapılacak).
 # Bağımlılıkları kur (uv gerekir)
 uv sync
 
-# Sırları ortamdan ver (koda yazılmaz; tanımsızsa uygulama bilinçli olarak başlamaz)
+# Sırları ortamdan ver (koda yazılmaz; hiçbir ortamda koda gömülü yedek yoktur,
+# tanımsızsa uygulama bilinçli olarak başlamaz)
 export DJANGO_SECRET_KEY="$(python3 -c 'import secrets;print(secrets.token_urlsafe(50))')"
 export DJANGO_DEBUG=1
 

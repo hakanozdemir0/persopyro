@@ -23,8 +23,9 @@ uyumluluğu 3.13'te daha oturmuş durumda.
 - Django iskeleti: `manage.py`, `config/` (settings, urls, wsgi, asgi),
   `apps/` (uygulama modülleri için paket), `tests/`.
 - `config/settings.py` — mimari kararlara göre yazıldı:
-  - DEBUG varsayılan **kapalı** (üretim davranışı), `DJANGO_SECRET_KEY`
-    tanımsızsa üretimde uygulama bilinçli olarak başlamaz.
+  - DEBUG varsayılan **kapalı** (üretim davranışı). `DJANGO_SECRET_KEY` her
+    ortamda (geliştirme dahil) zorunludur; koda gömülü bir yedek değer **yoktur**,
+    bu yüzden yanlışlıkla üretime taşınabilecek güvensiz bir varsayılan oluşamaz.
   - Veritabanı PostgreSQL'e sabit; bağlantı seçeneği olarak
     `search_path=hr,public` verildi (şema kararı uygulandı).
   - Uygulama rolü `persopyro_app` (tablo sahibi değil — RLS için kritik).
@@ -48,8 +49,8 @@ uyumluluğu 3.13'te daha oturmuş durumda.
 - `manage.py check`: sorun yok (0 hata).
 - `pytest`: **10 test geçti** (0,30 sn).
 - `ruff check .`: temiz.
-- `bandit -r config apps`: temiz (geliştirme amaçlı sabit anahtar satırı
-  gerekçesiyle `# nosec B105` ile işaretlendi).
+- `bandit -r config apps`: temiz (`# nosec` gerekmedi; güvensiz yedek secret
+  tamamen kaldırıldığı için bulgu üretilmiyor).
 - `pip-audit`: bilinen güvenlik açığı yok.
 - Django sürümü: 5.2.17 (LTS), Python: 3.13.15.
 
