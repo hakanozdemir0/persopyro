@@ -101,7 +101,7 @@ mesajı için).
 |---|---|
 | `tenant_admin` | Kiracının tamamı |
 | `tenant_officer` | Yetkilendirildiği modüller (şirket geneli, izin bazlı) |
-| `dept_manager` | Kendi birimi **ve alt birimleri** (kapsam: `UNIT`) ✅ **OD5 kapalı (2026-09-11)** — kapsam kaynağı `user_roles.scope_org_unit_id`; NULL ise **fail-closed** |
+| `dept_manager` | Kendi birimi **ve alt birimleri** (kapsam: `UNIT`) ✅ **OD5 kapalı (2026-09-11)** — kapsam kaynağı `user_roles.scope_org_unit_id`; NULL ise **fail-closed**. **M8/M9 ✅ UYGULANDI:** rol `scope_type = UNIT` (DB `CHECK`), atama kapsamı guard tetikleyicisiyle **zorunlu**; alt ağaç çözümlemesi (M10) gelene kadar bu atamalar **izin üretmez** |
 | `employee` | Kendi kaydı + kendi biriminin **genel** bilgileri (ad, unvan, birim) |
 
 - Organizasyon şeması görünümü (ağaç) **kişisel veri içermez**: ad yerine **genel
@@ -110,12 +110,18 @@ mesajı için).
   ya da bir **role/kapsama** (`approver_role_code` + `UNIT` kapsamı) bağlanır; onaylayan
   kendi talebini onaylayamaz (`SEPARATE_ACTOR`).
 
-### 5.1 Kapsam kararı (OD5 — kapalı) ✅
+### 5.1 Kapsam kararı (OD5 — kapalı) ✅ — **M8/M9 ✅ UYGULANDI (2026-09-11)**
 
 - **Dept_manager kapsamı: atandığı birim + tüm alt ağaç (`UNIT`)**; kapsam kaynağı
   `hr.user_roles.scope_org_unit_id`. `scope_org_unit_id IS NULL` ise atama **hiçbir
   kapsam üretmez** (fail-closed; NULL "tüm tenant" **değildir** — kiracı geneli yetki
   `TENANT` tipli rolle, `tenant_admin`/`tenant_officer`).
+- **Uygulama durumu:** `hr.roles.scope_type` (M8, `NOT NULL` + kapalı küme `CHECK`) ve
+  `hr.user_roles.scope_org_unit_id` (M9, kolon + `NULLS NOT DISTINCT` benzersizlik +
+  guard tetikleyicisi) **kuruldu**. `departments(id)` FK'si ve **alt ağaç çözümlemesi**
+  M10 sonrasıdır → o gelene kadar `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez**
+  (`apps/rbac/services/scope.py`, fail-closed köprü). Bu, "birim yöneticisi izinleri
+  tenant-wide görünür" açığını kapatır.
 - **Karar kuralı:** `izinli = (izin kodu var) ∧ (kayıt etkin kapsamda)`. Kapsam izin
   üretmez; izin de kapsam üretmez. Biri yoksa **reddet**.
 - **Çoklu atama:** aynı kiracı içinde birden fazla atama **birleşir (union)**;

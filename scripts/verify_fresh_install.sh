@@ -335,6 +335,47 @@ fi
 adim "6/8 Demo verisi + gerçek HTTP (roller: app)"
 django_owner manage.py shell < scripts/_demo_data.py | tail -1
 
+adim "6b/8 M7-M9 tenant RBAC scope durumu (hedef rol seti, kapsam tipleri, guard)"
+if [ "$(tablo_var "$FRESH_DB" "hr.roles")" = "$VAR" ]; then
+    # `hr.*` FORCE RLS'tir: ölçüm öncesi kiracı bağlamı kurulmalı (tek işlemde).
+    # Demo kiracısı bu adımdan ÖNCE üretilir (demo verisi); bu yüzden ölçüm burada.
+    sql_demo() {  # sql_demo <sql>
+        sql_deger "$FRESH_DB" \
+            "SELECT set_config('app.tenant_id', (SELECT tenant_id::text FROM hr.tenant_directory WHERE slug='demo'), true); $1" |
+            tail -1
+    }
+
+    bekle "eski 'manager' rolü YOK (M7)" \
+        "$(sql_demo "SELECT count(*) FROM hr.roles WHERE code = 'manager'")" "0"
+    bekle "hedef rol seti (M7)" \
+        "$(sql_demo "SELECT string_agg(code, ',' ORDER BY code) FROM hr.roles")" \
+        "dept_manager,employee,hr_manager,tenant_admin,tenant_officer"
+    bekle "kapsam tipleri (M8: OD5)" \
+        "$(sql_demo "SELECT string_agg(code || ':' || scope_type, ',' ORDER BY code) FROM hr.roles")" \
+        "dept_manager:UNIT,employee:SELF,hr_manager:TENANT,tenant_admin:TENANT,tenant_officer:TENANT"
+    bekle "tenant_admin izinleri (hedef katalog)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "29"
+    bekle "dept_manager hedef izin seti (§6.2 DY)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "14"
+    bekle "tenant_officer hedef izin seti (§6.2 ŞYT)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "19"
+    bekle "scope_type kapalı küme kısıtı (M8)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.roles'::regclass AND conname='roles_scope_type_valid'")" "1"
+    bekle "scope_org_unit_id kolonu (M9)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND table_name='user_roles' AND column_name='scope_org_unit_id'")" "1"
+    bekle "kapsam içeren benzersizlik (M9)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.user_roles'::regclass AND conname='user_roles_user_role_scope_uniq'")" "1"
+    bekle "eski (user_id, role_id) benzersizliği kaldırıldı" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.user_roles'::regclass AND conname='user_roles_uniq'")" "0"
+    bekle "kapsam guard tetikleyicisi (M9)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger WHERE tgrelid='hr.user_roles'::regclass AND tgname='trg_user_role_scope_guard'")" "1"
+    # M9'un BİLİNÇLİ ertelenen kısmı: FK + birim geçerlilik guard'ı M10 sonrası.
+    bilgi "M9 ertelenen kısım: hr.departments FK'si = $(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE contype='f' AND confrelid = to_regclass('hr.departments')") (beklenen 0 — M10 öncesi)"
+    bilgi "M9 ertelenen kısım: hr.departments tablosu = $(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class WHERE relname='departments'") (beklenen 0 — M10 işi)"
+fi
+
+adim "6c/8 Gerçek HTTP (roller: app)"
+
 django_app_server manage.py runserver "127.0.0.1:$VERIFY_PORT" --noreload \
     >"$SMOKE_LOG" 2>&1 &
 SUNUCU_PID=$!

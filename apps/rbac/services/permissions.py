@@ -29,42 +29,80 @@ from django.utils import timezone
 
 from apps.rbac.models import (
     PermissionEffect,
-    Role,
     RolePermission,
     UserPermissionOverride,
     UserRole,
 )
+from apps.rbac.services.scope import assignment_grants_permissions
 from apps.tenancy.access import tenant_access_allowed
+
+
+def _active_assignments(user) -> list:
+    """Kullanıcının **geçerli** rol atamaları (silinmemiş, süresi geçmemiş)."""
+    now = timezone.now()
+    return list(
+        UserRole.objects.filter(user=user, deleted_at__isnull=True)
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+        .select_related("role")
+    )
 
 
 def _active_role_ids(user) -> list:
     """
-    Kullanıcının **geçerli** rol kimlikleri.
+    Kullanıcının **izin üretebilen** rol kimlikleri.
 
-    Dışarıda bırakılanlar: silinmiş `UserRole` (atama), silinmiş `Role` ve süresi
-    geçmiş atama. İki sorgu bilinçli olarak ayrıdır: `Role` filtresi JOIN'e
-    gizlenmez, açıkça görünür.
+    Dışarıda bırakılanlar: silinmiş `UserRole` (atama), silinmiş `Role`, süresi
+    geçmiş atama **ve** organizasyon kapsamı çözülemeyen `UNIT`/`UNIT_DIRECT`
+    atamaları (OD5 fail-closed: birim yöneticisinin izinleri kapsam çözülmeden
+    kiracı geneli sayılamaz).
     """
-    now = timezone.now()
-    atanan_role_ids = list(
-        UserRole.objects.filter(user=user, deleted_at__isnull=True)
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
-        .values_list("role_id", flat=True)
-    )
-    if not atanan_role_ids:
-        return []
-    return list(
-        Role.objects.filter(id__in=atanan_role_ids, deleted_at__isnull=True).values_list(
-            "id", flat=True
+    return [
+        atama.role_id
+        for atama in _active_assignments(user)
+        if atama.role.deleted_at is None and assignment_grants_permissions(atama)
+    ]
+
+
+def _role_permission_codes(role_ids) -> set[str]:  # noqa: ANN001
+    if not role_ids:
+        return set()
+    return set(
+        # `RolePermission` bir bağ tablosudur ve `deleted_at` kolonu yoktur; kayıt
+        # fiziksel silinir, dolayısıyla var olan satır yetki verir (silinmiş satır yok).
+        RolePermission.objects.filter(role_id__in=role_ids).values_list(
+            "permission__code", flat=True
         )
     )
 
 
+def declared_permission_codes(user) -> set[str]:
+    """
+    Kullanıcının rollerinden gelen **tüm** izin kodları — **kapsam filtresi YOK**.
+
+    Bu, "permission code ownership" görünümüdür (yönetim/teşhis ekranları için).
+    **Yetkilendirme kaynağı DEĞİLDİR**: `UNIT`/`UNIT_DIRECT` bir rolün kodları burada
+    görünse bile, organizasyon kapsamı çözülmeden o kodlarla işlem yapılamaz. Karar
+    için daima `effective_permission_codes` / `authorized_permission_codes` kullanılır.
+    """
+    if user is None or not user.is_authenticated or not user.is_active:
+        return set()
+    rol_ids = [
+        atama.role_id
+        for atama in _active_assignments(user)
+        if atama.role.deleted_at is None
+    ]
+    return _role_permission_codes(rol_ids)
+
+
 def effective_permission_codes(user) -> set[str]:
     """
-    Kullanıcının etkin izin kodları.
+    Kullanıcının **kullanılabilir** (etkin) izin kodları.
 
     (rollerin izinleri) + (allow istisnaları) - (deny istisnaları)
+
+    Kapsam (OD5): `UNIT`/`UNIT_DIRECT` tipli atamalar kapsamı çözülemezse izin
+    üretmez (`apps/rbac/services/scope.py`); `TENANT`/`SELF`/`ASSIGNED` tiplerinde
+    mevcut davranış korunur.
 
     Pasif veya silinmiş kullanıcı için **boş küme** döner (fail-closed): kullanıcı
     kaydı da yetki çözümlemesinin girdisidir ve silinmiş kayıt katkı sağlamaz.
@@ -72,14 +110,7 @@ def effective_permission_codes(user) -> set[str]:
     if user is None or not user.is_authenticated or not user.is_active:
         return set()
 
-    role_ids = _active_role_ids(user)
-    role_codes = set(
-        # `RolePermission` bir bağ tablosudur ve `deleted_at` kolonu yoktur; kayıt
-        # fiziksel silinir, dolayısıyla var olan satır yetki verir (silinmiş satır yok).
-        RolePermission.objects.filter(role_id__in=role_ids).values_list(
-            "permission__code", flat=True
-        )
-    )
+    role_codes = _role_permission_codes(_active_role_ids(user))
     overrides = UserPermissionOverride.objects.filter(
         user=user, deleted_at__isnull=True
     ).values_list("permission__code", "effect")

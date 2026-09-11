@@ -34,7 +34,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | T4 | Evrak dosyalarına yetkisiz erişim | Yüksek | Kısa ömürlü imzalı bağlantı, erişim kaydı, sınıflandırma ✅/🔜 |
 | T5 | Denetim kaydının manipüle edilmesi/eksik kalması | Orta-Yüksek | Append-only tablo, uygulama rolüne UPDATE/DELETE yasağı ✅; zincirleme 🔜 |
 | T6 | Dosya yükleme üzerinden zararlı içerik | Orta | MIME/boyut/checksum doğrulaması ✅; içerik taraması ❓ |
-| T7 | Yatay/dikey yetki yükseltme (IDOR) | Yüksek | Her kayıt erişiminde kiracı + kapsam kontrolü ✅/🔜 |
+| T7 | Yatay/dikey yetki yükseltme (IDOR) | Yüksek | Her kayıt erişiminde kiracı + kapsam kontrolü ✅/🔜 — **kapsam tarafı M7–M9 ile kuruldu** (fail-closed köprü: kapsam çözülmeden `UNIT` izni üretilmez) |
 | T8 | Kişisel verinin gereğinden fazla gösterilmesi/sızması | Orta-Yüksek | Varsayılan maskeleme, en az veri, amaca bağlama 🔜 |
 | T9 | Secret'ın depoya veya loglara düşmesi | Yüksek | Ortam değişkeni, log temizleme, tarama ✅ |
 | T10 | Brute force / parola deneme saldırısı | Orta | Deneme sınırı, hesap kilitleme, hız sınırlama ✅ |
@@ -43,7 +43,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T13** | **Genel kimlik üzerinden kişisel veri numaralandırması (enumeration)** | **Orta** | **Rastgele kimlik, hız sınırı, kayıtsız çözümleme yasağı, ayırt edilemez yanıt** 🔜 |
 | **T14** | **Evrakın yanlış sınıflandırılması (kişisel veri "yok" denmesi)** | **Yüksek** | **"Emin değilim" = en kısıtlayıcı politika, sınıflandırma onayı, rastgele denetim** 🔜 |
 | **T15** | **Süresi geçmiş/iptal edilmiş onayla erişim (yetki kalıntısı)** | **Yüksek** | **Koşul kontrolü her istekte (GRANT_VALID), veritabanı politika kontrolü** 🔜 |
-| **T16** | **Kendi kendini yetkilendirme (self-elevation)** | **Yüksek** | **Ayrılık ilkesi: talep eden onaylayamaz, kendi kapsamını genişletemez** 🔜 |
+| **T16** | **Kendi kendini yetkilendirme (self-elevation)** | **Yüksek** | **Ayrılık ilkesi: talep eden onaylayamaz, kendi kapsamını genişletemez** — platform tarafı ✅ (M32), kiracı tarafı rol ataması guard'ları ✅ (M9 kapsamı: kendine atama reddi, sahip olmadığı yetkiyi dağıtamama, `role.manage` şartı, denetim kaydı; `apps/rbac/services/roles.py`) |
 | **T17** | **Yedek/export üzerinden toplu veri sızması** | **Yüksek** | **Maskeli varsayılan export, kayıtlı/kısıtlı toplu indirme, şifreli yedek** 🔜 |
 | **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **KAPATILDI (OD19, 2026-09-11):** `/admin/` yolu ve `django.contrib.admin` **kaldırıldı** (`GET /admin/` → 404), `auth_permission`/`auth_group`/`auth_group_permissions`/`django_admin_log` yetkileri uygulama rolünden **tamamen geri alındı**, `is_staff` üretimde `True` **olamaz** (uygulama guard'ı + DB kısıtı + denetim komutu), `is_superuser` alanı **yok** ✅ (M22–M22d) |
 | **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
@@ -198,8 +198,8 @@ barındırma, kiracı RLS politikasını platform için gevşetme.
 Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 
 - Model **RBAC + kapsam + kapalı koşul kümesi**; varsayılan **reddetme** ✅.
-- **Kapsam (OD5 — kapalı ✅, 2026-09-11):** karar **izin ∧ kapsam**dır; kapsam izin
-  üretmez, izni daraltır. `dept_manager` kapsamı **atandığı birim + tüm alt ağaç**
+- **Kapsam (OD5 — kapalı ✅, 2026-09-11; M7–M9 ✅ UYGULANDI):** karar **izin ∧ kapsam**dır;
+  kapsam izin üretmez, izni daraltır. `dept_manager` kapsamı **atandığı birim + tüm alt ağaç**
   (`UNIT`; OD24 adjacency + recursive CTE, derinlik ≤ 20) ve kaynağı
   `hr.user_roles.scope_org_unit_id`'dir. **`scope_org_unit_id IS NULL` → fail-closed**
   (NULL **asla** "tüm kiracı" değildir; kiracı geneli yetki `TENANT` tipli rolden gelir).
@@ -209,6 +209,22 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
   yazılır (yetki kapsamı büyüyebildiği için). Kapsam **kişisel veri erişimi üretmez**:
   `employees` PII içermez, K2/K3 için ayrı izin + koşul (`MFA_OK`, `PURPOSE_GIVEN`,
   maskeleme) aynen geçerlidir (§7).
+- **Kapsamın teknik uygulaması (M7–M9, 2026-09-11) ve fail-closed köprü:** rolün azami
+  kapsamı `hr.roles.scope_type` (`NOT NULL`, kapalı küme `CHECK`; `SYS` **tenant
+  rollerine verilemez**), atamanın kapsamı `hr.user_roles.scope_org_unit_id`.
+  DB guard tetikleyicisi (`trg_user_role_scope_guard`) **kapsamsız `UNIT`/`UNIT_DIRECT`
+  atamasını reddeder**; ters yönde, org-kapsamlı olmayan bir role kapsam verilmesini de
+  reddeder (kullanılmayan/uyuyan kapsam verisi oluşmaz). **`hr.departments` (M10)
+  gelmeden alt ağaç çözülemez** → `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez**
+  (`apps/rbac/services/scope.py`). Bu, kritik bir yetki yükseltme yolunu kapatır:
+  aksi hâlde birim yöneticisinin izinleri **tenant-wide** görünürdü. Kapsamın iki
+  görünümü ayrıdır: `declared_permission_codes` (sahiplik — **yetkilendirme kaynağı
+  değildir**) ve `effective_permission_codes`/`authorized_permission_codes`
+  (**tek yetki kaynağı**).
+- **Rol ataması guard'ları (T7/T16, 2026-09-11):** `assign_role_to_user()` — kullanıcı
+  **kendi rolünü atayamaz** (self-elevation), aktör atadığı rolün **tüm** izinlerine sahip
+  olmalı (sahip olmadığı yetki dağıtılamaz), `role.manage` gerekir, `UNIT` tipli rolde
+  kapsam zorunludur ve her atama `audit_logs`'a (`role.assign`) yazılır.
 - Kod `<kaynak>.<işlem>` biçimindedir ✅; kapsam ve koşul koda gömülmez.
 - Çakışmada **reddet kazanır** ✅ (kişiye özel yasak, rol iznini geçersiz kılar).
 - Yetki kontrolü dört katmanda: uç nokta → servis → nesne → veritabanı (RLS) ✅.

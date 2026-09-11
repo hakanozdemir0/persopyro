@@ -13,12 +13,30 @@ otomatik restore **edilmez**, kopya **üretilmez**, durum açık bir hatayla bil
 
 from django.db import transaction
 
-from apps.rbac.models import Permission, Role, RolePermission
+from apps.audit.services import log_action
+from apps.rbac.models import (
+    ORG_SCOPED_ROLE_SCOPE_TYPES,
+    Permission,
+    Role,
+    RolePermission,
+    UserRole,
+)
 from apps.rbac.permission_catalog import DEFAULT_ROLE_TEMPLATES
+from apps.rbac.services.permissions import effective_permission_codes
 
 
 class MissingPermissionError(RuntimeError):
     """Şablonda tanımlı bir izin kodu veritabanında yoksa yükseltilir."""
+
+
+class RoleAssignmentError(PermissionError):
+    """
+    Rol ataması reddedildi (self-elevation / kapsam / izin yetersizliği).
+
+    OD5 §5.3 ve §4.3: kullanıcı kendi rolünü/scope'unu yükseltemez; sahip olmadığı
+    bir yetki kümesini başkasına veremez; `UNIT`/`UNIT_DIRECT` rollerde kapsam
+    zorunludur.
+    """
 
 
 class SoftDeletedDefaultRoleError(RuntimeError):
@@ -84,6 +102,7 @@ def create_default_roles(tenant) -> dict[str, Role]:
                 code=kod,
                 name=sablon["name"],
                 role_type=sablon["role_type"],
+                scope_type=sablon["scope_type"],  # OD5/M8: azami organizasyon kapsamı
                 is_assignable=True,
             )
         mevcut = set(
@@ -98,3 +117,118 @@ def create_default_roles(tenant) -> dict[str, Role]:
             RolePermission.objects.bulk_create(yeni, ignore_conflicts=True)
         olusan[kod] = rol
     return olusan
+
+
+# --- rol ataması (OD5 + self-elevation guard'ları) ---------------------------
+
+
+def can_assign_role(actor, role) -> tuple[bool, str]:  # noqa: ANN001
+    """
+    `actor`, `role` rolünü atayabilir mi: `(izin, gerekçe)`.
+
+    Kurallar (docs/AUTHORIZATION.md §4.3 + OD5 §5.3):
+      * aktör kimliği doğrulanmış ve **aktif** olmalı,
+      * aktör `role.manage` iznine sahip olmalı (§6.2/B: yalnızca şirket yöneticisi),
+      * aktör, atayacağı rolün **tüm** izinlerine sahip olmalı — "sahip olmadığı
+        yetkiyi veremez" (§4.3; ör. `tenant_officer` kendinde olmayan
+        `document.confidential.read`ı dağıtamaz),
+      * rol atanabilir olmalı (`is_assignable`) ve silinmemiş olmalı,
+      * eşleşen kapsam tipi kuralı: `UNIT`/`UNIT_DIRECT` rollerde atama düzeyinde
+        birim kapsamı **zorunlu**, diğer tiplerde kapsam **verilmemeli**.
+    """
+    if actor is None or not getattr(actor, "is_authenticated", False) or not actor.is_active:
+        return False, "Aktör aktif bir kullanıcı değil."
+    if role is None or role.deleted_at is not None:
+        return False, "Rol bulunamadı veya silinmiş."
+    if not role.is_assignable:
+        return False, "Rol atanabilir olarak işaretlenmemiş."
+
+    aktor_izinleri = effective_permission_codes(actor)
+    if "role.manage" not in aktor_izinleri:
+        return False, "Bu işlem için 'role.manage' izni gerekir."
+
+    rol_izinleri = set(
+        RolePermission.objects.filter(role=role).values_list("permission__code", flat=True)
+    )
+    eksik = rol_izinleri - aktor_izinleri
+    if eksik:
+        return False, (
+            "Aktör, atayacağı rolün tüm izinlerine sahip değil (sahip olmadığı yetki "
+            "dağıtılamaz): " + ", ".join(sorted(eksik))
+        )
+    return True, "Atanabilir."
+
+
+@transaction.atomic
+def assign_role_to_user(  # noqa: ANN001, PLR0913
+    *,
+    actor,
+    target_user,
+    role,
+    scope_org_unit_id=None,
+    expires_at=None,
+    reason: str = "",
+):
+    """
+    Rol ataması yapar; guard'ları (self-elevation + kapsam) dayatır ve **denetler**.
+
+    * **Self-elevation:** aktör kendi rolünü atayamaz/değiştiremez; kendi kapsamını
+      genişletemez (OD5 §5.3, §4.3).
+    * **Kapsam:** `UNIT`/`UNIT_DIRECT` rollerde `scope_org_unit_id` **zorunludur**
+      (NULL "tüm kiracı" anlamına gelemez); diğer tiplerde kapsam verilemez
+      (M10 öncesi birim daraltması yalnız org-kapsamlı roller için tanımlıdır).
+    * **Denetim:** her atama `audit_logs`'a yazılır (`role.assign`).
+
+    NOT: M10 (`departments`) öncesi kapsam **çözülemez**; bu yüzden atanan
+    `UNIT`/`UNIT_DIRECT` rol **izin üretmez** (fail-closed, `services/scope.py`).
+    """
+    if actor is None or target_user is None or role is None:
+        raise RoleAssignmentError("Aktör, hedef kullanıcı ve rol zorunludur.")
+    if str(getattr(actor, "pk", None)) == str(getattr(target_user, "pk", None)):
+        raise RoleAssignmentError(
+            "Kullanıcı kendi rolünü atayamaz/değiştiremez (self-elevation yasağı)."
+        )
+    if str(role.tenant_id) != str(actor.tenant_id) or str(role.tenant_id) != str(
+        target_user.tenant_id
+    ):
+        raise RoleAssignmentError("Rol ve kullanıcı aynı kiracıda olmalıdır.")
+
+    izin_var, gerekce = can_assign_role(actor, role)
+    if not izin_var:
+        raise RoleAssignmentError(gerekce)
+
+    if role.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES:
+        if scope_org_unit_id is None:
+            raise RoleAssignmentError(
+                f"'{role.code}' rolü {role.scope_type} kapsamlıdır: atama düzeyinde birim "
+                "kapsamı (scope_org_unit_id) ZORUNLUDUR. NULL kapsam 'tüm kiracı' "
+                "anlamına gelmez (OD5 fail-closed)."
+            )
+    elif scope_org_unit_id is not None:
+        raise RoleAssignmentError(
+            f"'{role.code}' rolü {role.scope_type} kapsamlıdır: birim kapsamı yalnızca "
+            "UNIT/UNIT_DIRECT tipli rollerde verilebilir."
+        )
+
+    atama = UserRole.objects.create(
+        tenant_id=role.tenant_id,
+        user=target_user,
+        role=role,
+        granted_by=actor,
+        expires_at=expires_at,
+        scope_org_unit_id=scope_org_unit_id,
+    )
+    log_action(
+        tenant_id=role.tenant_id,
+        action="role.assign",
+        user=actor,
+        table_name="user_roles",
+        record_id=atama.pk,
+        changes={
+            "role_code": role.code,
+            "scope_type": role.scope_type,
+            "scope_org_unit_id": str(scope_org_unit_id) if scope_org_unit_id else None,
+            "reason": reason[:200],
+        },
+    )
+    return atama

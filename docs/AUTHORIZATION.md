@@ -231,10 +231,16 @@ Kurallar:
 | `dept_manager` | DEPARTMAN YÖNETİCİSİ | UNIT (alt ağaç) | Kendi organizasyon alanı: izin onayı, vardiya, devamsızlık |
 | `employee` | ÇALIŞAN | SELF | Kendi bilgileri, izin talebi, kendi evrakları, kendi vardiyası |
 
-**Mevcut kodla fark:** katalogda `tenant_admin`, `hr_manager`, `manager`,
-`employee` var ✅. Yeni tasarım: `manager` → `dept_manager` (kapsamı daraltılır),
-`hr_manager` → **şablon rol** olarak korunur (zorunlu değil), `tenant_officer`
-eklenir, `superadmin`/`platform_admin` yeni. Geçiş: bölüm 13.
+**Mevcut kodla fark:** ✅ **UYGULANDI (M7, 2026-09-11).** Katalog artık
+`tenant_admin`, **`tenant_officer`**, `hr_manager`, **`dept_manager`**, `employee`
+(kod: `apps/rbac/permission_catalog.py` → `DEFAULT_ROLE_TEMPLATES`).
+`manager` rolü **yerinde** `dept_manager`'a dönüştürüldü (kimlik/atama korunur, yeni
+rol üretilmedi); izin seti §6.2 **DY** sütununa getirildi → ölçüm **7 → 14** izin.
+`tenant_officer` §6.2 **ŞYT** setiyle oluşturuldu → **19 izin** (matriste `◐ ❓OD9`
+işaretli kodlar devredilebilirlik kararı verilmediği için **alınmadı**; `document.share`
+bu katalogda yok). `hr_manager` **şablon rol** olarak korunur (silinmez; `TENANT`).
+`superadmin`/`platform_admin` **platform** şemasındadır (`platform.roles`) ve `hr.roles`'a
+**taşınmaz**. Geçiş tablosu: bölüm 13 (7–8 ✅ UYGULANDI).
 
 ### 4.3 Rol hiyerarşisi
 
@@ -269,7 +275,12 @@ Kurallar:
   alt rolü atayabilir" kuralı **aktör atayacağı rolün tüm izinlerine sahip olmalı +
   `platform.role.assign` iznine sahip olmalı + kendine atama yasak** üçlüsüyle
   dayatılır (kod: `apps/platform/permissions.py`, `assign_role`/`revoke_role`).
-  Kiracı tarafındaki karşılığı rol yönetimi akışıyla birlikte gelecektir.
+  **Kiracı tarafı ✅ UYGULANDI (M9 kapsamı, 2026-09-11):** guard'lı atama giriş noktası
+  `apps/rbac/services/roles.py` → `can_assign_role()` + `assign_role_to_user()`
+  (kendine atama **reddedilir**; aktör `role.manage` sahibi olmalı; aktör atayacağı rolün
+  **tüm** izinlerine sahip olmalı; `UNIT`/`UNIT_DIRECT` rolünde atama düzeyinde **kapsam
+  zorunlu**, diğer tiplerde kapsam verilemez; atama `audit_logs`'a `role.assign` olarak
+  yazılır). Rol yönetimi **API/akış** katmanı ileride bu fonksiyonu kullanacaktır.
 
 ### 4.4 Kapsam (scope) kodları
 
@@ -286,11 +297,31 @@ Etkin kapsam = **en dar** olan: rolün izin verdiği kapsam ∩ kaydın kapsamı
 isteğin kapsamı. Örneğin `UNIT` kapsamlı bir onay izni, başka bir birimin
 kaydında işe yaramaz.
 
-Kapsam kaynağı: `user_roles.scope_org_unit_id` (kiracı rolleri için) 🔜. Rolün
-kapsamı kişi bazında daraltılabilir; **genişletilemez**. ✅ **OD5 kesinleştirdi
-(2026-09-11):** `UNIT`/`UNIT_DIRECT` tipli rol için `scope_org_unit_id IS NULL` ise
-atama **hiçbir kapsam üretmez** (fail-closed; NULL = "tüm kiracı" **değildir**);
-kiracı geneli yetki yalnızca `TENANT` tipli rolle verilir. Ayrıntı: bölüm 14 → OD5.
+Kapsam kaynağı: `user_roles.scope_org_unit_id` (kiracı rolleri için) — ✅ **kolon
+UYGULANDI (M9, 2026-09-11)**; `departments(id)` **FK'si** ve alt ağaç çözümlemesi
+**M10 sonrası**. Rolün kapsamı kişi bazında daraltılabilir; **genişletilemez**.
+✅ **OD5 kesinleştirdi (2026-09-11):** `UNIT`/`UNIT_DIRECT` tipli rol için
+`scope_org_unit_id IS NULL` ise atama **hiçbir kapsam üretmez** (fail-closed; NULL =
+"tüm kiracı" **değildir**); kiracı geneli yetki yalnızca `TENANT` tipli rolle verilir.
+Ayrıntı: bölüm 14 → OD5.
+
+**Rol kapsam tipi — ✅ UYGULANDI (M8, 2026-09-11):** `hr.roles.scope_type`
+(`NOT NULL` + kapalı küme `CHECK`). Kiracı rollerinde geçerli küme yukarıdaki beş
+koddan **`SYS` hariç** olanıdır: `TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`
+(`SYS` yalnız **platform** rollerine aittir → `platform.roles`; `hr.roles`'a taşınmaz).
+`scope_type` **izin üretmez**; karar daima `izin ∧ kapsam`. Şablon eşlemesi:
+`tenant_admin`/`tenant_officer`/`hr_manager`/custom = `TENANT`, `dept_manager` = `UNIT`,
+`employee` = `SELF`.
+
+**İki kavram ayrıdır (M9, 2026-09-11):**
+
+| Kavram | Fonksiyon | Kullanım |
+|---|---|---|
+| **İzin sahipliği** (rol neyi *kapsayabilir*) | `declared_permission_codes(user)` | Yönetim/teşhis ekranları — **yetkilendirme kaynağı DEĞİLDİR** |
+| **Kullanılabilir izin** (kapsama göre fiilen *kullanılabilir*) | `effective_permission_codes(user)` / `authorized_permission_codes(request)` | **Yetkilendirme kararının tek kaynağı** |
+
+M10 öncesi kapsam çözülemediği için `UNIT`/`UNIT_DIRECT` atamaları **yalnız
+`sahiplık` görünümünde** kalır; `effective` kümede yer almaz (fail-closed).
 
 ---
 
@@ -844,8 +875,8 @@ Kod yazılmadan önce tamamlanacak iş kalemleri (öncelik sırasıyla):
 | 4 | **`AccessRequest` / `AccessGrant`: onay akışı (tek onay / çift onay), gerekçe nitelik denetimi, süre sonunda otomatik kapanma** | Yeni tablolar + servis | Bölüm 7.3; OD1/OD4 **kapalı** |
 | 5 | **Platform denetim akışı (ayrı akış) + kiracı görünürlüğü kaydı** | Yeni tablo + servis | Bölüm 3.4/10; OD15 (görünürlük kapsamı) açık |
 | 6 | İzin kataloğu genişletmesi + yeni migration | Veri migration'ı | Bölüm 5.2 (uygulanmış migration değiştirilmez) |
-| 7 | Rol kodu eşlemesi: `manager` → `dept_manager`, `tenant_officer` eklenmesi | Veri migration'ı | Bölüm 4.2; **OD5 ✅ kapalı (2026-09-11)** → uygulanabilir; göçte `dept_manager` = `UNIT`, `tenant_officer` = `TENANT` kapsam tipi atanır (OD5 §5.9) |
-| 8 | `user_roles.scope_org_unit_id` (kapsam) + `roles.scope_type` | Şema + guard | Organizasyon modülüyle birlikte; **OD5 ✅ kapalı**: `UNIT`/`UNIT_DIRECT` rollerinde kapsam zorunlu, benzersizlik `NULLS NOT DISTINCT` (OD5 §5.9) |
+| 7 | Rol kodu eşlemesi: `manager` → `dept_manager`, `tenant_officer` eklenmesi | Veri migration'ı | Bölüm 4.2; **✅ UYGULANDI (M7 — `rbac/0005`, 2026-09-11):** yerinde adlandırma (kimlik/atama korunur), izin setleri §6.2 DY (14) ve ŞYT (19); conflict/soft-delete fail-closed |
+| 8 | `user_roles.scope_org_unit_id` (kapsam) + `roles.scope_type` | Şema + guard | **✅ UYGULANDI (M8+M9 kısmi — `rbac/0006`+`0007`, 2026-09-11):** `scope_type` NOT NULL + kapalı küme `CHECK`; `scope_org_unit_id` kolonu + `NULLS NOT DISTINCT` benzersizlik + guard tetikleyicisi; **ertelenen:** `departments(id)` FK'si ve alt ağaç çözümlemesi (M10). M10 öncesi `UNIT`/`UNIT_DIRECT` atamaları izin üretmez (fail-closed) |
 | 9 | Alan sınıflandırma + maskeleme katmanı (sunucu tarafı) | Servis/çıktı filtresi | Bölüm 7.2 |
 | 10 | Evrak: `contains_personal_data`, `classification`, `retention` | Şema | Bölüm 9 |
 | 11 | `audit_logs` yeni alanlar (`purpose`, `grant_id`, `changed_fields`) + zincirleme | Şema + servis | Bölüm 10 |
@@ -973,7 +1004,14 @@ servis/model guard'ları ve testleri vardır.
   onaylamamalıdır.
 - **Etki:** Onay akışı, bildirimler, arayüz ekranları.
 
-### OD5 — Departman yöneticisinin kapsamı — **KAPALI** ✅ (2026-09-11)
+### OD5 — Departman yöneticisinin kapsamı — **KAPALI** ✅ (2026-09-11) — **M7/M8 ✅ ve M9 ✅ kısmi UYGULANDI** (2026-09-11)
+
+**Uygulama durumu:** `hr.roles.scope_type` (M8) ve `hr.user_roles.scope_org_unit_id`
+(M9, kısmi) uygulandı; `manager → dept_manager` göçü yapıldı (M7). M9'un
+`departments(id)` **FK'si**, "aktif birim" guard'ı ve **alt ağaç çözümlemesi** M10
+sonrasına bırakıldı — bu boşluk `apps/rbac/services/scope.py` ile **fail-closed**
+kapatıldı (kapsam çözülmeden `UNIT`/`UNIT_DIRECT` ataması **izin üretmez**).
+M10'da yapılacaklar için bkz. §5.9.
 
 **KARAR (A) seçildi:** `dept_manager` rolünün organizasyon kapsamı, **atandığı
 organizasyon birimi + o birimin tüm alt birimleridir** (kapsam kodu **`UNIT`**).
@@ -1099,16 +1137,16 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
 - Yetki büyümesi yalnızca **açık bir yönetim işlemiyle** (birim taşıma) oluşur; gizli
   yükseltme yolu değildir.
 
-#### 5.9 M7–M13 implementasyon etkisi (uygulanacak, bu kararla kesinleşti)
+#### 5.9 M7–M13 implementasyon etkisi (kesinleşti — ve M7/M8/M9 sonucu)
 
-| İş | OD5 kaynaklı kesin gereksinim |
-|---|---|
-| **M7** | `manager → dept_manager` göçünde rol **`UNIT`** tipine geçer; `tenant_officer` **`TENANT`** tiplidir; göç sonrası **kapsamsız `dept_manager` ataması bırakılmaz** (varsa göç sırasında raporlanır/hata verir — fail-closed) |
-| **M8** | `hr.roles.scope_type` kapalı küme (`TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`) + kısmi benzersizlik; varsayılan şablonlarda `dept_manager` = `UNIT` |
-| **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi**: rol `scope_type ∈ {UNIT, UNIT_DIRECT}` ise `scope_org_unit_id` **zorunlu**; benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** ile (PostgreSQL 18) |
-| **M10–M13** | `departments`/`positions`/`employees`/`employee_manager`: kapsam hesabı için `(tenant_id, parent_id)` indeksi (M24) ve `employees.department_id` zorunluluğu |
-| **Resolver** | **organization scope resolver** (`scope_org_unit_id` → alt ağaç kimlikleri, kiracı bağlamında) + **permission resolver** ile birleşik karar: `izin ∧ kapsam`; mevcut `apps/rbac/services/permissions.py` **yalnızca izin** hesaplar, kapsam katmanı **bu kararla** tanımlandı |
-| **Testler** | T7 (kendini yükseltme), alt ağaç/kardeş birim ayrımı, multi-scope birleşim, NULL fail-closed, silinmiş birim/atama, süre bitimi, move sonrası yeniden hesaplama, PII ayrımı |
+| İş | OD5 kaynaklı kesin gereksinim | Durum |
+|---|---|---|
+| **M7** | `manager → dept_manager` göçünde rol **`UNIT`** tipine geçer; `tenant_officer` **`TENANT`** tiplidir; göç sonrası **kapsamsız `dept_manager` ataması bırakılmaz** (varsa göç sırasında raporlanır/hata verir — fail-closed) | ✅ UYGULANDI (`rbac/0005`): yerinde adlandırma, izin setleri DY/ŞYT, conflict + soft-delete fail-closed. **M10 öncesi kapsamsız `dept_manager` ataması izin üretmez** (kapsam çözülemez) — yani "sessiz geniş yetki" yolu kapalı |
+| **M8** | `hr.roles.scope_type` kapalı küme (`TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`) + dokümandaki backfill; varsayılan şablonlarda `dept_manager` = `UNIT` | ✅ UYGULANDI (`rbac/0006`): NOT NULL + DB `CHECK`; backfill eşlemesi uygulandı |
+| **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi**: rol `scope_type ∈ {UNIT, UNIT_DIRECT}` ise `scope_org_unit_id` **zorunlu**; benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** | ✅ **KISMİ** (`rbac/0007`): kolon + benzersizlik + guard tetikleyicisi ✅; `departments` **FK'si** ve "aktif birim" guard'ı **⏳ M10 sonrası** |
+| **M10–M13** | `departments`/`positions`/`employees`/`employee_manager`: kapsam hesabı için `(tenant_id, parent_id)` indeksi (M24) ve `employees.department_id` zorunluluğu | ⏳ bekliyor |
+| **Resolver** | **organization scope resolver** (`scope_org_unit_id` → alt ağaç kimlikleri, kiracı bağlamında) + **permission resolver** ile birleşik karar: `izin ∧ kapsam` | ✅ **Köprü kuruldu** (`apps/rbac/services/scope.py`): kapsam çözülemezse `UNIT`/`UNIT_DIRECT` **izin üretmez**; alt ağaç çözümlemesi M10'da bu **tek noktaya** eklenecek (çağıran değişmez). İki görünüm ayrıldı: `declared_permission_codes` (sahiplik) / `effective_permission_codes` (kullanılabilir) |
+| **Testler** | T7 (kendini yükseltme), alt ağaç/kardeş birim ayrımı, multi-scope birleşim, NULL fail-closed, silinmiş birim/atama, süre bitimi, move sonrası yeniden hesaplama, PII ayrımı | ✅ UYGULANDI (M7–M9 kapsamı): göç/atama korunumu, çift kayıt yok, soft-delete, kapsam zorunluluğu, NULL fail-closed, çoklu kapsam, süre bitimi, pasif kullanıcı, tenant izolasyonu, self-elevation; **⏳ M10 sonrası:** alt ağaç/kardeş birim, move sonrası yeniden hesaplama |
 
 #### 5.10 Güvenlik etkisi
 
@@ -1120,13 +1158,18 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
   yolunda geçersiz kılma + test (bölüm 5.8).
 - PII erişimi kapsamdan **türetilmez**; maskeleme/onay kuralları bağımsız çalışır.
 
-#### 5.11 Mevcut kod/şema ile çakışma
+#### 5.11 Mevcut kod/şema ile çakışma (karar anı ölçümü — ve M7–M9 sonrası durum)
 
-- **Çakışma yok.** `hr.roles.scope_type` ve `hr.user_roles.scope_org_unit_id` bugün
-  **mevcut değil**; mevcut izin çözümleyicisi kapsam boyutunu **hiç** uygulamıyor →
-  bu karar mevcut davranışı bozmaz, uygulanacak yeni katmanı tanımlar.
+- **Karar anında çakışma yoktu.** `hr.roles.scope_type` ve `hr.user_roles.scope_org_unit_id`
+  o tarihte **mevcut değildi**; mevcut izin çözümleyicisi kapsam boyutunu **hiç**
+  uygulamıyordu → karar mevcut davranışı bozmadı, uygulanacak yeni katmanı tanımladı.
+- **M7–M9 sonrası (2026-09-11):** her iki alan **uygulandı** (M9 kısmi — FK M10'da).
+  Mevcut izin setleri korunmuştur: `tenant_admin` 29, `hr_manager` 22, `employee` 6,
+  `dept_manager` 7→14; `tenant_officer` 19 ile **yeni**; atama sayısı **korundu** (ölçüm: 1).
+  Tek davranış değişikliği: `UNIT` tipli bir rolün ataması kapsam çözülene kadar izin
+  **üretmez** (fail-closed) — bu, istenen ve belgelenen davranıştır.
 - `UNIT_DIRECT` ve `ASSIGNED` kodları §4.4'te zaten tanımlıydı; **yeni kapsam kodu
-  eklenmedi**, yeni isim uydurulmadı.
+  eklenmedi**, yeni isim uydurulmadı (`SYS` tenant kümesine alınmadı).
 - Tek belirsizlik `dept_manager` (eski `manager`) kapsamıydı → **`UNIT`** olarak
   sabitlendi.
 

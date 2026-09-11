@@ -123,9 +123,10 @@ olduğu için etki boş dizinle sınırlıdır).
 - **TENANT ISOLATION:** `tenant_id = hr.current_tenant_id()`
 - **PERSONAL DATA LEVEL:** K0
 - **RLS:** ✅ etkin + FORCE · **AUDIT REQUIREMENT:** yüksek (rol oluşturma/silme, izin seti değişimi)
-- **Kolonlar (10):** `id, created_at, updated_at, deleted_at, name, code, role_type, description, is_assignable, tenant_id`
-- **Doğrulanan veri:** `tenant_admin` (29 izin), `hr_manager` (22), `manager` (7), `employee` (6)
-- **Eklenecek (M8, OD5 ✅ kapalı):** `scope_type` — kapalı küme `TENANT`/`UNIT`/`UNIT_DIRECT`/`ASSIGNED`/`SELF`; **rolün azami kapsamı** (atama yalnızca daraltır). Şablon eşlemesi: `tenant_admin`/`tenant_officer` = `TENANT`, `dept_manager` = `UNIT` (atama düzeyinde birim: `user_roles.scope_org_unit_id`)
+- **Kolonlar (11):** `id, created_at, updated_at, deleted_at, name, code, role_type, scope_type, description, is_assignable, tenant_id`
+- **Kısıt (M8 ✅):** `roles_scope_type_valid` — `CHECK (scope_type IN ('TENANT','UNIT','UNIT_DIRECT','ASSIGNED','SELF'))`; `scope_type` **NOT NULL**. `SYS` bu kümeye **alınmaz**: §4.4 `SYS`i yalnızca platform rollerine verir (`platform.roles`, OD3).
+- **Doğrulanan veri (M7-M9 sonrası):** `tenant_admin` (29 izin, `TENANT`), `hr_manager` (22, `TENANT`), `tenant_officer` (19, `TENANT`), `dept_manager` (14, `UNIT`), `employee` (6, `SELF`)
+- **Alan (M8 ✅ UYGULANDI — 2026-09-11):** `scope_type` = **rolün izinlerinin ulaşabileceği azami organizasyon kapsamı** (OD5 §5.1). İzin **üretmez**; karar `izin ∧ kapsam`. Backfill: `tenant_admin`/`tenant_officer`/`hr_manager` = `TENANT`, `dept_manager` = `UNIT`, `employee` = `SELF`, bilinen kod dışı (custom) roller = `TENANT` (§4.1; kiracı tanımlı rol) — eşlenen custom roller göç çıktısında **raporlanır**. Atama düzeyinde daraltma: `user_roles.scope_org_unit_id` (M9).
 
 ### `permissions`
 - **PURPOSE:** Global izin kataloğu (kiracıdan bağımsız tanım tablosu).
@@ -149,18 +150,24 @@ olduğu için etki boş dizinle sınırlıdır).
   çözümlemesinde filtrelenecek bir `deleted_at` yoktur (F7 ölçüm düzeltmesi).
 
 ### `user_roles`
-- **PURPOSE:** Kullanıcıya rol ataması (süreli olabilir — `expires_at`).
-- **PRIMARY KEY:** `id` · **UNIQUE:** `(user_id, role_id)`
-- **FOREIGN KEYS:** `user_id → users.id`, `role_id → roles.id`, `granted_by_id → users.id`, `tenant_id → tenants.id`
-- **TENANT ISOLATION:** `tenant_id` + 3 guard tetikleyicisi · **PERSONAL DATA LEVEL:** K1
+- **PURPOSE:** Kullanıcıya rol ataması (süreli olabilir — `expires_at`, kapsamlı olabilir — `scope_org_unit_id`).
+- **PRIMARY KEY:** `id` · **UNIQUE:** `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** (M9 ✅) — kapsamsız rollerde çift atamayı engeller, kapsamlı rollerde (aynı rol farklı birim) çoklu atamaya izin verir
+- **FOREIGN KEYS:** `user_id → users.id`, `role_id → roles.id`, `granted_by_id → users.id`, `tenant_id → tenants.id`; `scope_org_unit_id` FK'si **M10 sonrası** (`departments.id`) — M9 kısmi uygulama
+- **TENANT ISOLATION:** `tenant_id` + 3 guard tetikleyicisi + **`trg_user_role_scope_guard`** · **PERSONAL DATA LEVEL:** K1
 - **RLS:** ✅ + FORCE · **AUDIT REQUIREMENT:** **yüksek** (yetki değişikliği)
-- **Eksik:** `scope_org_unit_id` (kapsam daraltması) ❌ ve `created_by_id` yok (bölüm B)
-- **Kapsam (OD5 ✅ kapalı, 2026-09-11):** `scope_org_unit_id` **kapsamın tek kaynağıdır**;
-  `UNIT`/`UNIT_DIRECT` tipli rollerde **zorunludur** (NULL → fail-closed, "tüm tenant"
-  **değildir**). Aynı kullanıcı aynı kiracıda **birden fazla** atama taşıyabilir; etkin
-  kapsam etkin atamaların **birleşimidir** (kiracılar arası birleşim yok). Soft-delete
-  edilmiş veya süresi geçmiş atama **kapsam üretmez**; kullanıcı kendi kapsamını
-  **yükseltemez**. Ayrıntı: `docs/AUTHORIZATION.md` OD5 §5.1–5.9.
+- **Eksik:** `created_by_id` yok (bölüm B)
+- **Kapsam (OD5 ✅ kapalı, M9 ✅ kısmi — 2026-09-11):** `scope_org_unit_id` (uuid, **nullable**)
+  kapsamın tek kaynağıdır. **Uygulanan:** kolon + `NULLS NOT DISTINCT` benzersizlik +
+  guard tetikleyicisi — (a) `scope_type ∈ {UNIT, UNIT_DIRECT}` iken kapsam **zorunlu**
+  (yoksa INSERT/UPDATE reddedilir), (b) diğer tiplerde kapsam **NULL olmalı** (kullanılmayan
+  veri üretilmez), (c) rol kiracı bağlamında görünmüyorsa yazım reddedilir (fail-closed).
+  **Ertelenen (M10 sonrası):** `departments(id)` FK'si, "kapsam aynı kiracının **aktif**
+  birimini göstermeli" guard'ı ve alt ağaç (subtree) çözümlemesi — bu yüzden **M10 öncesi
+  kapsam çözülemez ve `UNIT`/`UNIT_DIRECT` atamaları izin ÜRETMEZ** (`apps/rbac/services/scope.py`).
+  Aynı kullanıcı aynı kiracıda **birden fazla** atama taşıyabilir; etkin kapsam etkin
+  atamaların **birleşimidir** (kiracılar arası birleşim yok). Soft-delete edilmiş veya
+  süresi geçmiş atama **kapsam üretmez**; kullanıcı kendi kapsamını **yükseltemez**.
+  Ayrıntı: `docs/AUTHORIZATION.md` OD5 §5.1–5.9.
 
 ### `user_permission_overrides`
 - **PURPOSE:** Kişiye özel izin ekleme/çıkarma (`effect`), gerekçeli.
@@ -565,9 +572,9 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M4** | `platform.tenant_registry` + `hr.tenants` üzerine yansı tetikleyicisi (SECURITY DEFINER) + backfill — **✅ UYGULANDI** (`0003_od20_tenant_registry.py`): yalnızca minimum alanlar (PII **yok**: `name/legal_name/tax_number/email/phone/address/settings` kopyalanmaz); tek yönlü `hr.tenants` → registry, `platform.sync_tenant_registry()` `SECURITY DEFINER` + **sabit `search_path = pg_catalog, pg_temp`** + tam nitelemeli SQL; `plan_code`/`billing_ref`/`internal_note` yalnızca platformun (yansı onları ezmez); yansı yazımı başarısızsa kaynak yazımı **geri alınır** (test: kasten çakıştırılmış registry slug'ı → kiracı INSERT'i tümden rollback) | Yeni + tetikleyici | M1 | Tetikleyici + tablo DROP (hr.tenants'a dokunulmaz) |
 | **M5** | `hr.tenants.public_id_prefix` (nullable ekle → slug'tan türet/çakışmada sonek → `NOT NULL` + tam `UNIQUE` + değişmezlik tetikleyicisi) **ve** `hr.users.public_id` (kiracının prefix'inden üretim → `NOT NULL` + global benzersiz indeks). **Ayrıca (OD28 tamamlayıcı işler):** üretim fonksiyonları (`hr.generate_public_id_prefix(slug)`, `hr.generate_public_id(tenant_id)`; çakışmada yeniden dener), format `CHECK` (`^[a-z0-9]{3,20}-[0-9A-HJKMNP-TV-Z]{8}$`), **rezerve ad listesi** (slug/prefix olarak reddedilir: `www, api, app, admin, portal, mail, support, hr, platform, plt, system`) — **✅ UYGULANDI** (`tenancy/0008` yardımcılar + `tenancy/0009` prefix + `accounts/0005` public ID). Ölçüm (canlı DB): kiracı prefiksleri `demo`, `askida`; kullanıcı `public_id` örnekleri `demo-3A8EAQ9B`, `askida-1CY29715` (Crockford, `I/L/O/U` yok); `public_id'siz` kullanıcı **0**. Kalıcı rezerve: prefix **tam UNIQUE** (soft-delete'te geri alınmaz); değişmezlik iki tetikleyiciyle (`tenants_public_id_prefix_guard`, `users_public_id_guard`); üretim tetikleyicilerle (`..._assign`) — kiracı bağlamı yoksa `NULL` → `NOT NULL` ihlali (fail-closed, sessiz üretim yok). NOT: `hr.generate_public_id`'nin çakışma denemesi **RLS görünürlüğüyle** sınırlıdır; global tekillik garantisi `users_public_id_uniq_idx` UNIQUE indeksidir (kalan çakışma olasılığı ~32⁻⁸) | Şema + veri + fonksiyon | — | İndeks/kolon/tetikleyici/fonksiyon DROP |
 | **M6** | `hr.permissions`: `platform.*` kodları (yeni migration, frozen liste) + `REVOKE INSERT/UPDATE/DELETE ON hr.permissions FROM persopyro_app` — **✅ UYGULANDI (2026-09-11)**: altı kod eklendi (`platform.tenant.read`, `platform.tenant.manage`, `platform.settings.manage`, `platform.role.assign`, `platform.audit.read`, `platform.support.manage`) → katalog 29 → **35**; kodlar sabit/benzersiz/jokersiz ve **kiracı şablon rollerine girmez** (`PLATFORM_PERMISSIONS` ayrı liste; `ALL_PERMISSION_CODES` değişmedi). ÖLÇÜM (öncesi/sonrası): app rolü `hr.permissions` üzerinde SELECT/INSERT/UPDATE/DELETE → `t/t/t/t` **iken** artık `t/f/f/f`; aynı daraltma `scripts/02_grant_app_privileges.sql` içinde de vardır (betik yetkiyi geri açmaz — regresyon testi) | Veri + yetki | — | Kodlar silinebilir; yetki geri verilebilir (⚠️ istenmez) |
-| **M7** | Rol kodu göçü: `manager → dept_manager` (kiracı başına, veri) + `tenant_officer` şablon rolünün oluşturulması — **OD5 ✅ kapalı (2026-09-11) → uygulanabilir:** göçte `dept_manager` = **`UNIT`**, `tenant_officer` = **`TENANT`** kapsam tipi alır; mevcut `manager` atamaları **kapsamsız kalamaz** (kapsam atanamıyorsa migration **açık hata** verir — fail-closed, sessiz geniş yetki yok) | Veri | M6, M8 | Ters eşleme (kayıt tutulur) |
-| **M8** | `hr.roles.scope_type` (**OD5 ✅ kapalı**): kapalı küme `TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF` (yeni kod yok) + kısmi benzersizlik (`WHERE deleted_at IS NULL`); varsayılan şablonlarda `dept_manager` = `UNIT`, `tenant_admin`/`tenant_officer` = `TENANT`; `scope_type` rolün **azami** kapsamıdır (atama yalnızca daraltır) | Şema | — | Kolon + indeks geri alınır |
-| **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi** + kısmi benzersizlikler — **OD5 ✅ kapalı:** (a) rol `scope_type ∈ {UNIT, UNIT_DIRECT}` iken `scope_org_unit_id IS NULL` ise INSERT/UPDATE **reddedilir** (fail-closed; NULL "tüm tenant" sayılamaz), (b) benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** ile (PostgreSQL 18), (c) aynı kullanıcı **birden fazla** `dept_manager` ataması taşır (kapsam **birleşimi**), (d) silinmiş birim/silinmiş atama kapsam üretmez | Şema + tetikleyici | M10 (departments) | Kolon/tetikleyici DROP |
+| **M7** | Rol kodu göçü: `manager → dept_manager` (kiracı başına, veri) + `tenant_officer` şablon rolünün oluşturulması — **✅ UYGULANDI (2026-09-11)** (`rbac/0005_od5_rol_katalogu_gocu`): göç **yerinde** yapılır — rolün **kimliği, atamaları ve izin bağları korunur** (yeni rol üretilmez), izin seti §6.2 **DY** kolonuna **explicit** getirilir (ölçüm: `+7/-0` → **7→14 izin**); `tenant_officer` §6.2 **ŞYT** setiyle oluşturulur (**19 izin**, `◐ ❓OD9` işaretli kodlar fail-closed olarak **alınmaz**). **Fail-closed kararlar:** (a) aynı kiracıda `manager`+`dept_manager` birlikte varsa migration **açık hata** verir (sessiz birleştirme yok), (b) soft-delete edilmiş `manager` **sessizce canlandırılmaz** (adı değiştirilmez, yeni rol üretilmez), (c) hedef sette olmayan eski izinler **çıkarılır** (kalıntı yetki yok), (d) katalogda olmayan izin kodu → **açık hata**. İdempotent; çıktı olarak kiracı başına rol/rol-izin sayıları **raporlanır** | Veri | M6, M8 | Yerinde ters adlandırma (atama varsa `tenant_officer` silinmez → açık hata) |
+| **M8** | `hr.roles.scope_type` (OD5 ✅): kapalı küme `TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF` (yeni kod yok; **`SYS` hariç** — yalnız platform rolleri) — **✅ UYGULANDI (2026-09-11)** (`rbac/0006_od5_role_scope_type`): kolon **NOT NULL** + DB `CHECK` (`roles_scope_type_valid`); backfill doküman eşlemesiyle: `tenant_admin`/`tenant_officer`/`hr_manager` = `TENANT`, `dept_manager` = `UNIT`, `employee` = `SELF`, bilinen kod dışı **custom** roller = `TENANT` (§4.1) ve **raporlanır**. `scope_type` rolün **azami** kapsamıdır; izin **üretmez** (karar `izin ∧ kapsam`) | Şema | — | Kolon + kısıt düşürülür |
+| **M9** | `hr.user_roles.scope_org_unit_id` + **guard tetikleyicisi** + kısmi benzersizlikler — **✅ KISMİ UYGULANDI (2026-09-11)** (`rbac/0007_od5_user_role_scope`; `M10` bağımlılığı nedeniyle bilinçli bölme): **uygulanan** (a) kolon (uuid, nullable), (b) `UNIQUE NULLS NOT DISTINCT (user_id, role_id, scope_org_unit_id)` → kapsamsız rollerde çift atama engellenir, aynı rol farklı birimlere atanabilir, (c) `trg_user_role_scope_guard`: `scope_type ∈ {UNIT, UNIT_DIRECT}` iken kapsam **zorunlu** ("NULL = tüm tenant" **değildir**), diğer tiplerde kapsam **NULL olmalı**, rol kiracı bağlamında görünmüyorsa yazım **reddedilir**. **Ertelenen (M10 sonrası):** `departments(id)` **FK'si**, "kapsam aynı kiracının **aktif** birimi olmalı" guard'ı ve **alt ağaç çözümlemesi** (sahte FK/tablo üretilmedi). **Fail-closed köprü:** `apps/rbac/services/scope.py` — M10 öncesi `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez** (aksi hâlde birim yöneticisi izinleri tenant-wide görünürdü) | Şema + tetikleyici | M10 (departments) | Kolon/tetikleyici DROP |
 | **M10** | `hr.departments` + `hr.positions` + RLS + FORCE + guard'lar + indeksler. **OD27 kapalı: `company_id`/`legal_entity_id` EKLENMEZ** — tablolar doğrudan `tenant_id`'ye bağlıdır | Yeni | M1 (şema zaten var) | DROP TABLE (veri kaybı kabul, yeni modül) |
 | **M11** | **Organizasyon ağacı garantileri (OD24 kapalı):** `CHECK (parent_id IS DISTINCT FROM id)`, `BEFORE INSERT/UPDATE` **döngü reddi** tetikleyicisi (ata zinciri yürüyüşü, derinlik sınırı 20), `employee_manager` için `CHECK (employee_id <> manager_employee_id)` + aynı tetikleyici, `relation_type='primary'` kısmi benzersizliği. **`path`/closure kolonu EKLENMEZ** | Şema + tetikleyici | M10 | Tetikleyici/kısıt DROP |
 | **M12** | `hr.employees` + `hr.employee_personal_data` (K3 şifreli kolonlar) + RLS + guard'lar. **OD27 kapalı: `company_id` EKLENMEZ** | Yeni | M10 | DROP TABLE |
@@ -600,10 +607,21 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 **Numaralandırma notu (2026-09-11, ölçülmüş):** Bu tablodaki **M7–M9 kiracı RBAC
 işleridir** (rol kodu göçü, `hr.roles.scope_type`, `hr.user_roles.scope_org_unit_id`)
 ve **M9 `M10`'a (organizasyon/departments) bağlıdır** → organizasyon modülü
-kapsam dışı olduğu için **bu turda uygulanmadılar**. "Platform authorization paketi"
+kapsam dışı olduğu için **o turda uygulanmadılar**. "Platform authorization paketi"
 olarak istenen işler bu tabloda **M31–M33** satırlarıdır (M6 zaten platform izin
 kataloğudur). Numaralar çakışmasın diye yeni satırlar M31+'a eklendi; M7–M9'un
 tanımı/anlamı **değiştirilmedi**.
+
+**M7–M9 uygulama durumu (2026-09-11, ikinci tur):** **M7 ✅ tam**, **M8 ✅ tam**,
+**M9 ✅ kısmi** uygulandı (`rbac/0005`, `0006`, `0007`). M9'un organizasyon
+tablosuna bağlı parçaları — `departments(id)` **FK'si**, "aktif birim" guard'ı ve
+**alt ağaç çözümlemesi** — **M10 sonrasına bırakıldı**; sahte FK/kolon üretilmedi.
+Bu boşluk güvenlik açısından **fail-closed** kapatıldı: `apps/rbac/services/scope.py`
+kapsamı çözemediği sürece `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez**, dolayısıyla
+bir `dept_manager` izni M10 gelene kadar **kiracı geneli yetkiye dönüşemez**.
+Kapsamın **iki görünümü** ayrıldı: `declared_permission_codes()` (rol sahipliği —
+yönetim/teşhis) ve `effective_permission_codes()` (kapsama göre **kullanılabilir** —
+yetkilendirme kaynağı).
 
 **Uygulama sırası önerisi (3 parti):**
 1. **Parti 1 (platform temeli):** M1–M5, M22 — kiracı verisine dokunmayan, geri

@@ -28,6 +28,41 @@ class RoleType(models.TextChoices):
     CUSTOM = "custom", "Özel"
 
 
+class RoleScopeType(models.TextChoices):
+    """
+    Rolün izinlerinin ulaşabileceği **azami organizasyon kapsamı** (OD5 kapalı).
+
+    `RoleType` (rol nasıl oluştu) ile **karıştırılmaz**. Kiracı rollerinde geçerli
+    değerler §4.4'teki kapalı kümeden gelir; **`SYS` burada YOKTUR** çünkü §4.4
+    `SYS`i yalnızca platform rollerine verir (`hr.roles` kiracı tablosudur;
+    platform rolleri `platform.roles`'ta yaşar — OD3).
+
+    Kapsam **izin üretmez**, izni daraltır; asıl karar `izin ∧ kapsam`dır.
+    """
+
+    TENANT = "TENANT", "Kiracı geneli"
+    UNIT = "UNIT", "Birim + alt ağaç"
+    UNIT_DIRECT = "UNIT_DIRECT", "Yalnızca birim (alt ağaç hariç)"
+    ASSIGNED = "ASSIGNED", "Yalnızca atanmış kayıtlar"
+    SELF = "SELF", "Yalnızca kendi kaydı"
+
+
+#: `hr.roles` için geçerli kapalı küme (DB `CHECK` ile hizalıdır).
+TENANT_ROLE_SCOPE_TYPES: tuple[str, ...] = (
+    RoleScopeType.TENANT,
+    RoleScopeType.UNIT,
+    RoleScopeType.UNIT_DIRECT,
+    RoleScopeType.ASSIGNED,
+    RoleScopeType.SELF,
+)
+
+#: Org birimi kapsamı zorunlu olan tipler (OD5 fail-closed).
+ORG_SCOPED_ROLE_SCOPE_TYPES: tuple[str, ...] = (
+    RoleScopeType.UNIT,
+    RoleScopeType.UNIT_DIRECT,
+)
+
+
 class Role(TenantScopedModel):
     tenant = models.ForeignKey(
         "tenancy.Tenant", on_delete=models.CASCADE, related_name="roles", verbose_name="kiracı"
@@ -36,6 +71,18 @@ class Role(TenantScopedModel):
     code = models.CharField("rol kodu", max_length=100)
     role_type = models.CharField(
         "rol tipi", max_length=20, choices=RoleType.choices, default=RoleType.CUSTOM
+    )
+    scope_type = models.CharField(
+        "azami organizasyon kapsamı",
+        max_length=20,
+        choices=RoleScopeType.choices,
+        default=RoleScopeType.TENANT,
+        help_text=(
+            "OD5: rolün izinlerinin ulaşabileceği azami kapsam. İzin ÜRETMEZ; "
+            "izin ∧ kapsam birlikte değerlendirilir. UNIT/UNIT_DIRECT tiplerinde "
+            "atama (user_roles.scope_org_unit_id) zorunludur ve çözülemeyen "
+            "kapsam yetki vermez (fail-closed)."
+        ),
     )
     description = models.TextField("açıklama", blank=True)
     is_assignable = models.BooleanField("atanabilir", default=True)
@@ -46,6 +93,10 @@ class Role(TenantScopedModel):
         verbose_name_plural = "roller"
         constraints = [
             models.UniqueConstraint(fields=["tenant", "code"], name="roles_tenant_code_uniq"),
+            models.CheckConstraint(
+                condition=models.Q(scope_type__in=[k for k, _ in RoleScopeType.choices]),
+                name="roles_scope_type_valid",
+            ),
         ]
         indexes = [models.Index(fields=["tenant", "role_type"], name="roles_tenant_type_idx")]
 
@@ -132,13 +183,32 @@ class UserRole(TenantScopedModel):
     )
     granted_at = models.DateTimeField("verilme zamanı", auto_now_add=True)
     expires_at = models.DateTimeField("bitiş", null=True, blank=True)
+    scope_org_unit_id = models.UUIDField(
+        "organizasyon birimi kapsamı",
+        null=True,
+        blank=True,
+        help_text=(
+            "OD5: UNIT/UNIT_DIRECT tipli rollerde ZORUNLU (DB tetikleyicisi dayatır); "
+            "diğer tiplerde NULL olmalıdır. Değer, atanan birimin organizasyon "
+            "ağacındaki konumunu gösterir ve yetki kapsamı bu birim + alt ağacıdır. "
+            "FK (departments) M10 sonrası eklenecek; M10 öncesi kapsam "
+            "ÇÖZÜLEMEZ ve bu atamalar izin ÜRETMEZ (fail-closed)."
+        ),
+    )
 
     class Meta:
         db_table = "user_roles"
         verbose_name = "kullanıcı rolü"
         verbose_name_plural = "kullanıcı rolleri"
         constraints = [
-            models.UniqueConstraint(fields=["user", "role"], name="user_roles_uniq"),
+            # OD5 §5.3: aynı kullanıcı aynı rolü farklı birimler için birden fazla
+            # kez taşıyabilir (kapsam birleşimi). `nulls_distinct=False`: kapsamsız
+            # (TENANT/SELF) atamalar NULL'ları "aynı" sayar → çift atama yine engellenir.
+            models.UniqueConstraint(
+                fields=["user", "role", "scope_org_unit_id"],
+                name="user_roles_user_role_scope_uniq",
+                nulls_distinct=False,
+            ),
         ]
         indexes = [models.Index(fields=["tenant", "user"], name="user_roles_tenant_user_idx")]
 

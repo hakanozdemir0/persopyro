@@ -3,6 +3,107 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.21.0] — 2026-09-11 — M7 + M8 tam, M9 kısmi: tenant RBAC scope altyapısı (OD5 uygulaması)
+
+**Baseline (son commit `8418be3`):** çalışma ağacı temiz, migration'lar tam uygulanmış,
+tam test suite **244 passed**. Kapsam dışı (bu turda **dokunulmadı**): M10–M13
+organizasyon tabloları (`departments`/`positions`/`employees`), organization scope
+resolver'ın alt ağaç hesabı, leave/shift/onay modülleri, platform authorization yapısı.
+
+### Ölçüm (göç öncesi → sonrası)
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| `manager` rolü / ataması | 2 kiracıda **1 rol**, izin **7** | `dept_manager` olarak göç etti (izin **14**), kod `manager` **kalmadı** |
+| `tenant_officer` | yok | **oluşturuldu** (izin **19**) |
+| Kiracı başına rol sayısı | 4 | **5** |
+| Kiracı başına rol-izin bağı | 64 | **90** |
+| `user_roles` atama sayısı | 1 | **1 (kayıp yok)** |
+| `hr.manager` rolü (silinen) | 0 | 0 |
+
+### Eklenen / değişen
+
+- **M7 ✅ (`rbac/0005_od5_rol_katalogu_gocu`)** — `manager → dept_manager` **yerinde**
+  göç: rol kimliği, atamaları ve izin bağları **korunur** (yeni rol üretilmez → çift
+  kayıt/atama kaybı yok); izin seti §6.2 **DY** kolonuna explicit getirilir (eksiğini
+  ekler, hedefte olmayanı **çıkarır**); `tenant_officer` §6.2 **ŞYT** setiyle
+  oluşturulur (`◐ ❓OD9` işaretli kodlar **alınmaz**, katalogda olmayan kod →
+  **açık hata**). Fail-closed: aynı kiracıda `manager`+`dept_manager` birlikte varsa
+  **açık hata**; soft-delete edilmiş `manager` **sessizce canlandırılmaz**; göç
+  **idempotent**; kiracı başına rol/rol-izin sayıları **raporlanır**. Geri alma, atama
+  varsa **reddeder** (veri kaybı yok).
+- **M8 ✅ (`rbac/0006_od5_role_scope_type`)** — `hr.roles.scope_type`: **NOT NULL** +
+  DB `CHECK` (`roles_scope_type_valid`) kapalı küme `TENANT`/`UNIT`/`UNIT_DIRECT`/
+  `ASSIGNED`/`SELF`. **`SYS` tenant kümesine alınmadı** (§4.4: yalnız platform rolleri).
+  Backfill: `tenant_admin`/`tenant_officer`/`hr_manager` = `TENANT`, `dept_manager` =
+  `UNIT`, `employee` = `SELF`, custom roller = `TENANT` (§4.1) ve **raporlanır**.
+- **M9 ✅ kısmi (`rbac/0007_od5_user_role_scope`)** — `hr.user_roles.scope_org_unit_id`
+  (uuid, nullable) + benzersizliğin **`(user_id, role_id, scope_org_unit_id)` `NULLS NOT
+  DISTINCT`** olarak güncellenmesi (kapsamsız rollerde çift atama engellenir, aynı rol
+  farklı birimlere atanabilir) + **guard tetikleyicisi** `trg_user_role_scope_guard`
+  (UNIT/UNIT_DIRECT ⇒ kapsam **zorunlu**; diğer tiplerde kapsam **NULL olmalı**; rol
+  kiracı bağlamında görünmüyorsa yazım **reddedilir**). **Bilinçli ertelenen (M10
+  sonrası, sahte alan üretilmedi):** `departments(id)` **FK'si**, "aktif birim" guard'ı,
+  **alt ağaç çözümlemesi**.
+- **Fail-closed köprü (`apps/rbac/services/scope.py`)** — M10 öncesi kapsam
+  **çözülemez**; bu yüzden `UNIT`/`UNIT_DIRECT` atamaları **izin üretmez**. Aksi hâlde
+  bir `dept_manager` izni **tenant-wide** görünürdü (yetki yükseltme). İki kavram
+  ayrıldı: `declared_permission_codes()` (**izin sahipliği** — yetkilendirme kaynağı
+  değildir) ve `effective_permission_codes()`/**`authorized_permission_codes()`**
+  (kapsama göre **kullanılabilir** — tek yetki kaynağı). `TENANT` ve `SELF` roller
+  mevcut davranışını **korur**.
+- **Self-elevation guard'ları (`apps/rbac/services/roles.py`)** — `can_assign_role()` +
+  `assign_role_to_user()`: kullanıcı **kendi rolünü atayamaz/değiştiremez**; aktör
+  atadığı rolün **tüm** izinlerine sahip olmalı (sahip olmadığı yetki dağıtılamaz);
+  `role.manage` gerekir; `UNIT`/`UNIT_DIRECT` rolde kapsam **zorunlu**, diğer tiplerde
+  kapsam **verilemez**; her atama `audit_logs`'a **`role.assign`** olarak yazılır.
+- **Katalog (`apps/rbac/permission_catalog.py`)** — `DEFAULT_ROLE_TEMPLATES` hedef
+  adlarla: `tenant_admin` (29), **`tenant_officer`** (19), `hr_manager` (22; şablon
+  olarak korunur), **`dept_manager`** (14, `UNIT`), `employee` (6, `SELF`); her şablonda
+  `scope_type`; eski `manager` kaldırıldı (`LEGACY_ROLE_CODE_MAP`).
+
+### Doğrulanan
+
+- **Testler:** yeni `tests/test_rbac_scope_m7_m9.py` (**29 test** — 20 maddelik liste:
+  göç/atama korunumu, çift kayıt yok, soft-delete, hedef izin setleri, scope_type
+  eşlemeleri + DB reddi, kapsamsız UNIT reddi, NULL≠tenant-wide, TENANT/SELF davranışı,
+  silinmiş/süresi geçmiş atama, pasif kullanıcı, self-elevation, tenant izolasyonu,
+  fresh-install seti) + katalog↔migration donmuş kopya eşitliği. **Tam suite: 273 passed**
+  (244 → 273; regresyon yok). `tests/test_api_auth.py` beklenen rol seti güncellendi.
+- **Kalite:** `ruff check .` ✅, `bandit -q -r apps config -x tests` ✅, `manage.py check`
+  ✅, `makemigrations --check` ✅ (elle yazılan migration'lar model durumuyla birebir),
+  `migrate` ✅.
+- **Fresh install (`scripts/verify_fresh_install.sh`): yeni adım `6b/8`** — eski `manager`
+  rolü **yok**, hedef rol seti + kapsam tipleri doğru, izin sayıları 29/14/19,
+  `scope_type` `CHECK`, `scope_org_unit_id` kolonu, `NULLS NOT DISTINCT` benzersizliği,
+  guard tetikleyicisi; **M9'un ertelenen kısmı açıkça ölçülüyor** (`hr.departments` FK'si
+  ve tablosu = 0). Sıfırdan kurulum: **OK**, 273 passed, geçici DB temizlendi.
+- **HTTP smoke (`scripts/smoke.sh`):** health/ready 200, `/admin/` 404, token 201 →
+  logout 204 → 401, askıya alınmış kiracı 403; açık process/port bırakılmadı.
+- **Eski garantiler (yeniden doğrulandı):** platform authorization testleri ✅, tenant
+  RLS + FORCE ✅, `persopyro_app` NOBYPASSRLS ✅, `persopyro_platform` NOBYPASSRLS ✅,
+  `auth_*`/`django_admin_log` yetki daraltmaları ✅, `api_tokens` M30 daraltması ✅.
+- **Canlı DB guard kanıtı:** kapsamsız `dept_manager` ataması denemesi →
+  `user_roles: UNIT kapsamli rol icin scope_org_unit_id ZORUNLUDUR (OD5 fail-closed)`
+  (işlem geri alındı; canlı veri değişmedi).
+
+### Kalan (bilinçli, kapsam dışı)
+
+- **M9'un ertelenen parçası:** `hr.user_roles.scope_org_unit_id` → `hr.departments(id)`
+  FK'si + "kapsam aynı kiracının **aktif** birimini göstermeli" guard'ı (M10 sonrası).
+- **Organization scope resolver'ın alt ağaç hesabı** (recursive CTE) — M10'da
+  `apps/rbac/services/scope.py` içine eklenecek; çağıran katman **değişmeyecek**.
+- M10–M13 (departments/positions/employees), M17–M19 (platform → kiracı erişimi),
+  izin kataloğu genişletmesi (matristeki `🔜` kodlar).
+
+### Güvenlik
+
+- **Yeni `SECURITY FINDING` yok.** Kapatılan risk: "birim yöneticisi izinlerinin
+  tenant-wide görünmesi" (M7–M9 fail-closed köprüsü). Kalan risk: kapsam **önbellek
+  bayatlığı** (M10 sonrası taşıma senaryosu) → karşı önlem OD5 §5.8'de tanımlı.
+- **`OPEN DECISION` yok** (OD5 kapalı; bu turda yeni karar gerekmedi). Mevcut açık
+  kararlar: OD6–OD18 (**13**), engelleyici yoktur.
+
 ## [0.20.0] — 2026-09-11 — OD5 kapandı: `dept_manager` organizasyon kapsamı kesinleşti (yalnızca doküman)
 
 **Baseline (son commit `827fef2`):** çalışma ağacı temiz. Bu girişte **kod, migration

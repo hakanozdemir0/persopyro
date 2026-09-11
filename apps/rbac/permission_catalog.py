@@ -8,6 +8,11 @@ DONMUŞ bir kopyasını taşır — uygulanmış migration'lar sonradan değişm
 yeni izin eklenirse, mevcut veritabanları için YENİ bir migration yazılmalıdır.
 """
 
+from apps.rbac.models import ORG_SCOPED_ROLE_SCOPE_TYPES, RoleScopeType  # noqa: F401
+
+#: `ORG_SCOPED_ROLE_SCOPE_TYPES` / `RoleScopeType`: models.py tek kaynak; burada
+#: yalnızca katalog modülünden erişilebilsin diye yeniden dışa aktarılır.
+
 # (kod, ad, modül)
 PERMISSIONS: list[tuple[str, str, str]] = [
     # Kiracı ve kullanıcı yönetimi
@@ -75,15 +80,94 @@ PLATFORM_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PLATFORM_PERMISSION
 # Kiracı oluşturulduğunda üretilen varsayılan roller.
 # Nesne seviyesi kapsam (kendi kaydı / kendi ekibi) organizasyon modülüyle
 # birlikte gelecek; buradaki izinler modül düzeyindedir.
+
+# --- Kapsam (scope) — OD5 kapalı ✅ (M8) ------------------------------------
+# `hr.roles.scope_type` = **rolün izinlerinin ulaşabileceği azami organizasyon
+# kapsamı** (docs/AUTHORIZATION.md §4.4 + OD5 §5.1). Rol tipi (`role_type`:
+# system/default/custom) ile **karıştırılmaz**: `role_type` rolün *nasıl
+# oluştuğunu*, `scope_type` *neye kadar yetki verebileceğini* söyler.
+#
+# Kiracı rollerinde geçerli değerler §4.4'ten gelir; **`SYS` yalnızca platform
+# rollerine** aittir (`platform.roles`, OD3) → `hr.roles` içinde kullanılamaz ve
+# DB `CHECK` kısıtına da alınmaz:
+#   * TENANT      → kiracı geneli (tenant_admin, tenant_officer, hr_manager, custom)
+#   * UNIT        → atandığı birim + **tüm alt ağaç** (dept_manager; OD5)
+#   * UNIT_DIRECT → yalnızca atandığı birim (alt ağaç hariç)
+#   * ASSIGNED    → yalnızca açıkça atanmış kayıtlar
+#   * SELF        → yalnızca kendi kaydı (employee)
+# Kapalı küme ve kapsam-üreten davranışın kaynağı: `apps/rbac/models.py`
+# (`RoleScopeType`, `TENANT_ROLE_SCOPE_TYPES`, `ORG_SCOPED_ROLE_SCOPE_TYPES`).
+
+#: M7 göç haritası: eski rol kodu → hedef rol kodu (§4.2 geçiş planı).
+LEGACY_ROLE_CODE_MAP: dict[str, str] = {"manager": "dept_manager"}
+
+# --- Hedef izin setleri (§6.2 matrisinden; yalnız MEVCUT katalog kodları) ----
+# Matriste bulunan ama katalogda henüz **olmayan** kodlar (ör.
+# `leave.balance.read`, `approval.task.decide`, `audit.read.tenant`,
+# `employee.personal_data.read`, `document.share`, `dataaccess.*`) ayrı iş
+# kalemiyle eklenir (AUTHORIZATION §5.2 "eklenecek" + bölüm 13/6) — buraya
+# **uydurulmaz**. Her kodun yanındaki bölüm/sütun etiketi matristeki kaynağıdır.
+DEPT_MANAGER_PERMISSIONS: tuple[str, ...] = (
+    "user.read",  # B: ◐ (UNIT)
+    "org.department.read",  # C: ● (UNIT)
+    "employee.read",  # D: ● (UNIT)
+    "employee.update",  # D: ◐ (UNIT, sınırlı alanlar)
+    "leave.request.read",  # E: ● (UNIT)
+    "leave.request.create",  # E: ◐ (UNIT, kendi adına)
+    "leave.request.approve",  # E: ◐ (UNIT + ASSIGNED + SEPARATE_ACTOR)
+    "shift.read",  # F: ● (UNIT)
+    "shift.assign",  # F: ● (UNIT)
+    "shift.schedule.manage",  # F: ◐ (UNIT)
+    "attendance.read",  # F: ● (UNIT)
+    "attendance.manage",  # F: ◐ (UNIT, gerekçeli)
+    "document.read",  # G: ◐ (UNIT + POLICY_OK)
+    "document.upload",  # G: ◐ (UNIT, çalışanı adına)
+)
+
+#: ŞYT (şirket yetkilisi) sütunu — TENANT kapsamlı modül yetkileri.
+#: Matriste `◐ ❓OD9` işaretli kodlar (`document.confidential.read`,
+#: `user.permission_override.manage`) **alınmaz**: OD9 (devredilebilirlik sınırı)
+#: açık olduğu için fail-closed davranılır. `document.share` bu katalogda yok.
+TENANT_OFFICER_PERMISSIONS: tuple[str, ...] = (
+    "user.read",  # B: ◐ (TENANT, yetkili modül)
+    "role.read",  # B: ●
+    "org.department.read",  # C: ●
+    "org.department.manage",  # C: ◐
+    "org.position.manage",  # C: ◐
+    "employee.read",  # D: ● (TENANT)
+    "employee.create",  # D: ◐
+    "employee.update",  # D: ◐
+    "leave.request.read",  # E: ● (TENANT)
+    "leave.request.create",  # E: ●
+    "leave.request.approve",  # E: ◐ (ASSIGNED)
+    "shift.read",  # F: ● (TENANT)
+    "shift.assign",  # F: ◐
+    "shift.schedule.manage",  # F: ◐
+    "attendance.read",  # F: ● (TENANT)
+    "attendance.manage",  # F: ◐
+    "document.read",  # G: ● (TENANT)
+    "document.upload",  # G: ●
+    "document.delete",  # G: ◐ (kendi yüklediği)
+)
+
 DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
     "tenant_admin": {
         "name": "Kiracı Yöneticisi",
         "role_type": "default",
+        "scope_type": "TENANT",  # §6.1: ŞY sınırı TENANT
         "permissions": ALL_PERMISSION_CODES,
+    },
+    "tenant_officer": {
+        "name": "Şirket Yetkilisi",
+        "role_type": "default",
+        "scope_type": "TENANT",  # §6.1: ŞYT sınırı TENANT (modül kısıtlı)
+        "permissions": list(TENANT_OFFICER_PERMISSIONS),
     },
     "hr_manager": {
         "name": "İK Yöneticisi",
         "role_type": "default",
+        # Şablon rol olarak korunur (§4.2); tüm izinleri matriste TENANT kapsamlı.
+        "scope_type": "TENANT",
         "permissions": [
             "tenant.read",
             "user.read",
@@ -109,22 +193,16 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "audit.read",
         ],
     },
-    "manager": {
-        "name": "Yönetici",
+    "dept_manager": {
+        "name": "Departman Yöneticisi",
         "role_type": "default",
-        "permissions": [
-            "org.department.read",
-            "employee.read",
-            "leave.request.read",
-            "leave.request.approve",
-            "shift.read",
-            "attendance.read",
-            "document.read",
-        ],
+        "scope_type": "UNIT",  # OD5: atandığı birim + tüm alt ağaç
+        "permissions": list(DEPT_MANAGER_PERMISSIONS),
     },
     "employee": {
         "name": "Çalışan",
         "role_type": "default",
+        "scope_type": "SELF",  # §6.1: ÇALIŞAN sınırı SELF
         "permissions": [
             "org.department.read",
             "employee.read",

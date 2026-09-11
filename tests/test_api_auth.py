@@ -424,7 +424,13 @@ def test_varsayilan_roller_uretiliyor(tenant_a) -> None:  # noqa: ANN001
     with tenant_context(tenant_a.id):
         roller = create_default_roles(tenant_a)
         kodlar = set(roller)
-        assert kodlar == {"tenant_admin", "hr_manager", "manager", "employee"}
+        assert kodlar == {
+            "tenant_admin",
+            "tenant_officer",  # M7: §4.2 hedef kataloğu (şirket yetkilisi)
+            "hr_manager",  # şablon rol olarak korunur (§4.2)
+            "dept_manager",  # M7: eski `manager` rolünün yerini alır (OD5)
+            "employee",
+        }
         # tenant_admin tüm izinlere sahip olmalı.
         admin_izinleri = set(
             RolePermission.objects.filter(role=roller["tenant_admin"]).values_list(
