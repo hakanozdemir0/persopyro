@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.http import Http404
 from django.shortcuts import redirect, render
+from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 
 
@@ -19,6 +20,7 @@ def _kapali_mi() -> None:
         raise Http404("test_ui_disabled")
 
 
+@never_cache
 @ensure_csrf_cookie
 def login_page(request):  # noqa: ANN001, ANN201
     """Giriş sayfası: mevcut oturum ucu (`/api/v1/auth/login`) kullanılır."""
@@ -35,6 +37,7 @@ def login_page(request):  # noqa: ANN001, ANN201
     )
 
 
+@never_cache
 @ensure_csrf_cookie
 def app_page(request):  # noqa: ANN001, ANN201
     """Test paneli kabuğu (sekmeler JS ile doldurulur)."""

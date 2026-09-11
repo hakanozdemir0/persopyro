@@ -26,9 +26,12 @@ from apps.rbac.services.permissions import (
 from apps.rbac.services.roles import (
     MissingPermissionError,
     RoleAssignmentError,
+    RoleAssignmentValidationError,
     assign_role_to_user,
     can_assign_role,
     create_default_roles,
+    restore_role_assignment,
+    revoke_role_assignment,
 )
 from apps.rbac.services.scope import (
     MAX_DEPTH,
@@ -48,6 +51,7 @@ __all__ = [
     "MissingPermissionError",
     "OrgScope",
     "RoleAssignmentError",
+    "RoleAssignmentValidationError",
     "active_role_assignments",
     "assign_role_to_user",
     "assignment_grants_permissions",
@@ -62,6 +66,8 @@ __all__ = [
     "org_scope_required",
     "resolve_assignment_org_scope",
     "resolve_department_scope",
+    "restore_role_assignment",
+    "revoke_role_assignment",
     "user_has_any_permission",
     "user_has_permission",
     "user_org_scope",

@@ -219,6 +219,23 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   "Bekleyen İzinler" ekranı, Onayla/Reddet (red için gerekçe), iptal.
 - Kapsam testi görünür: Finans müdürü Finans + Muhasebe'yi görür, İnsan Kaynakları
   çalışanını/talebini **görmez ve onaylayamaz**.
+- **Yıllık izin görünürlüğü:** çalışan kendi panelinde, yetkili kullanıcı çalışan
+  listesinde ve detayda hak/kullanılan/bekleyen/kalan değerlerini görür; değerler
+  backend bakiye kaydından gelir (arayüz hesap yapmaz). Hakediş yoksa hata yerine
+  "Henüz yıllık izin hakedişi oluşturulmamış." gösterilir.
+- **Unvan / rol / yetki ayrımı:** çalışan kaydında iş unvanı (`position`) ve birim
+  (`department`) ayrı gösterilir; kullanıcının sistem rolü Türkçe adıyla listelenir
+  (ör. `dept_manager` → "Departman Yöneticisi", kapsamı "Finans + alt birimleri").
+  `role.manage` sahibi, çalışan detayındaki "Rol ve Yetkiler" bölümünden rol atar
+  (UNIT rollerde birim kapsamı seçer), atamayı kaldırır (soft delete, OD21) ve
+  izin istisnalarını (override) salt okunur görür.
+- **Self-elevation yasakları arayüzden bağımsız korunur:** kullanıcı kendi rolünü
+  atayamaz/yükseltemez, sahip olmadığı yetkiyi dağıtamaz, `role.manage` yoksa
+  rol yönetimi kapanır; platform rolleri kiracı arayüzünden yönetilemez.
+- **Birim taşıma görsel seçimle:** taşıma hedefi ağaçtan seçilir; hedef listesi
+  (kendisi ve alt ağacı hariç) sunucudan gelir, taşıma öncesi onay sorulur ve
+  sonrasında ağaç yenilenir. Döngü/derinlik/kiracı garantileri veritabanında
+  aynen yürürlüktedir.
 - Hata gösterimi: `400/401/403/409/500` anlaşılır Türkçe mesajlarla; yetki
   reddinde "Bu işlem için yetkiniz veya organizasyon kapsamınız yok." Güvenlik
   ayrıntısı/yığın izi gösterilmez.

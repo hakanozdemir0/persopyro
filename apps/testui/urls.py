@@ -1,9 +1,8 @@
 """
 Manuel test arayüzü URL'leri (önek: `/test-ui/`).
 
-Üretimde **kaydedilmez**: `config/urls.py` bu modülü yalnızca `TEST_UI_ENABLED`
-açıkken dahil eder. Ek olarak her görünüm/uç, ayar kapalıysa 404 döner
-(savunma derinliği).
+Kapı: `TEST_UI_ENABLED` (varsayılan `DJANGO_DEBUG`). Kapalıyken her görünüm ve uç
+**404** döner (savunma derinliği). Üretimde yalnızca `PERSOPYRO_TEST_UI=1` ile açılır.
 
 Giriş/çıkış için **yeni uç yoktur**: mevcut oturum uçları kullanılır
 (`/api/v1/auth/login`, `/api/v1/auth/logout`).
@@ -33,6 +32,27 @@ urlpatterns = [
         name="test-ui-department-delete",
     ),
     path("api/employees", api.EmployeeListView.as_view(), name="test-ui-employees"),
+    path(
+        "api/employees/<str:employee_id>",
+        api.EmployeeDetailView.as_view(),
+        name="test-ui-employee-detail",
+    ),
+    path(
+        "api/employees/<str:employee_id>/roles",
+        api.EmployeeRoleAssignView.as_view(),
+        name="test-ui-employee-role-assign",
+    ),
+    path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
+    path(
+        "api/role-assignments/<str:assignment_id>/revoke",
+        api.RoleAssignmentRevokeView.as_view(),
+        name="test-ui-role-revoke",
+    ),
+    path(
+        "api/role-assignments/<str:assignment_id>/restore",
+        api.RoleAssignmentRestoreView.as_view(),
+        name="test-ui-role-restore",
+    ),
     path(
         "api/employees/<str:employee_id>/move",
         api.EmployeeMoveView.as_view(),

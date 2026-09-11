@@ -545,6 +545,8 @@ bekle "GET  /test-ui/api/me (oturum yok → 403)" \
 # Oturum açma: çerez kavanozu + CSRF başlığı (tarayıcıdaki akışın aynısı).
 CEREZ="$(mktemp)"
 curl -fsS -c "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/login/" >/dev/null
+TABAN2="http://127.0.0.1:$VERIFY_PORT"
+
 csrf_basligi() {  # giriş/çıkış CSRF token'ını döndürür → her POST'ta yeniden okunur
     awk '$6 == "csrftoken" {print $7}' "$CEREZ" | tail -1
 }
@@ -583,7 +585,52 @@ kontrol_metni "kapsam: Muhasebe talebi onay havuzunda" "$BEKLEYEN_JSON" "IZIN_TE
 kontrol_yok "kapsam: İK talebi onay havuzunda DEĞİL" "$BEKLEYEN_JSON" "IZIN_TESTI_IK"
 oturum_kapat
 
-# --- 6c-3) Yetki: çalışan rolü departman oluşturamaz (403) ------------------------
+# --- 6c-3) Kritik düzeltmeler: çıkış, bakiye görünümü, unvan/rol, taşıma seçenekleri ---
+bilgi "kritik düzeltmeler (6c-3): çıkış + bakiye + unvan/rol + taşıma seçenekleri"
+bekle "POST /auth/login (demo yönetici)" "$(oturum_ac "demo@persopyro.test")" "200"
+
+CALISAN_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")"
+# NOT: beklenen parçalar ASCII-güvenli seçilir (yanıt UTF-8 birleştirilmiş olabilir).
+kontrol_metni "unvan (position) listede" "$CALISAN_JSON" '"position":"Y'
+kontrol_metni "Türkçe rol adı listede" "$CALISAN_JSON" "Departman Y"
+kontrol_metni "yıllık izin hakedişi görünür" "$CALISAN_JSON" '"entitled_days":"14.0"'
+
+# Çıkış: sunucudaki oturum GERÇEKTEN kapanmalı (bildirilen hata).
+CIKIS_KOD="$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+    -X POST "$TABAN2/api/v1/auth/logout" -H "X-CSRFToken: $(csrf_basligi)")"
+bekle "POST /auth/logout (CSRF başlıklı)" "$CIKIS_KOD" "204"
+bekle "çıkış sonrası /test-ui/api/me (403)" \
+    "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/me")" "403"
+bekle "çıkış sonrası panel girişe yönlenir (302)" \
+    "$(kod -b "$CEREZ" "$TABAN2/test-ui/")" "302"
+
+# Taşıma seçenekleri: hedef listesi kendini ve alt ağacı içermez (sunucu üretir).
+bekle "POST /auth/login (demo yönetici)" "$(oturum_ac "demo@persopyro.test")" "200"
+DEP_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments")"
+FINANS_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="FIN"))' "$DEP_JSON")"
+HEDEF_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments?moves_for=$FINANS_ID")"
+# Yalnızca seçenek listesi ölçülür (yanıt ağacın tamamını da içerir).
+HEDEF_LISTE="$("$PYTHON" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])["meta"]["move_options"]))' "$HEDEF_JSON")"
+kontrol_metni "taşıma hedeflerinde İK var" "$HEDEF_LISTE" "nsan Kaynaklar"
+kontrol_yok "taşıma hedeflerinde kendisi yok" "$HEDEF_LISTE" '"code":"FIN"'
+kontrol_yok "taşıma hedeflerinde alt birim yok" "$HEDEF_LISTE" '"code":"MUH"'
+
+# Rol atama / kaldırma (mock değil, gerçek servis + denetim).
+CALISAN2_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["employee_no"]=="DEMO-002"))' "$CALISAN_JSON")"
+HR_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="hr_manager"))' "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/roles")")"
+ATAMA_YANIT="$(curl -s -b "$CEREZ" -c "$CEREZ" -X POST "$TABAN2/test-ui/api/employees/$CALISAN2_ID/roles" \
+    -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+    -d "{\"role_id\":\"$HR_ID\",\"reason\":\"fresh install dogrulama\"}")"
+ATAMA_ID="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["data"]["id"])' "$ATAMA_YANIT")"
+bilgi "rol ataması yapıldı (denetim: role.assign)"
+bekle "POST /role-assignments/<id>/revoke (200)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "$TABAN2/test-ui/api/role-assignments/$ATAMA_ID/revoke" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"reason":"dogrulama bitti"}')" "200"
+oturum_kapat
+
+# --- 6c-4) Yetki: çalışan rolü departman oluşturamaz (403) ------------------------
 bekle "POST /auth/login (çalışan rolü)" "$(oturum_ac "personel@persopyro.test")" "200"
 bekle "POST /test-ui/api/departments (yetkisiz → 403)" \
     "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \

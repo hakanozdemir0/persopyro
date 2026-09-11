@@ -105,7 +105,7 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/me` | GET | Oturumdaki kullanıcı, kiracı, roller, etkin izinler, organizasyon kapsamı |
 | `/test-ui/api/dashboard` | GET | Panel: çalışan kaydı, dönem bakiyeleri, kendi talepleri, onay kuyruğu |
 | `/test-ui/api/lookups` | GET | Form seçenekleri (birimler, unvanlar, aktif izin türleri) |
-| `/test-ui/api/departments` | GET / POST | Birim ağacı / yeni birim (`org.department.manage` ∧ kapsam) |
+| `/test-ui/api/departments` | GET / POST | Birim ağacı / yeni birim (`org.department.manage` ∧ kapsam); `?moves_for=<id>` ile **taşıma hedefleri** (kendisi ve alt ağacı hariç) |
 | `/test-ui/api/departments/<uuid>/move` | POST | Üst birim değiştir (OD24 ağaç guard'ları) |
 | `/test-ui/api/departments/<uuid>/delete` | POST | Soft delete (OD21) |
 | `/test-ui/api/employees` | GET / POST | Kapsamdaki çalışanlar / yeni çalışan (`employee.create` ∧ kapsam) |
@@ -114,9 +114,16 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/leave-requests` | POST | Talep oluştur (gün sayısı **sunucuda** hesaplanır) |
 | `/test-ui/api/leave-requests/<uuid>/decision` | POST | Onay/red (`decision`: `approved`/`rejected`) |
 | `/test-ui/api/leave-requests/<uuid>/cancel` | POST | İptal (gerekçe zorunlu) |
+| `/test-ui/api/employees/<uuid>` | GET | Çalışan detayı: unvan/birim/yönetici, yıllık izin özeti, (yalnız `role.manage` sahibine) rol/kapsam/izin istisnaları |
+| `/test-ui/api/employees/<uuid>/roles` | POST | Rol atama (`role.manage` ∧ kapsam); `UNIT` rollerde birim kapsamı zorunlu |
+| `/test-ui/api/roles` | GET | Kiracının atanabilir rolleri (atanabilirlik gerekçesiyle); platform rolleri hariç |
+| `/test-ui/api/role-assignments/<uuid>/revoke` | POST | Rol atamasını kaldırır (soft delete, OD21) |
+| `/test-ui/api/role-assignments/<uuid>/restore` | POST | Kaldırılmış atamayı açıkça geri alır (OD21) |
 
-Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama, `401/403` kimlik
-ve yetki/kapsam, `404` kapsam dışı veya yok, `409` durum/iş kuralı çakışması.
+Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama (ör. `UNIT` rolde
+eksik birim kapsamı), `401/403` kimlik ve yetki/kapsam, `404` kapsam dışı veya yok,
+`409` durum/iş kuralı çakışması. Oturum yokken dönen `403` yanıtı
+`error.code = "not_authenticated"` taşır; "yetki yok" durumundan böylece ayrılır.
 Arayüz hiçbir yetki kararını kendisi vermez: her işlem servis katmanına delege
 edilir (`apps/organization/services.py`, `apps/leave/services/*`), RLS yürürlükte
 kalır ve hata gövdeleri yığın izi (stack trace) içermez.

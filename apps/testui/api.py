@@ -65,9 +65,27 @@ from apps.organization.services import (
     move_department,
     move_employee,
     soft_delete_department,
+    sub_tree_department_ids,
 )
-from apps.rbac.services import effective_permission_codes, user_has_permission
+from apps.rbac.models import (
+    ORG_SCOPED_ROLE_SCOPE_TYPES,
+    Role,
+    RolePermission,
+    UserPermissionOverride,
+    UserRole,
+)
+from apps.rbac.services import (
+    RoleAssignmentError,
+    RoleAssignmentValidationError,
+    assign_role_to_user,
+    can_assign_role,
+    effective_permission_codes,
+    restore_role_assignment,
+    revoke_role_assignment,
+    user_has_permission,
+)
 from apps.rbac.services.scope import user_org_scope
+from apps.testui.labels import istisna_etiketi, kapsam_metni, kapsam_tipi_etiketi
 
 
 def _test_ui_kapali() -> None:
@@ -81,11 +99,18 @@ class TestUiErrors:
 
     #: Durum/kural çakışması olarak raporlanan hatalar (409).
     CAKISMA = (LeaveStateError, LeavePolicyError, LeaveBalanceError, OrganizationTreeError)
-    #: Yetki/kapsam reddi olarak raporlanan hatalar (403).
-    YETKI = (LeaveAuthorizationError, OrganizationAuthorizationError)
+    #: Yetki/kapsam reddi olarak raporlanan hatalar (403). `RoleAssignmentError`
+    #: self-elevation/kapsam/izin redlerini taşır (Python `PermissionError` alt sınıfı).
+    YETKI = (LeaveAuthorizationError, OrganizationAuthorizationError, RoleAssignmentError)
 
     @classmethod
     def cevap(cls, hata: Exception) -> Response:
+        # Girdi doğrulaması yetki reddinden ÖNCE kontrol edilir (400 vs 403).
+        if isinstance(hata, RoleAssignmentValidationError):
+            return Response(
+                {"error": {"code": "bad_request", "message": str(hata), "detail": ""}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if isinstance(hata, cls.YETKI):
             return Response(
                 {
@@ -123,6 +148,32 @@ class TestUiView(APIView):
     def initial(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         _test_ui_kapali()
         return super().initial(request, *args, **kwargs)
+
+    def handle_exception(self, exc):  # noqa: ANN001, ANN201
+        """
+        Oturum yokken dönen 403'ü ayırt edilebilir kılar (`error.code`).
+
+        Sözleşme durum kodu **değişmez** (oturum kimlik doğrulaması → 403); ancak
+        `code="not_authenticated"` ile "yetki yok" (403 + `forbidden`) ayrılır, böylece
+        arayüz gerçekten oturumu kapanmış kullanıcıyı girişe yönlendirebilir.
+        """
+        from rest_framework import exceptions as drf_exceptions  # noqa: PLC0415
+
+        if isinstance(exc, (drf_exceptions.NotAuthenticated, drf_exceptions.PermissionDenied)) and (
+            not getattr(getattr(self, "request", None), "user", None)
+            or not self.request.user.is_authenticated
+        ):
+            return Response(
+                {
+                    "error": {
+                        "code": "not_authenticated",
+                        "message": "Oturum bulunamadı veya süresi doldu.",
+                        "detail": "",
+                    }
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return super().handle_exception(exc)
 
 
 def _uuid(deger, alan: str) -> uuid.UUID:  # noqa: ANN001
@@ -197,13 +248,23 @@ def _calisan_ozeti(employee: Employee) -> dict:  # noqa: ANN001
     return {
         "id": str(employee.pk),
         "employee_no": employee.employee_no,
+        # Unvan (position) ile birim (department) ayrı kavramlardır (M10/M12):
+        # arayüzde ikisi ayrı satırda gösterilir.
         "department": employee.department.name if employee.department_id else None,
         "department_id": str(employee.department_id) if employee.department_id else None,
         "position": employee.position.name if employee.position_id else None,
         "position_id": str(employee.position_id) if employee.position_id else None,
         "status": employee.status,
+        "status_label": employee.get_status_display(),
         "hire_date": employee.hire_date.isoformat() if employee.hire_date else None,
         "user_email": employee.user.email if employee.user_id else None,
+        "user_name": (
+            f"{employee.user.first_name} {employee.user.last_name}".strip()
+            if employee.user_id
+            else None
+        ),
+        "roles": _kullanicinin_rolleri(employee.user) if employee.user_id else [],
+        "annual": _yillik_ozet(employee),
         "manager": (
             {
                 "employee_no": iliski.manager_employee.employee_no,
@@ -231,7 +292,8 @@ def _talep_ozeti(talep, user) -> dict:  # noqa: ANN001
         "start_date": talep.start_date.isoformat(),
         "end_date": talep.end_date.isoformat(),
         "days_requested": str(talep.days_requested),
-        "status": talep.status,
+        "status": talep.status,  # gerçek durum kodu (kapalı küme)
+        "status_label": talep.get_status_display(),  # Türkçe karşılığı (sunum)
         "reason": talep.reason,
         "submitted_at": talep.submitted_at.isoformat() if talep.submitted_at else None,
         "decided_at": talep.decided_at.isoformat() if talep.decided_at else None,
@@ -243,6 +305,141 @@ def _talep_ozeti(talep, user) -> dict:  # noqa: ANN001
         "can_cancel": can_cancel_leave_request(user, talep),
         "can_view": can_view_leave_request(user, talep),
     }
+
+
+def _kullanicinin_rolleri(user) -> list[dict]:  # noqa: ANN001
+    """Kullanıcının **etkin** rol atamaları: Türkçe rol adı + okunabilir kapsam metni."""
+    atamalar = (
+        UserRole.objects.filter(user=user, deleted_at__isnull=True)
+        .select_related("role", "scope_org_unit")
+        .order_by("role__name")
+    )
+    return [
+        _atama_ozeti(atama)
+        for atama in atamalar
+        if atama.role is not None and atama.role.deleted_at is None
+    ]
+
+
+def _atama_ozeti(atama) -> dict:  # noqa: ANN001
+    """Rol ataması özeti (Türkçe etiket + kapsam metni)."""
+    return {
+        "id": str(atama.pk),
+        "code": atama.role.code,  # teknik kod (ayrıntı alanında gösterilir)
+        "name": atama.role.name,  # DB'deki Türkçe ad (backend kodu değişmez)
+        "scope_type": atama.role.scope_type,
+        "scope_type_label": kapsam_tipi_etiketi(atama.role.scope_type),
+        "scope_org_unit_id": str(atama.scope_org_unit_id) if atama.scope_org_unit_id else None,
+        "scope_text": kapsam_metni(
+            scope_type=atama.role.scope_type,
+            birim_adi=atama.scope_org_unit.name if atama.scope_org_unit_id else None,
+        ),
+        "granted_at": atama.granted_at.isoformat() if atama.granted_at else None,
+        "kaldirildi": atama.deleted_at is not None,
+    }
+
+
+def _yillik_bakiye(employee, yil: int):  # noqa: ANN001, ANN202
+    """Yıllık izin bakiye kaydı (varsa). Tek doğruluk kaynağı `hr.leave_balances`."""
+    return (
+        LeaveBalance.objects.filter(
+            employee=employee,
+            period_year=yil,
+            deleted_at__isnull=True,
+            leave_type__code="annual_leave",
+            leave_type__deleted_at__isnull=True,
+        )
+        .select_related("leave_type")
+        .first()
+    )
+
+
+def _yillik_ozet(employee, yil: int | None = None) -> dict:  # noqa: ANN001
+    """
+    Yıllık izin özeti (hakediş/kullanılan/bekleyen/kalan) — **backend'den**.
+
+    Hakediş yoksa hata değil, açık bir durum döner: arayüz "Henüz yıllık izin
+    hakedişi oluşturulmamış." gösterir. Türetilmiş değer (kalan) `available_days`
+    **üretilen kolonundan** gelir; arayüz hesap yapmaz.
+    """
+    yil = yil or period_year_for()
+    bos = {
+        "hakedis_var": False,
+        "period_year": yil,
+        "leave_type": "Yıllık İzin",
+        "leave_type_code": "annual_leave",
+        "entitled_days": None,
+        "carried_forward_days": None,
+        "adjustment_days": None,
+        "used_days": None,
+        "reserved_days": None,
+        "available_days": None,
+    }
+    if employee is None:
+        return {**bos, "mesaj": "Bu kullanıcıya bağlı çalışan kaydı yok."}
+    bakiye = _yillik_bakiye(employee, yil)
+    if bakiye is None:
+        return {**bos, "mesaj": "Henüz yıllık izin hakedişi oluşturulmamış."}
+    return {
+        "hakedis_var": True,
+        "period_year": bakiye.period_year,
+        "leave_type": bakiye.leave_type.name,
+        "leave_type_code": bakiye.leave_type.code,
+        "entitled_days": str(bakiye.entitled_days),
+        "carried_forward_days": str(bakiye.carried_forward_days),
+        "adjustment_days": str(bakiye.adjustment_days),
+        "used_days": str(bakiye.used_days),
+        "reserved_days": str(bakiye.reserved_days),
+        "available_days": str(bakiye.available_days),
+        "mesaj": "",
+    }
+
+
+def _bakiye_listesi(employee, yil: int) -> list[dict]:  # noqa: ANN001
+    """Çalışanın dönem bakiyeleri (yalnız kaydı olan izin türleri)."""
+    kayitlar = (
+        LeaveBalance.objects.filter(employee=employee, period_year=yil, deleted_at__isnull=True)
+        .select_related("leave_type")
+        .order_by("leave_type__code")
+    )
+    return [_bakiye_ozeti(kayit) for kayit in kayitlar if kayit.leave_type_id]
+
+
+def _kapsamdaki_calisan(user, employee_id) -> Employee:  # noqa: ANN001
+    """Aktörün kapsamındaki çalışan; kapsam dışıysa **404** (varlık sızdırılmaz)."""
+    kimlik = _uuid(employee_id, "employee_id")
+    calisan = kapsamdaki_calisanlar(user).filter(pk=kimlik).first()
+    if calisan is None:
+        raise Http404("calisan_kapsam_disi")
+    return calisan
+
+
+def _izin_istisnalari(user) -> list[dict]:  # noqa: ANN001
+    """Kullanıcı bazlı izin istisnaları (salt okunur görünüm)."""
+    kayitlar = (
+        UserPermissionOverride.objects.filter(user=user, deleted_at__isnull=True)
+        .select_related("permission")
+        .order_by("permission__code")
+    )
+    return [
+        {
+            "permission": kayit.permission.code,
+            "permission_name": kayit.permission.name,
+            "effect": kayit.effect,
+            "effect_label": istisna_etiketi(kayit.effect),
+            "reason": kayit.reason,
+        }
+        for kayit in kayitlar
+    ]
+
+
+def _atama_getir(assignment_id) -> UserRole:  # noqa: ANN001
+    """Kiracı bağlamındaki rol ataması (RLS dışına çıkmaz; yoksa 404)."""
+    kimlik = _uuid(assignment_id, "assignment_id")
+    atama = UserRole.objects.filter(pk=kimlik).select_related("role", "user").first()
+    if atama is None:
+        raise Http404("atama_yok")
+    return atama
 
 
 def _bakiye_ozeti(bakiye: LeaveBalance) -> dict:  # noqa: ANN001
@@ -268,15 +465,7 @@ class MeView(TestUiView):
 
     def get(self, request):  # noqa: ANN001
         user = request.user
-        from apps.rbac.models import UserRole  # noqa: PLC0415
-
-        roller = [
-            atama.role.code
-            for atama in UserRole.objects.filter(user=user, deleted_at__isnull=True)
-            .select_related("role")
-            .order_by("role__code")
-            if atama.role is not None and atama.role.deleted_at is None
-        ]
+        roller = _kullanicinin_rolleri(user)
         calisan = user_employee(user)
         izinler = sorted(effective_permission_codes(user))
         return Response(
@@ -289,6 +478,7 @@ class MeView(TestUiView):
                     },
                     "tenant": {"id": str(user.tenant_id), "name": user.tenant.name},
                     "roles": roller,
+                    "role_codes": [r["code"] for r in roller],
                     "scope": _kapsam_ozeti(user),
                     "employee": _calisan_ozeti(calisan) if calisan is not None else None,
                     "permissions": izinler,
@@ -299,6 +489,9 @@ class MeView(TestUiView):
                         or can_create_leave_request_for(user, calisan),
                         "leave_approve": user_has_permission(user, "leave.request.approve"),
                         "leave_types_manage": can_manage_leave_types(user),
+                        # Rol/yetki yönetimi yalnızca `role.manage` sahibinde görünür
+                        # (karar servis katmanında; UI yalnızca gizler).
+                        "roles_manage": user_has_permission(user, "role.manage"),
                     },
                 }
             }
@@ -354,6 +547,7 @@ class DashboardView(TestUiView):
                     "employee": _calisan_ozeti(calisan) if calisan is not None else None,
                     "period_year": yil,
                     "balances": bakiyeler,
+                    "annual": _yillik_ozet(calisan, yil),
                     "my_requests": kendi_talepleri,
                     "pending_requests": onay_bekleyen,
                     "pending_count": len(onay_bekleyen),
@@ -371,6 +565,24 @@ class DepartmentListView(TestUiView):
             .select_related("parent", "manager_employee")
             .order_by("code")
         )
+        # `moves_for=<id>`: yalnızca o birimin **taşınabileceği** üst birimler
+        # (kendisi ve alt ağacı hariç). Kaynak: `sub_tree_department_ids` — aynı
+        # OD24 alt ağaç çözümleyicisi; karar yine servis/DB guard'larında.
+        tasima_hedefleri = None
+        hedef_id = request.query_params.get("moves_for")
+        if hedef_id:
+            birim = _kapsamda_birim(request.user, hedef_id)
+            yasak = sub_tree_department_ids(birim)
+            tasima_hedefleri = [
+                {
+                    "id": str(d.id),
+                    "code": d.code,
+                    "name": d.name,
+                    "parent_id": str(d.parent_id) if d.parent_id else None,
+                }
+                for d in kayitlar
+                if d.pk not in yasak
+            ]
         return Response(
             {
                 "data": [
@@ -389,7 +601,9 @@ class DepartmentListView(TestUiView):
                     for d in kayitlar
                 ],
                 "meta": {
-                    "can_manage": user_has_permission(request.user, "org.department.manage")
+                    "can_manage": user_has_permission(request.user, "org.department.manage"),
+                    "moves_for": str(hedef_id) if hedef_id else None,
+                    "move_options": tasima_hedefleri,
                 },
             }
         )
@@ -533,28 +747,87 @@ class EmployeeMoveView(TestUiView):
         return Response({"data": _calisan_ozeti(tasindi)})
 
 
+def _kapsamda_birim(user, department_id) -> Department:  # noqa: ANN001
+    """Kiracı içindeki birim (taşıma hedefi hesabı için); yoksa 404."""
+    kimlik = _uuid(department_id, "department_id")
+    birim = Department.objects.filter(pk=kimlik, deleted_at__isnull=True).first()
+    if birim is None:
+        raise Http404("birim_yok")
+    return birim
+
+
 class EmployeeBalanceView(TestUiView):
     """Çalışanın dönem bakiyeleri (türetilen değerler backend'den)."""
 
     def get(self, request, employee_id: str):  # noqa: ANN001
         from apps.leave.services import can_read_balances  # noqa: PLC0415
 
-        calisan = Employee.objects.filter(pk=_uuid(employee_id, "id")).first()
-        if calisan is None:
-            return Response(
-                {"error": {"code": "not_found", "message": "Çalışan bulunamadı.", "detail": ""}},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        # Kapsam dışı çalışan **görünmez** (404): varlık sızdırılmaz.
+        calisan = _kapsamdaki_calisan(request.user, employee_id)
         if not can_read_balances(request.user, calisan):
             return TestUiErrors.cevap(LeaveAuthorizationError("Bakiye görme yetkisi/kapsamı yok."))
         yil = period_year_for()
-        bakiyeler = [
-            _bakiye_ozeti(b)
-            for b in LeaveBalance.objects.filter(employee=calisan, period_year=yil)
-            .select_related("leave_type")
-            .order_by("leave_type__code")
-        ]
-        return Response({"data": bakiyeler, "meta": {"employee_no": calisan.employee_no}})
+        bakiyeler = _bakiye_listesi(calisan, yil)
+        return Response(
+            {
+                "data": bakiyeler,
+                "meta": {
+                    "employee_no": calisan.employee_no,
+                    "annual": _yillik_ozet(calisan, yil),
+                    "mesaj": "" if bakiyeler else "Bu dönem için bakiye kaydı yok.",
+                },
+            }
+        )
+
+
+def _atanabilir_roller(user) -> list[Role]:  # noqa: ANN001
+    """
+    Kiracının **kendi** atanabilir rolleri.
+
+    Platform rolleri `hr.roles` içinde yaşamaz (OD3); yine de savunma amaçlı olarak
+    `platform.*` izni içeren roller listelenmez.
+    """
+    platform_izinli = set(
+        RolePermission.objects.filter(permission__code__startswith="platform.").values_list(
+            "role_id", flat=True
+        )
+    )
+    return [
+        rol
+        for rol in Role.objects.filter(
+            tenant=user.tenant_id, deleted_at__isnull=True, is_assignable=True
+        ).order_by("name")
+        if rol.pk not in platform_izinli
+    ]
+
+
+class RoleListView(TestUiView):
+    """Atanabilir roller + aktörün atayıp atayamayacağı (karar servis katmanında)."""
+
+    def get(self, request):  # noqa: ANN001
+        roller = []
+        for rol in _atanabilir_roller(request.user):
+            izin_var, gerekce = can_assign_role(request.user, rol)
+            roller.append(
+                {
+                    "id": str(rol.pk),
+                    "code": rol.code,
+                    "name": rol.name,
+                    "scope_type": rol.scope_type,
+                    "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                    "kapsam_gerekli": rol.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES,
+                    "atanabilir": izin_var,
+                    "gerekce": gerekce,
+                }
+            )
+        return Response(
+            {
+                "data": roller,
+                "meta": {
+                    "can_manage": user_has_permission(request.user, "role.manage"),
+                },
+            }
+        )
 
 
 class LookupView(TestUiView):
@@ -588,6 +861,136 @@ class LookupView(TestUiView):
                 }
             }
         )
+
+
+class EmployeeDetailView(TestUiView):
+    """
+    Çalışan detayı: unvan/birim/yönetici + yıllık izin özeti.
+
+    "Rol ve Yetkiler" bölümü (roller, kapsamlar, izin istisnaları, etkin izin
+    sayısı) **yalnızca `role.manage` sahibine** döner: aksi halde başka bir
+    kullanıcının yetki kümesi sızardı.
+    """
+
+    def get(self, request, employee_id: str):  # noqa: ANN001
+        calisan = _kapsamdaki_calisan(request.user, employee_id)
+        yil = period_year_for()
+        ozet = _calisan_ozeti(calisan)
+        detay = {
+            **ozet,
+            "annual": _yillik_ozet(calisan, yil),
+            "balances": (
+                _bakiye_listesi(calisan, yil)
+                if user_has_permission(request.user, "leave.balance.read")
+                else []
+            ),
+            "yetki_gorunur": user_has_permission(request.user, "role.manage"),
+            # Her yanıtta bulunur (yetki bölümü kapalı olsa bile): arayüz kararlı bir
+            # şekle göre çalışır.
+            "is_self": calisan.user_id is not None
+            and str(calisan.user_id) == str(request.user.pk),
+        }
+        if detay["yetki_gorunur"] and calisan.user_id:
+            atamalar = (
+                UserRole.objects.filter(user=calisan.user, deleted_at__isnull=True)
+                .select_related("role", "scope_org_unit")
+                .order_by("role__name")
+            )
+            kaldirilanlar = (
+                UserRole.objects.filter(user=calisan.user, deleted_at__isnull=False)
+                .select_related("role", "scope_org_unit")
+                .order_by("-deleted_at")[:20]
+            )
+            detay["roles"] = [_atama_ozeti(a) for a in atamalar]
+            detay["revoked_assignments"] = [
+                {
+                    **_atama_ozeti(a),
+                    "deleted_at": a.deleted_at.isoformat() if a.deleted_at else None,
+                }
+                for a in kaldirilanlar
+            ]
+            detay["permission_overrides"] = _izin_istisnalari(calisan.user)
+            detay["effective_permissions"] = sorted(effective_permission_codes(calisan.user))
+            detay["assignable_roles"] = [
+                {
+                    "id": str(rol.pk),
+                    "code": rol.code,
+                    "name": rol.name,
+                    "scope_type": rol.scope_type,
+                    "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                    "kapsam_gerekli": rol.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES,
+                    "atanabilir": can_assign_role(request.user, rol)[0],
+                    "gerekce": can_assign_role(request.user, rol)[1],
+                }
+                for rol in _atanabilir_roller(request.user)
+            ]
+        return Response({"data": detay})
+
+
+class EmployeeRoleAssignView(TestUiView):
+    """Çalışanın bağlı kullanıcısına rol atar (guard'lar servis katmanında)."""
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        calisan = _kapsamdaki_calisan(request.user, employee_id)
+        if calisan.user_id is None:
+            return Response(
+                {
+                    "error": {
+                        "code": "bad_request",
+                        "message": (
+                            "Bu çalışana bağlı kullanıcı hesabı yok; önce kullanıcı bağlanmalı."
+                        ),
+                        "detail": "",
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        rol_id = request.data.get("role_id")
+        kapsam_id = request.data.get("scope_org_unit_id") or None
+        gerekce = str(request.data.get("reason") or "").strip()
+        kimlik = _uuid(rol_id, "role_id")
+        roller = {rol.pk: rol for rol in _atanabilir_roller(request.user)}
+        if kimlik not in roller:
+            raise LeaveError("Rol bulunamadı veya bu kiracıda atanamaz.")
+        try:
+            atama = assign_role_to_user(
+                actor=request.user,
+                target_user=calisan.user,
+                role=roller[kimlik],
+                scope_org_unit_id=kapsam_id,
+                reason=gerekce,
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _atama_ozeti(atama)}, status=status.HTTP_201_CREATED)
+
+
+class RoleAssignmentRevokeView(TestUiView):
+    """Rol atamasını kaldırır (soft-delete + denetim, OD21)."""
+
+    def post(self, request, assignment_id: str):  # noqa: ANN001
+        atama = _atama_getir(assignment_id)
+        try:
+            revoke_role_assignment(
+                actor=request.user, assignment=atama, reason=str(request.data.get("reason") or "")
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"kaldirildi": True, "role": atama.role.name}})
+
+
+class RoleAssignmentRestoreView(TestUiView):
+    """Kaldırılmış rol atamasını açıkça geri alır (OD21)."""
+
+    def post(self, request, assignment_id: str):  # noqa: ANN001
+        atama = _atama_getir(assignment_id)
+        try:
+            restore_role_assignment(
+                actor=request.user, assignment=atama, reason=str(request.data.get("reason") or "")
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _atama_ozeti(atama)})
 
 
 class LeaveRequestListView(TestUiView):

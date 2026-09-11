@@ -66,6 +66,18 @@ kurulmaz; ek bağımlılık yoktur.
     .tree li { padding: 4px 0; }
     code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
     .login-wrap { max-width: 420px; margin: 8vh auto; }
+    .small { font-size: 12px; }
+    .hakedis { display: inline-block; }
+    .hakedis-buyuk { font-size: 15px; }
+    .detail-box { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px;
+      padding: 12px 14px; background: #fbfcfe; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(18, 24, 33, 0.45);
+      display: flex; align-items: center; justify-content: center; z-index: 50; }
+    .modal { max-width: 520px; width: 92%; }
+    .modal select, .modal input { width: 100%; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    button.primary { background: var(--fg); color: #fff; border-color: var(--fg); }
+    button.danger { color: var(--err); border-color: #f0c2bf; }
   </style>
 </head>
 <body>
@@ -112,28 +124,50 @@ kurulmaz; ek bağımlılık yoktur.
         const detay = e.message || "";
         return (eslesme[statusi] + detay).trim();
       },
+      // DİKKAT (regresyon): CSRF başlığı yalnızca gövde varken değil, **yazma
+      // yöntemlerinin hepsinde** gönderilir. Aksi halde gövdesiz POST'lar (ör.
+      // çıkış) sessizce 403 alır ve oturum kapanmaz.
       async cagir(yol, { method = "GET", body = null } = {}) {
+        const guvenli = method === "GET" || method === "HEAD";
         const basliklar = { "Accept": "application/json" };
+        if (!guvenli) basliklar["X-CSRFToken"] = this.csrf();
         const secenekler = { method, headers: basliklar, credentials: "same-origin" };
         if (body !== null) {
           basliklar["Content-Type"] = "application/json";
-          basliklar["X-CSRFToken"] = this.csrf();
           secenekler.body = JSON.stringify(body);
         }
         const yanit = await fetch(yol, secenekler);
         let govde = null;
         try { govde = await yanit.json(); } catch (e) { govde = null; }
-        if (!yanit.ok) throw new Error(this.hata(yanit.status, govde));
+        if (!yanit.ok) {
+          const kod = (govde && govde.error && govde.error.code) || "";
+          if (yanit.status === 401 || kod === "not_authenticated") {
+            // Oturum gerçekten kapalı: korunan sayfada kalma, girişe dön.
+            window.location.replace("/test-ui/login/");
+          }
+          const hata = new Error(this.hata(yanit.status, govde));
+          hata.code = kod;
+          throw hata;
+        }
         return govde;
       },
     };
+    // Çıkış: oturum **sunucuda** kapatılır (mevcut `/api/v1/auth/logout` ucu); başarılı
+    // yanıt görülmeden panelden çıkılmaz. Yerel durum temizlenir ve `replace` ile
+    // girişe dönülür → geri tuşuyla korunan sayfaya dönülemez.
     const cikis = document.getElementById("logout-btn");
     if (cikis) {
       cikis.addEventListener("click", async () => {
+        cikis.disabled = true;
         try {
           await PERSOPYRO_UI.cagir("/api/v1/auth/logout", { method: "POST" });
-        } catch (e) { /* oturum zaten kapalı olabilir */ }
-        window.location.href = "/test-ui/login/";
+        } catch (e) {
+          cikis.disabled = false;
+          PERSOPYRO_UI.mesaj("error", "Çıkış yapılamadı: " + e.message);
+          return;
+        }
+        try { sessionStorage.clear(); localStorage.clear(); } catch (e) { /* yok sayılır */ }
+        window.location.replace("/test-ui/login/");
       });
     }
   </script>

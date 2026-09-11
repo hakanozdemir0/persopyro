@@ -151,16 +151,36 @@ Kiracı `slug`: `demo`.
    *Muhasebe* talebi (`IZIN_TESTI_MUHASEBE`) görünür; *İnsan Kaynakları* talebi
    (`IZIN_TESTI_IK`) görünmez. **Onayla** → durum ilerler (nihai onay için 1. adım:
    `demo@persopyro.test`); **Reddet** gerekçe ister.
-6. `personel@persopyro.test` ile gir → **Panel**: bakiye değişimini (bekleyen →
-   kullanılan) doğrula; **İzin Talebi → Taleplerim** yalnızca kendi kayıtlarını
-   gösterir. `ik.calisan@persopyro.test` ile girip aynı onay denenirse **403**
-   ("Bu işlem için yetkiniz veya organizasyon kapsamınız yok.") alınır.
+6. `personel@persopyro.test` ile gir → **Panel**: "Yıllık izin bakiyem" kartında
+   hak/kullanılan/bekleyen/kalan değerlerini gör; **İzin Talebi → Taleplerim**
+   yalnızca kendi kayıtlarını gösterir. `ik.calisan@persopyro.test` ile girip aynı
+   onay denenirse **403** ("Bu işlem için yetkiniz veya organizasyon kapsamınız
+   yok.") alınır.
+7. **Çıkış** düğmesine bas → giriş ekranına dönersin; panel adresini yenile
+   (`/test-ui/`) → girişe yönlenir; geri tuşu paneli açmaz. (Çıkış sunucuda
+   oturumu kapatır; korunan uçlar **403 `not_authenticated`** döner.)
+8. `finans.mudur@persopyro.test` ile gir → **Çalışanlar**: her satırda birim,
+   **unvan**, **rol** ve **yıllık izin** özeti görünür (İnsan Kaynakları çalışanı
+   listede yoktur). **Detay** → unvan/birim/yönetici ve yıllık izin; rol/yetki
+   bölümü bu kullanıcıda kapalıdır (yetki yok).
+9. `demo@persopyro.test` ile gir → **Çalışanlar → Detay (personel)**: "Rol ve
+   Yetkiler" bölümünde mevcut rolleri ve kapsamlarını gör; **Rol ata** ile ör.
+   *İK Yöneticisi* rolünü ata (UNIT rol seçersen birim kapsamı zorunludur),
+   sonra **Rolü kaldır** ile kaldır ve istersen **Geri al** ile geri getir
+   (OD21: kaldırılan atama sessizce canlanmaz). Kullanıcı **kendi** rolünü
+   atayamaz (self-elevation yasağı).
+10. **Departmanlar → Taşı**: açılan pencerede hedef üst birimi ağaçtan seç
+    ("En üst seviyeye taşı (kök)" seçeneği de vardır); onay sorusundan sonra ağaç
+    yenilenir ve Finans müdürünün gördüğü çalışanlar yeni ağaca göre değişir.
+    Taşınan birimin kendisi ve alt birimleri listede **çıkmaz** (sunucu üretir).
 
 ### Otomatik doğrulama
 
-`bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki) ve
-`bash scripts/verify_fresh_install.sh` (**6c-1…6c-4** adımları: giriş, kapsam
-görünürlüğü, yetkisiz 403, üretim varsayılanında 404).
+`bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki + çıkış +
+bakiye + rol yönetimi + taşıma) ve `bash scripts/verify_fresh_install.sh`
+(**6c-1…6c-4** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
+bakiye/unvan/rol görünürlüğü, taşıma hedefleri, rol atama-kaldırma, yetkisiz 403,
+üretim varsayılanında 404).
 
 ### Kapsam dışı
 

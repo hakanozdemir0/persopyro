@@ -12,6 +12,7 @@ otomatik restore **edilmez**, kopya **üretilmez**, durum açık bir hatayla bil
 """
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.audit.services import log_action
 from apps.rbac.models import (
@@ -36,6 +37,16 @@ class RoleAssignmentError(PermissionError):
     OD5 §5.3 ve §4.3: kullanıcı kendi rolünü/scope'unu yükseltemez; sahip olmadığı
     bir yetki kümesini başkasına veremez; `UNIT`/`UNIT_DIRECT` rollerde kapsam
     zorunludur.
+    """
+
+
+class RoleAssignmentValidationError(RoleAssignmentError):
+    """
+    Rol ataması **girdisi** geçersiz (HTTP 400).
+
+    Yetki/kapsam reddinden (`RoleAssignmentError` → 403) ayrılır: burada sorun
+    aktörün yetkisi değil, isteğin kendisidir (atanamayan rol, eksik/fazla kapsam,
+    silinmiş atamanın tekrarı, zaten kaldırılmış/etkin atama).
     """
 
 
@@ -141,7 +152,7 @@ def can_assign_role(actor, role) -> tuple[bool, str]:  # noqa: ANN001
     if role is None or role.deleted_at is not None:
         return False, "Rol bulunamadı veya silinmiş."
     if not role.is_assignable:
-        return False, "Rol atanabilir olarak işaretlenmemiş."
+        return False, "Rol atanabilir olarak işaretlenmemiş."  # noqa: RUF003
 
     aktor_izinleri = effective_permission_codes(actor)
     if "role.manage" not in aktor_izinleri:
@@ -183,7 +194,7 @@ def assign_role_to_user(  # noqa: ANN001, PLR0913
     `UNIT`/`UNIT_DIRECT` rol **izin üretmez** (fail-closed, `services/scope.py`).
     """
     if actor is None or target_user is None or role is None:
-        raise RoleAssignmentError("Aktör, hedef kullanıcı ve rol zorunludur.")
+        raise RoleAssignmentValidationError("Aktör, hedef kullanıcı ve rol zorunludur.")
     if str(getattr(actor, "pk", None)) == str(getattr(target_user, "pk", None)):
         raise RoleAssignmentError(
             "Kullanıcı kendi rolünü atayamaz/değiştiremez (self-elevation yasağı)."
@@ -199,15 +210,27 @@ def assign_role_to_user(  # noqa: ANN001, PLR0913
 
     if role.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES:
         if scope_org_unit_id is None:
-            raise RoleAssignmentError(
+            raise RoleAssignmentValidationError(
                 f"'{role.code}' rolü {role.scope_type} kapsamlıdır: atama düzeyinde birim "
                 "kapsamı (scope_org_unit_id) ZORUNLUDUR. NULL kapsam 'tüm kiracı' "
                 "anlamına gelmez (OD5 fail-closed)."
             )
     elif scope_org_unit_id is not None:
-        raise RoleAssignmentError(
+        raise RoleAssignmentValidationError(
             f"'{role.code}' rolü {role.scope_type} kapsamlıdır: birim kapsamı yalnızca "
             "UNIT/UNIT_DIRECT tipli rollerde verilebilir."
+        )
+
+    # OD21: silinmiş bir atama **sessizce** canlandırılmaz. Aynı (kullanıcı, rol,
+    # kapsam) için silinmiş satır varsa (benzersizlik kısıtı silinmişleri de kapsar)
+    # INSERT çakışır; açık hata verilir ve `restore_role_assignment` çağrılır.
+    silinmis_atama = UserRole.objects.filter(
+        user=target_user, role=role, scope_org_unit_id=scope_org_unit_id, deleted_at__isnull=False
+    ).first()
+    if silinmis_atama is not None:
+        raise RoleAssignmentValidationError(
+            "Bu (kullanıcı, rol, kapsam) ataması daha önce kaldırılmış. OD21 gereği sessizce "
+            "canlandırılmaz; açık geri alma gerekir (restore_role_assignment)."
         )
 
     atama = UserRole.objects.create(
@@ -232,3 +255,95 @@ def assign_role_to_user(  # noqa: ANN001, PLR0913
         },
     )
     return atama
+
+
+# --- rol atamasını kaldırma / geri alma (OD21) --------------------------------
+
+
+def _atama_guardlari(actor, assignment) -> None:  # noqa: ANN001
+    """
+    Kaldırma/geri alma ortak guard'ları: izin, self-elevation yasağı, kiracı eşitliği.
+
+    Self-elevation kuralı atamada olduğu gibi burada da geçerlidir: kullanıcı **kendi**
+    ataması üzerinde işlem yapamaz (aksi halde "kendi rolünü kaldır, sonra daha geniş
+    rol ata" gibi dolaylı yükseltme yolu açılabilir).
+    """
+    if actor is None or not getattr(actor, "is_authenticated", False) or not actor.is_active:
+        raise RoleAssignmentError("Aktör aktif bir kullanıcı değil.")
+    if assignment is None or assignment.role is None or assignment.role.deleted_at is not None:
+        raise RoleAssignmentValidationError("Rol ataması bulunamadı veya rolü silinmiş.")
+    if str(getattr(actor, "pk", None)) == str(getattr(assignment, "user_id", None)):
+        raise RoleAssignmentError(
+            "Kullanıcı kendi rol atamasını değiştiremez (self-elevation yasağı)."
+        )
+    if str(assignment.tenant_id) != str(getattr(actor, "tenant_id", None)):
+        raise RoleAssignmentError("Atama ve aktör aynı kiracıda olmalıdır.")
+    if "role.manage" not in effective_permission_codes(actor):
+        raise RoleAssignmentError("Bu işlem için 'role.manage' izni gerekir.")
+    izin_var, gerekce = can_assign_role(actor, assignment.role)
+    if not izin_var:
+        raise RoleAssignmentError(gerekce)
+
+
+@transaction.atomic
+def revoke_role_assignment(*, actor, assignment, reason: str = ""):  # noqa: ANN001
+    """
+    Rol atamasını kaldırır (soft-delete, OD21) ve denetler (`role.revoke`).
+
+    * Satır fiziksel olarak **silinmez**: atama geçmişi ve denetim izi korunur.
+    * Kaldırılan atama izin üretmez (`active_role_assignments` silinmişleri saymaz).
+    * Yalnızca `role.manage` sahibi ve atanabilir rollü aktörler çağırabilir; kullanıcı
+      kendi atamasını kaldıramaz (self-elevation yasağı).
+    """
+    _atama_guardlari(actor, assignment)
+    if assignment.deleted_at is not None:
+        raise RoleAssignmentValidationError("Bu atama zaten kaldırılmış.")
+    assignment.deleted_at = timezone.now()
+    assignment.save(update_fields=["deleted_at", "updated_at"])
+    log_action(
+        tenant_id=assignment.tenant_id,
+        action="role.revoke",
+        user=actor,
+        table_name="user_roles",
+        record_id=assignment.pk,
+        changes={
+            "role_code": assignment.role.code,
+            "target_user_id": str(assignment.user_id),
+            "scope_org_unit_id": (
+                str(assignment.scope_org_unit_id) if assignment.scope_org_unit_id else None
+            ),
+            "reason": reason[:200],
+        },
+    )
+    return assignment
+
+
+@transaction.atomic
+def restore_role_assignment(*, actor, assignment, reason: str = ""):  # noqa: ANN001
+    """
+    Kaldırılmış (soft-delete) atamayı **açıkça** geri alır ve denetler (`role.restore`).
+
+    OD21: geri alma sessizce olmaz; açık talep + denetim kaydı gerekir. Guard'lar
+    atama ile aynıdır (`role.manage`, self-elevation yasağı, kiracı eşitliği).
+    """
+    _atama_guardlari(actor, assignment)
+    if assignment.deleted_at is None:
+        raise RoleAssignmentValidationError("Bu atama zaten etkin (geri alınacak bir şey yok).")
+    assignment.deleted_at = None
+    assignment.save(update_fields=["deleted_at", "updated_at"])
+    log_action(
+        tenant_id=assignment.tenant_id,
+        action="role.restore",
+        user=actor,
+        table_name="user_roles",
+        record_id=assignment.pk,
+        changes={
+            "role_code": assignment.role.code,
+            "target_user_id": str(assignment.user_id),
+            "scope_org_unit_id": (
+                str(assignment.scope_org_unit_id) if assignment.scope_org_unit_id else None
+            ),
+            "reason": reason[:200],
+        },
+    )
+    return assignment

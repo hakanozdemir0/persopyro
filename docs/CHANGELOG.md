@@ -3,6 +3,92 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.25.0] — 2026-09-11 — Test arayüzü: 4 kritik eksik düzeltmesi (çıkış, bakiye, rol/yetki, birim taşıma)
+
+**Baseline (son commit `7c8ad0e`):** çalışma ağacı temiz, tam test suite **388 passed**.
+
+Kapsam: kullanıcının bildirdiği dört eksik. Kapsam dışı (bu turda **dokunulmadı**):
+RBAC/RLS/kapsam karar mantığı ve izin kataloğu, kimlik doğrulama mekanizması,
+üretim API sözleşmesi (`/api/v1/*`), yeni frontend zinciri, impersonation,
+vardiya/devam (M15), evrak (M16), permission override **yazma** (arayüzde salt
+okunur: yazma servisi/kararı yok).
+
+### 1) Çıkış gerçekten çalışmıyor (kök neden bulundu)
+
+- **Kök neden:** arayüzün `fetch` yardımcısı CSRF başlığını yalnızca **gövdesi olan**
+  isteklerde gönderiyordu; çıkış isteği gövdesiz olduğu için `403` alıyor, hata
+  yutuluyor ve kullanıcı giriş ekranına yönlendiriliyordu — oturum sunucuda **açık**
+  kalıyordu.
+- Düzeltme: CSRF başlığı yazma yöntemlerinin tamamında gönderilir; çıkış artık
+  gerçek yanıtı bekler, başarısızlıkta kullanıcıya bildirir (uydurmaz), yerel durumu
+  temizler ve `location.replace` ile girişe döner (geri tuşu paneli açmaz).
+- Sunucu tarafı: oturum gerçekten kapatılır; oturumsuz istekler sözleşme gereği
+  `403` döner ve artık `error.code="not_authenticated"` ile "yetki yok" durumundan
+  **ayrılır** (arayüz yalnızca gerçekten oturumu kapanmış kullanıcıyı girişe atar).
+- Panel/giriş sayfaları `no-store` ile önbelleğe alınmaz (geri tuşu bayat içerik göstermez).
+
+### 2) Yıllık izin bakiyesi görünmüyordu
+
+- Panelde **"Yıllık izin bakiyem"** kartı: hakediş / kullanılan / bekleyen / kalan
+  (değerler `hr.leave_balances` + **üretilen** `available_days` kolonundan).
+- Çalışan listesinde her satırda yıllık izin özeti; **Detay** ekranında tüm izin
+  türleri. Hakediş yoksa hata değil: "Henüz yıllık izin hakedişi oluşturulmamış."
+- Arayüz hiçbir bakiye değerini kendisi hesaplamaz; onay/red/iptal sonrası görünüm
+  backend'den yenilenir.
+- Yetki: çalışan yalnız kendi bakiyesini, müdür yalnız kapsamındaki çalışanların
+  özetini görür; kapsam dışı çalışanın detayı/bakiyesi **404**.
+
+### 3) Unvan / rol / yetki ekranı yoktu
+
+- **Unvan (position) ve birim (department) ayrı** gösterilir (M10/M12 ayrımı).
+- Kullanıcının sistem rolü **Türkçe adıyla** listelenir (`hr.roles.name`, ör.
+  `dept_manager` → "Departman Yöneticisi") ve kapsamı okunabilir metne çevrilir
+  (ör. "Finans + alt birimleri"); teknik kod yalnızca ayrıntıda görünür.
+- "Rol ve Yetkiler" bölümü (`role.manage` sahibine): mevcut roller + kapsamlar,
+  **rol atama** (UNIT rollerde birim kapsamı zorunlu), **rol kaldırma** (soft delete,
+  OD21) ve **geri alma**, izin istisnaları salt okunur, etkin izin listesi.
+- **Yeni servisler:** `revoke_role_assignment`, `restore_role_assignment` ve girdi
+  doğrulaması için `RoleAssignmentValidationError` (HTTP 400) — yetki/kapsam reddi
+  hâlâ `RoleAssignmentError` (HTTP 403). `assign_role_to_user`, OD21 gereği
+  kaldırılmış atamanın **sessizce** yeniden oluşturulmasını engeller.
+- Self-elevation ve kiracı kuralları arayüzden bağımsız korunur: kullanıcı kendi
+  rolünü atayamaz, sahip olmadığı yetkiyi dağıtamaz, `role.manage` yoksa rol
+  yönetimi kapalıdır; platform rolleri kiracı arayüzünden yönetilemez.
+
+### 4) Birim taşıma kullanıcı dostu değildi
+
+- "Taşı" artık pencere (modal) açar: taşınacak birim, **şu anki üst birim** ve
+  organizasyon ağacından seçilen **yeni üst birim** açılır listede; "En üst seviyeye
+  taşı (kök)" seçeneği vardır; taşıma öncesi onay metni gösterilir.
+- Hedef listesi **sunucudan** gelir (`?moves_for=<id>` → kendisi ve alt ağacı hariç);
+  ham UUID istenmez/gösterilmez. Döngü/derinlik/kiracı garantileri veritabanında
+  aynen çalışır (UI yalnızca kolaylık).
+- Taşıma sonrası ağaç ve çalışan listesi otomatik yenilenir; kapsam yeniden hesaplanır.
+
+### Ölçüm
+
+| Ölçüm | Önce | Sonrası |
+|---|---|---|
+| Test sayısı | 388 | **407** (+19: çıkış, bakiye görünürlüğü, unvan/rol/yetki, taşıma) |
+| Yeni migration | — | **0** |
+| Yeni bağımlılık | — | **0** |
+| Yeni servis | — | `revoke_role_assignment`, `restore_role_assignment` (+ doğrulama hata sınıfı) |
+| Yeni uç (yalnız `/test-ui/api/*`) | 12 | **17** (`employees/<id>`, `employees/<id>/roles`, `roles`, `role-assignments/<id>/revoke|restore`; `departments?moves_for=`) |
+| Güvenlik modeli | — | **değişmedi** (RLS, kapsam, servis yetkisi, self-elevation guards) |
+
+### Doğrulama
+
+- `scripts/run_tests.sh`: **407 passed**; `tests/test_testui.py` **38 test** (CSRF
+  doğrulaması **açık** istemci ile — tarayıcı davranışı).
+- `verify_fresh_install.sh`: sıfırdan kurulum **0 FAIL**, `SONUÇ: OK`; 6c-3 adımı
+  çıkışın oturumu kapatmasını, bakiye/unvan/rol görünürlüğünü, taşıma hedef
+  listesini ve rol atama/kaldırmayı gerçek HTTP ile ölçer.
+- Gerçek `runserver` ile manuel akış: çalışan girişi → yıllık bakiye → çıkış →
+  çıkış sonrası korunan yolun **302** girişe yönlenmesi → müdür girişi → listede
+  unvan + rol + bakiye → detay → rol atama/`403` (yetkisiz)/kaldırma → birim taşıma
+  (hedef seçenekleri kendisi ve alt ağacı hariç) → ağacın güncellenmesi → `/admin/` 404.
+- `ruff`, `bandit`, `manage.py check`, `makemigrations --check`: temiz.
+
 ## [0.24.0] — 2026-09-11 — Manuel test arayüzü (`/test-ui/`): organizasyon + izin akışını tarayıcıdan test
 
 **Baseline (son commit `97fe3cb`):** çalışma ağacı temiz, tam test suite **369 passed**.
