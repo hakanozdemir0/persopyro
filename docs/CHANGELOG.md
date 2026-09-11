@@ -5,6 +5,70 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.8.0] — 2026-09-11 — Yetkilendirme: OD1, OD3, OD4 KAPATILDI (kod yok)
+
+Yalnızca doküman güncellemesi. Uygulama kodu, migration ve veritabanı
+değiştirilmedi (doğrulandı: `git status` yalnızca `.md` dosyaları gösterir).
+
+### Kapatılan kararlar
+
+- **OD1 — SUPERADMIN kişisel veri erişimi: KAPALI.** Varsayılan erişim **yok**.
+  Erişim yalnızca gerekçeli talep + onay + **süreli** erişim kaydı ile açılır;
+  süre dolduğunda **otomatik kapanır**; erişim ve nedeni denetim kaydına yazılır.
+- **OD3 — Platform kullanıcıları: KAPALI.** SUPERADMIN/ADMIN için **ayrı
+  `platform_users` modeli**; kiracıya bağlı değil, kiracı tablosuyla
+  birleştirilmez. **Kiracı RLS kuralları gevşetilmez**, **`BYPASSRLS`
+  kullanılmaz**; platform erişimi **ayrı ve kontrollü servis/authorization
+  katmanı** üzerinden tasarlanır.
+- **OD4 — Kişisel veri erişim onayı: KAPALI.** Kiracı içinde **şirket yöneticisi /
+  onay yetkilisi** temel onay merciidir; platform tarafında **çift onay (ikinci
+  kontrol)**. **Boş/anlamsız gerekçeyle talep oluşturulamaz.** Talep, onay, red,
+  erişim başlangıcı ve erişim bitişi denetim kaydına yazılır.
+
+### Kararın mimari sonucu (kritik)
+
+RLS politikasında platform istisnası **tasarımı geri çekildi** (önceki taslakta
+koşullu bayrak vardı). Yeni tasarım: kiracı politikaları **hiç değişmez**; platform
+erişimi ayrı şema + ayrı veritabanı rolü (`persopyro_platform`) ve ayrı servis
+katmanıyla yürür; kiracı bağlamını yalnızca platform katmanı, geçerli ve süreli bir
+erişim onayıyla **tek işlem** için kurar. Böylece "izolasyonu gevşetmeden platform
+erişimi" mümkün olur. Kalan artık risk (bağlam kurulduktan sonra RLS'in platformu
+kiracıdan ayırt edememesi) açıkça yazıldı ve uygulama katmanı kontrolleriyle
+(ayrı rol, tek işlem, her kullanımda kayıt, kiracıya görünürlük) yönetiliyor.
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/AUTHORIZATION.md` | OD1/OD3/OD4 KAPALI olarak işaretlendi; bölüm **3.4** yeniden yazıldı (RLS gevşetilmez, ayrı katman/şema/rol); **5.4**'e `PURPOSE_QUALITY` ve `DUAL_APPROVAL` koşulları ve `GRANT_VALID` netleştirmesi; **6.2/A**, **6.2/I**, **6.3**, **7.3**, **10.1** kararlara göre güncellendi; **12**'ye T15–T18 negatif testleri; **13** geçiş planı 12 → 14 iş kalemine çıkarıldı; **14**'e OD17 ve OD18 eklendi; **15** özet karar durumu |
+| `docs/SECURITY.md` | **4.2** platform erişimi yeniden yazıldı (politika değişmez, `BYPASSRLS` yasak, ayrı katman/rol, çift onay, gerekçe niteliği, otomatik kapanma); **5** ve **6**'ya karar maddeleri; tehdit **T12** güncellendi; **15**'te **G1 kapalı** olarak kayda geçti, **G7** eklendi |
+| `docs/ARCHITECTURE.md` | **K19 kabul edildi** (OD1/OD3/OD4 kapalı); **K21** (ayrı şema + ayrı DB rolü) ve **K22** (ayrı platform denetim akışı) eklendi; `django-rest-knox` kalıntıları düzeltildi (K4 ve teknoloji tablosu — K15 ile tutarlı) |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Yeni açık kararlar
+
+- **OD17 — Platform çift onayının uygulanabilirliği:** tek platform yöneticisi
+  varsa veya acil durumda ikinci onay alınamıyorsa ne olacak? Öneri: fail-closed
+  varsayılan + sınırlı, kayıtlı ve sonradan incelenen break-glass.
+- **OD18 — Kiracının platform erişimindeki rolü:** bilgilendirme mi, onay mı?
+  Öneri: yalnızca K3 (özel nitelikli) veri ve toplu erişimde kiracı onayı.
+- `docs/SECURITY.md` **G7** bu iki kararla ilişkilidir; **G6** (break-glass
+  sınırları) OD17'ye bağlandı.
+
+### Doğrulanan
+
+- OD numaralandırma ve atıf bütünlüğü kontrol edildi (tanımsız OD atfı yok;
+  OD1, OD3, OD4 "KAPALI" olarak işaretli ve kararları metne işlenmiş).
+- Karar durumu: kapalı 3, açık 15 (OD2, OD5–OD18). **Engelleyici açık karar yok.**
+
+### Kalan
+
+Karar bekleyenler: OD2, OD5–OD18 (hiçbiri engelleyici değil). OD17 uygulama
+sırasında netleştirilmelidir. Kod aşaması: `docs/AUTHORIZATION.md` bölüm 13'teki
+14 iş kalemi.
+
+---
+
 ## [0.7.0] — 2026-09-11 — Yetkilendirme ve erişim kontrolü TASARIMI (kod yok)
 
 Yalnızca tasarım: bu sürümde uygulama kodu yazılmadı, veritabanı/API/frontend

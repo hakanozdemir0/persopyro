@@ -30,7 +30,7 @@ bir olgun kütüphane, elle yazılan onlarca satır koda tercih edilmiştir.
 | Backend | Python 3.13 + Django 5.2 LTS + Django REST Framework | Güvenlik ve yetki altyapısı hazır; az sayıda bağımlılık; Django Admin ile ücretsiz iç panel; LTS = az bakım |
 | Frontend | Django şablonları + HTMX + Alpine.js + Tailwind CSS | Tek kod tabanı, sunucu taraflı render (tarayıcıda token yok), SPA altyapı maliyeti yok |
 | Veritabanı | PostgreSQL 17 (minimum 15) | Mevcut tasarım zaten PostgreSQL; RLS, JSONB, kısıtlar ve güçlü tip sistemi izolasyon için gerekli |
-| Kimlik doğrulama | Django auth + özel User modeli + Argon2id; web'de HttpOnly çerez, API'de opak (DB'de saklanan) token (django-rest-knox) | JWT'nin iptal edilememe sorunu yok; token anında geçersiz kılınabilir |
+| Kimlik doğrulama | Django auth + özel User modeli + Argon2id; web'de HttpOnly çerez, API'de opak ve DB'de yalnızca **özeti** saklanan süreli token (kendi modelimiz — K15) | JWT'nin iptal edilememe sorunu yok; token anında geçersiz kılınabilir |
 | Yetkilendirme | Mevcut RBAC tabloları (`roles`, `permissions`, `user_roles`, `role_permissions`, `user_permission_overrides`) + özel Django auth backend | Şema zaten var; kiracı bazlı rol ve istisna desteği hazır; varsayılan reddet |
 | Dosya saklama | S3 uyumlu özel nesne depolama (boto3), ön imzalı URL | VPS diskini büyütmek zorunda kalmadan ölçeklenir; yedekleme kolay; public bucket yok |
 | Cache | Django'nun yerleşik veritabanı cache'i (+ oturumlar DB'de) | Ek servis yok, ek RAM yok; Redis gerektirmez |
@@ -578,7 +578,7 @@ tekrar değerlendirilir.
 | K1 | Django + DRF | Kabul | API ağırlığı async I/O'ya kayarsa (yüksek eşzamanlı akış) |
 | K2 | Sunucu taraflı HTML + HTMX | Kabul | Vardiya/gerçek zamanlı ekranlar HTMX ile bakımı zorlaşırsa |
 | K3 | PostgreSQL 18 (kurulu: 18.6) | Kabul ve uygulandı | Yönetimli hizmet sürümü zorunlu kılarsa |
-| K4 | Opak token (knox), JWT yok | Kabul | Üçüncü parti entegrasyon/token paylaşımı gerekirse (OAuth2) |
+| K4 | Opak token (kendi modelimiz, DB'de özet), JWT yok | Kabul ve uygulandı (K15) | Üçüncü parti entegrasyon/token paylaşımı gerekirse (OAuth2) |
 | K5 | Redis yok | Kabul | Bölüm 6.2 tetikleyicileri |
 | K6 | django-q2 | Kabul | Görev hacmi veya çok sunucululuk Celery gerektirirse |
 | K7 | S3 uyumlu nesne depolama | Kabul | Sağlayıcı maliyeti/uyumu değişirse (API aynı kalır) |
@@ -593,8 +593,10 @@ tekrar değerlendirilir.
 | K16 | Giriş öncesi okunan eşleme tabloları **RLS dışı** ama sıkı yetkili (`tenant_directory` salt-okunur, `api_tokens` yalnızca özet) | Kabul ve uygulandı | Bu tablolara kiracı verisi eklenirse tasarım yeniden ele alınmalı |
 | K17 | Cache **veritabanı tablosu** üzerinden (Redis yok) | Kabul ve uygulandı | Bölüm 6.2 tetikleyicileri |
 | K18 | Yetkilendirme modeli: RBAC + kapsam + kapalı koşul kümesi (tam ABAC değil) | Tasarım (2026-09-11, uygulanacak) | Koşul türü > 15, kiracı başına > 40 özel rol, sözleşmesel politika talebi |
-| K19 | Platform (kiracılar arası) erişim: süreli, gerekçeli, çift kontrol, kiracıya görünür ve kayıtlı istisna | Tasarım — **karar bekliyor (OD1/OD3/OD4)** | Karar verilince uygulanır; mekanizma seçilen seçeneğe göre değişir |
+| K19 | Platform (kiracılar arası) erişim: **ayrı servis/authorization katmanı**; varsayılan erişim **yok**, gerekçeli + onaylı + süreli (60 dk, otomatik kapanır) + kayıtlı; kiracı RLS politikaları **değişmez**, `BYPASSRLS` yasak | **Kabul edildi (2026-09-11) — OD1/OD3/OD4 kapalı**, uygulanacak | Uygulama sonrası gözden geçirme; break-glass sınırları OD17'ye bağlı |
 | K20 | Genel kullanıcı kimliği: `kiracı-XXXXXXXX` (rastgele, değişmez, türetilmemiş) | Tasarım (OD2) | Biçim değişirse tüm arayüz/entegrasyon etkilenir |
+| K21 | Platform verisi **ayrı şema**da; kiracı yolu (`persopyro_app`) ile platform yolu (`persopyro_platform`) **ayrı veritabanı rolleri**; platform kullanıcıları `platform_users` (kiracı tablosuyla birleştirilmez) | **Kabul edildi (2026-09-11) — OD3 kapalı**, uygulanacak | Kiracı rolüne platform şeması yetkisi verilirse tasarım bozulur |
+| K22 | Platform denetim akışı **ayrı** tutulur (kiracı denetim tablosuna tenant'sız satır eklenmez); platform erişimleri ayrıca kiracının denetim akışına da yazılır | **Kabul edildi (2026-09-11)**, uygulanacak | Denetim tek akışta birleştirilmek istenirse kiracı RLS'i gevşetmek gerekir → yeniden değerlendirilir |
 
 K11 gerekçesi: Django 5.2.8+ Python 3.14'ü de destekliyor, ancak üçüncü parti
 paketlerin (psycopg, django-q2, argon2-cffi vb.) 3.13 üzerindeki uyumluluğu daha

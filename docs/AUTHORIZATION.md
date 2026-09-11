@@ -137,43 +137,67 @@ ettiği kiracı farklıysa istek **reddedilir** (400).
 Kullanıcı adı (e-posta) kiracı **başına** benzersizdir; aynı e-posta farklı
 şirketlerde farklı kişiler olabilir. Giriş, kiracı açıkça belirtilmeden yapılmaz.
 
-### 3.4 Platform erişimi: izolasyonun tek ve sınırlı istisnası 🔜
+### 3.4 Platform erişimi: ayrı ve kontrollü katman 🔜 (OD1/OD3 — KARAR VERİLDİ)
 
-SUPERADMIN ve sistem ADMIN'in kiracılar arası işlem yapabilmesi gerekir; ancak bu,
-"tek satır kod B şirketinin verisini görebilir" kuralını boşaltmamalıdır.
+SUPERADMIN ve ADMIN'in kiracılar arası işlem yapabilmesi gerekir; ancak bu,
+kiracı izolasyonu **gevşetilerek** yapılmaz. Karar (OD1 ve OD3 kapalı):
 
-**Tasarım (öneri):** RLS politikasına **koşullu ve kayıtlı** bir bayrak eklenir:
+1. **Kiracı RLS politikaları hiçbir şekilde gevşetilmez.** Politikada platform
+   istisnası (koşullu bayrak vb.) **yoktur**; `tenant_id = hr.current_tenant_id()`
+   ifadesi olduğu gibi kalır. `BYPASSRLS` yetkili rol **kullanılmaz** (kesin yasak).
+2. **Platform kullanıcıları kiracı tarafında barındırılmaz.** Ayrı bir
+   `platform_users` modelidir; kiracı kullanıcı tablosuyla **birleştirilmez**,
+   `tenant_id` taşımaz. Zorla birleştirme veya teknik bir "platform kiracısı"
+   satırı açma yaklaşımı yasaktır.
+3. **Platform erişimi ayrı ve kontrollü bir servis/authorization katmanından
+   geçer.** Bu katman kiracı istek hattından tamamen ayrıdır ve **ayrı bir
+   veritabanı rolüyle** (`persopyro_platform`) bağlanır. Bu rol de süper kullanıcı
+   değildir ve RLS'i atlayamaz.
+4. **Kiracı bağlamını yalnızca bu katman kurabilir:** geçerli, süreli bir erişim
+   onayı (`AccessGrant`) doğrulandıktan sonra, **tek bir işlem** için kiracı
+   bağlamı hedef kiracıya ayarlanır. RLS devrede kaldığı için sorgu yine yalnızca
+   o kiracının satırlarını görür — değişen şey politika değil, **bağlamı kimin
+   kurabildiğidir**.
+5. **Varsayılan erişim yoktur (fail-closed).** Onay yoksa, süre dolmuşsa veya
+   kapsam dışıysa platform kullanıcısı kiracı verisini **göremez**. Kişisel veri
+   için varsayılan **maskeli** görünümdür; maskesiz erişim bölüm 7.3'e tabidir.
+6. **Süre ve otomatik kapanma:** erişim varsayılan 60 dakikadır; süre dolduğunda
+   **otomatik kapanır**. Uzatma yeni bir onay gerektirir.
+7. **Kayıt:** talebin açılması, onay/red, erişim başlangıcı ve **erişim bitişi**
+   ayrı ayrı denetim kaydına yazılır (gerekçe dahil).
+8. **Kiracı görünürlüğü:** kiracı, kendi verisine yapılan platform erişimini kendi
+   denetim akışında görür (bölüm 10.3).
 
-```
-politika: tenant_id = current_tenant_id()
-          OR (app.platform_scope  = 'support'
-              AND app.platform_tenant = tenant_id::text
-              AND app.platform_grant  ≠ ''        -- geçerli, süreli onay kimliği)
-```
+**Verinin yeri.** Platformun kendi verisi (platform kullanıcıları ve rolleri,
+kiracı kayıt defteri/limitleri, erişim talepleri ve onayları, platform denetim
+akışı) kiracı şemasının **dışında, ayrı bir platform şemasında** tutulur; kiracı
+uygulama rolünün (`persopyro_app`) bu şemada hiçbir yetkisi yoktur. Böylece bir
+kiracı isteğinden platform verisine ulaşan bir yol oluşamaz. Aynı şekilde platform
+rolü, kiracı tablolarında yalnızca RLS'e tabi normal erişime sahiptir.
 
-Bayrağı yalnızca platform servis katmanı, **onaylı bir erişim kaydı (AccessGrant)**
-vardıysa kurar. Kurallar:
+**Sonuç.** Kiracı yolu ile platform yolu; iki ayrı veritabanı rolü, iki ayrı şema
+ve iki ayrı yetki kümesiyle ayrılır. Kiracı izolasyonunun garantisi (RLS + FORCE)
+değişmez; platform tarafındaki risk, uygulama katmanındaki talep + onay + süre +
+kapsam kontrolleri ve istisnasız denetim kaydıyla yönetilir.
 
-- Erişim **süreli** (varsayılan maksimum 60 dakika) ve **tek kiracı** kapsamlıdır.
-- Her kullanım `audit_logs`'a **ikinci bir kayıt** olarak yazılır (kim, hangi
-  kiracı, hangi gerekçe, hangi kayıtlar).
-- Süresi geçen onay hiçbir sorguda işe yaramaz; bayrak kurulsa bile politika
-  reddeder.
-- Varsayılan platform erişiminde **kişisel veri alanları maskelidir**; maskesiz
-  erişim ayrıca bölüm 7'deki onay akışına tabidir.
-- Kiracı, kendi verisine yapılan platform erişimlerini **kendi denetim
-  ekranında görür** (şeffaflık).
-
-Alternatif (bölüm 14, OD1): `BYPASSRLS` yetkili ayrı bir veritabanı rolü.
-Önerilen seçenek bu değildir: RLS'i tümden devre dışı bırakır ve kayıt zorlaması
-uygulama disiplinine kalır.
+**Kalan artık risk (bilinçli):** platform kullanıcısı bir kez bağlam kurduğunda
+veritabanı onu "platform" olarak ayırt edemez (RLS açısından kiracı gibi görünür).
+Ayrıt edicilik bu yüzden uygulama katmanındadır: ayrı rol kimlik bilgisi, tek
+işlem kapsamı, her kullanımda kayıt, kiracıya görünürlük. Ek olarak platform
+katmanı kiracı istek hattından **çağrılamaz** (tek yönlü bağımlılık; bölüm 12'de
+test edilir).
 
 ### 3.5 İzolasyonun test ile güvencesi ✅
 
 Mevcut testler: kiracı A kullanıcısı ile B'nin kayıtlarının görünmediği,
 bağlamsız sorgunun 0 satır döndüğü, tablo sahibinin bile FORCE RLS'i aşamadığı,
 kiracılar arası FK kurulamadığı. Yeni roller eklendikçe bu negatif testler
-genişletilir (bölüm 12).
+genişletilir (bölüm 12, T1–T14).
+
+Platform katmanı için ayrıca şunlar sınanır (bölüm 12, T15–T18): onay kaydı
+olmadan kiracı verisinin görünmediği, süresi geçmiş onayla hiçbir satır
+dönmediği, platform katmanının kiracı istek hattından çağrılamadığı ve kiracı
+istek hattının platform şemasına erişemediği.
 
 ---
 
@@ -336,9 +360,11 @@ Yeni koşul türü eklemek karar gerektirir. Tanımlı küme:
 | `UNIT_SUBTREE` | Kaydın birimi, kullanıcının birim alt ağacında | Departman yöneticisi |
 | `MFA_OK` | Oturum çok faktörlü doğrulamayla açılmış | Kişisel veri, rol yönetimi |
 | `PURPOSE_GIVEN` | İşlem için gerekçe girilmiş | Kişisel veri görüntüleme |
-| `GRANT_VALID` | Onaylı, süresi geçmemiş erişim kaydı var | Platform/destek erişimi, maskesiz görüntüleme |
+| `GRANT_VALID` | Onaylı, süresi **geçmemiş** ve iptal edilmemiş erişim kaydı var (süre bitince kendiliğinden geçersiz) | Platform/destek erişimi, maskesiz görüntüleme |
 | `POLICY_OK` | Evrakın erişim politikası izin veriyor | Kısıtlı/karanlık evrak |
 | `SEPARATE_ACTOR` | İşlemi yapan, talebi/onayı oluşturandan farklı | Onay adımları |
+| `PURPOSE_QUALITY` | Gerekçe asgari niteliği sağlıyor (boş, tek kelime, şablon/kopya metin reddedilir) | Kişisel veri erişim talebi (OD4) |
+| `DUAL_APPROVAL` | Platform tarafında birbirinden **farklı iki** onaylayıcı onayladı | Platform kişisel veri erişimi (OD4) |
 
 ### 5.5 İzin kontrolünün zorunlu olduğu yerler ✅ (genişletilecek)
 
@@ -388,8 +414,16 @@ kayıt · — izin yok. Parantez içi kapsam kodudur.
 | `tenant.delete` | ● (SYS) | — |
 | `billing.manage` | ● (SYS) | ◐ (atandığı kiracı, talep kapsamında) |
 
-Kurallar: ADMIN, kiracı iş verisine **doğrudan** yazamaz; yalnızca kendisine
-atanan yönetim talebini yürütür ve her adım kayda geçer ❓OD8.
+Kurallar:
+
+- ADMIN, kiracı iş verisine **doğrudan** yazamaz; yalnızca kendisine atanan
+  yönetim talebini yürütür ve her adım kayda geçer ❓OD8.
+- Kiracı verisine erişim, SUPERADMIN ve ADMIN için **varsayılan olarak yoktur**;
+  gerekçeli talep + onay + süreli kayıt olmadan açılmaz (OD1, OD3 — kapalı).
+- Platform tarafındaki kişisel veri erişiminde **çift onay** zorunludur: talebi
+  açan onaylayamaz, iki farklı platform kullanıcısı onaylar (OD4 — kapalı).
+- Platform kullanıcıları ayrı modeldir (`platform_users`); kiracı kullanıcı
+  tablosuyla birleştirilmez ve kiracı RLS politikaları onlar için gevşetilmez.
 
 #### B. Kullanıcı, rol ve izin yönetimi
 
@@ -419,8 +453,8 @@ atanan yönetim talebini yürütür ve her adım kayda geçer ❓OD8.
 | `employee.read` (kimliksiz alanlar) | ● | ◐ | ● (TENANT) | ● (TENANT) | ● (UNIT) | ○ (SELF) |
 | `employee.create` | — | — | ● (TENANT) | ◐ | — | — |
 | `employee.update` | — | — | ● (TENANT) | ◐ | ◐ (UNIT, sınırlı alanlar) | ◐ (SELF, yalnızca iletişim) |
-| `employee.personal_data.read` (maskesiz) | ◐ (GRANT_VALID + PURPOSE_GIVEN) | — | ◐ (PURPOSE_GIVEN) ❓OD4 | ◐ (GRANT_VALID) | ○ (UNIT + PURPOSE_GIVEN, süreç alanları) | ○ (SELF) |
-| `employee.sensitive.read` (özel nitelikli) | ◐ (GRANT_VALID, çift kontrol) | — | ◐ (GRANT_VALID) ❓OD4 | — | — | ○ (SELF) |
+| `employee.personal_data.read` (maskesiz) | ◐ (GRANT_VALID + PURPOSE_GIVEN) | — | ◐ (PURPOSE_GIVEN, gerekçeli; OD4 kapalı) | ◐ (GRANT_VALID) | ○ (UNIT + PURPOSE_GIVEN, süreç alanları) | ○ (SELF) |
+| `employee.sensitive.read` (özel nitelikli) | ◐ (GRANT_VALID, çift onay) | — | ◐ (GRANT_VALID, onaylı süreli) | — | — | ○ (SELF) |
 | `employee.archive` | — | — | ● (TENANT) | — | — | — |
 | `employee.delete` (gerçek silme) | ◐ (SYS + kayıtlı, kiracı talebi) | — | ◐ (TENANT, KVKK saklama kuralı) ❓OD7 | — | — | — |
 | `employee.export` | ◐ (kayıtlı) | — | ◐ (TENANT, maskeli varsayılan) | — | — | ○ (SELF) |
@@ -481,15 +515,15 @@ atanan yönetim talebini yürütür ve her adım kayda geçer ❓OD8.
 | `audit.read` (platform denetimi) | ● | ◐ (maskeli) | — | — | — | — |
 | `audit.export` | ◐ (kayıtlı) | — | ◐ (TENANT, kayıtlı) | — | — | — |
 | `dataaccess.request.create` | ● | ● | ● | ● | ◐ (UNIT) | ○ (SELF, kendi verisi) |
-| `dataaccess.request.approve` | ◐ (yalnızca çift kontrol; **kendi talebini onaylayamaz**) | — | ● (kendi şirketi) ❓OD4 | — | — | — |
+| `dataaccess.request.approve` | ◐ (platform talepleri; **iki farklı onaylayıcı**, kendi talebini onaylayamaz) | — | ● (kendi şirketi; onay yetkisi devredilebilir) | — | — | — |
 | `dataaccess.grant.use` | ◐ (SYS + süre) | ◐ (SYS + süre) | ◐ (TENANT) | ◐ | ◐ | ○ |
 | `dsr.read` / `dsr.manage` (KVKK başvurusu) | ◐ (kayıtlı) | ◐ | ● (TENANT) | ◐ | — | ○ (SELF, kendi başvurusu) |
 
 ### 6.3 Matrisin yorumu
 
 - **SUPERADMIN** teknik olarak en geniş yetkiye sahiptir ama **kişisel veri**
-  sütununda `GRANT_VALID` görür: bu, "tam yetkili" ile "varsayılan korunmuş
-  kişisel veri" kuralını uzlaştıran bilinçli bir sınırdır ❓OD1.
+  sütununda `GRANT_VALID` görür: varsayılan erişim **yoktur**; erişim gerekçeli
+  talep + onay + süreli kayıtla açılır ve süre bitince kapanır (OD1 — kapalı).
 - **ADMIN** hiçbir satırda kişisel veriyi maskesiz göremez. Destek işi için
   erişim talebi açar; onay geldiğinde **süreli** çalışır.
 - **ŞİRKET YÖNETİCİSİ** kendi şirketinde en geniştir; bu, veri sorumlusunun
@@ -524,31 +558,40 @@ Maskeleme örnekleri: `Ayşe Yılmaz` → `A*** Y***`, `ayse@ornek.com` →
 - Dışa aktarma (Excel/CSV) varsayılan olarak maskelidir; maskesiz dışa aktarma
   `employee.export` + gerekçe + kayıt gerektirir.
 
-### 7.3 Kontrollü erişim akışı (talep → onay → kullanım) 🔜
+### 7.3 Kontrollü erişim akışı (talep → onay → kullanım) 🔜 (OD1/OD4 — KARAR VERİLDİ)
 
 ```
 1. Talep     Kullanıcı: hangi kişi/kayıt, hangi alanlar, hangi amaç, ne kadar süre
              (izin: dataaccess.request.create) → kayıt: AccessRequest
-2. Onay      Yetkili onayı: kiracı içi taleplerde ŞİRKET YÖNETİCİSİ;
-             platform taleplerinde başka bir platform yöneticisi (çift kontrol)
-             kural: talebi açan onaylayamaz (SEPARATE_ACTOR)
-3. Kullanım  Onay süreli bir ERİŞİM İZNİ üretir (AccessGrant):
+             gerekçe zorunlu ve asgari nitelikte (PURPOSE_QUALITY): boş,
+             tek kelime veya şablon/kopya metinle talep AÇILAMAZ
+2. Onay      Kiracı içi taleplerde: ŞİRKET YÖNETİCİSİ veya onay yetkilisi
+             (izin: dataaccess.request.approve) — temel onay mekanizması
+             Platform taleplerinde: ÇİFT ONAY — birbirinden farklı iki platform
+             kullanıcısı (DUAL_APPROVAL); talep sahibi onaylayamaz (SEPARATE_ACTOR)
+3. Kullanım  Onay, süreli bir ERİŞİM İZNİ üretir (AccessGrant):
              kapsam = belirtilen kayıtlar + belirtilen alanlar + bitiş zamanı
-             kullanımda: PURPOSE_GIVEN + GRANT_VALID koşulları aranır
-4. Kayıt     Her kullanım audit_logs'a yazılır: kim, kimin verisi, hangi alanlar,
-             hangi amaç, hangi onay kaydı, ne zaman
-5. Bitiş     Süre dolunca erişim otomatik kapanır; iptal edilebilir
+             kullanımda aranan koşullar: PURPOSE_GIVEN + GRANT_VALID (+ MFA_OK)
+4. Kayıt     Denetim kaydı: talep, onay, RED, erişim başlangıcı ve erişim bitişi
+             ayrı ayrı yazılır (kim, kimin verisi, hangi alanlar, hangi amaç,
+             hangi onay kaydı, ne zaman)
+5. Bitiş     Süre dolunca erişim OTOMATİK kapanır (koşul geçersizleşir);
+             iptal edilebilir; uzatma yeni onay gerektirir
 ```
 
 Kurallar:
 
-- **Amaç bağlama:** gerekçe zorunludur ve kayda geçer; boş gerekçeyle erişim
-  teknik olarak mümkün değildir.
+- **Varsayılan erişim yok (OD1 — kapalı):** onay yoksa, süre dolmuşsa veya kapsam
+  dışıysa erişim yoktur (fail-closed). Bu kural **SUPERADMIN için de aynıdır**.
+- **Amaç bağlama ve gerekçe niteliği (OD4 — kapalı):** gerekçe zorunludur; boş,
+  tek kelime veya şablon/kopya metin kabul edilmez ve gerekçe kayda geçer.
 - **En az ifşa:** yalnızca talep edilen alanlar açılır (tüm profil değil).
-- **Çift kontrol:** platform tarafında erişim talebini başka bir yönetici onaylar;
-  SUPERADMIN kendi talebini onaylayamaz.
-- **Görünürlük:** kiracı yöneticisi, kendi çalışanlarının verisine yapılan
-  platform erişimlerini görür (talep, gerekçe, zaman).
+- **Onay mercii (OD4 — kapalı):** kiracı içinde şirket yöneticisi / yetkilendirdiği
+  onay yetkilisi; platform tarafında **iki farklı onaylayıcı** (çift onay). Talep
+  sahibi hiçbir durumda kendi talebini onaylayamaz.
+- **Beş olay kayıtta:** talep, onay, red, erişim başlangıcı, erişim bitişi.
+- **Görünürlük:** kiracı yöneticisi, kendi çalışanlarının verisine yapılan platform
+  erişimini görür (talep, gerekçe, zaman).
 - **İstisnasız kayıt:** kişisel veriye erişimin kaydedilmediği bir yol bırakılmaz.
 - **Veri sahibi hakları:** çalışan kendi verisine erişimini, düzeltmeyi ve
   (saklama süresi dolduğunda) silinmesini talep edebilir (`dsr.*`).
@@ -673,7 +716,7 @@ Ek kurallar:
 | Veri değiştirme | iş kaydı oluşturma/güncelleme/silme | değişen alanlar (değer değil) |
 | Onay süreçleri | onaylama, reddetme, devretme, geri alma, akış değişikliği | gerekçe, adım |
 | Evrak işlemleri | yükleme, görüntüleme, indirme, paylaşım, silme, sınıflandırma değişikliği | evrak kimliği, sürüm |
-| Platform erişimi | kiracıya destek erişimi, kiracılar arası sorgu, erişim izni kullanımı | gerekçe, onay kimliği, süre |
+| Platform erişimi | **talebin açılması, onay, red, erişim başlangıcı, erişim bitişi**, kiracıya destek erişimi, kiracılar arası sorgu | gerekçe (nitelik denetimli), onay kimliği (çift onay), süre, etkilenen kiracı |
 | Yapılandırma | kiracı ayarları, limitler, güvenlik ayarları, izin kataloğu değişikliği | eski/yeni |
 
 ### 10.2 Kayıt alanları ✅ (genişletilecek)
@@ -756,6 +799,10 @@ Her rol ve her yeni modül için aşağıdaki iddialar test edilir:
 | T12 | Denetim kaydı yazılamazsa kritik işlem tamamlanmaz | 🔜 |
 | T13 | Yetkisiz kişi evrak içeriğini (indirmeyi) alamaz | 🔜 |
 | T14 | Platform erişimi süresi dolduğunda sorgu boş döner | 🔜 |
+| T15 | Platform kullanıcısı, onay kaydı olmadan kiracı verisi göremez | 🔜 |
+| T16 | Platform katmanı, kiracı istek hattından çağrılamaz (tek yönlü bağımlılık) | 🔜 |
+| T17 | Kiracı isteği, platform şemasındaki tablolara erişemez (yetki yok) | 🔜 |
+| T18 | Gerekçe boş/anlamsız ise erişim talebi oluşturulamaz; talep sahibi kendi talebini onaylayamaz | 🔜 |
 
 ---
 
@@ -765,18 +812,20 @@ Kod yazılmadan önce tamamlanacak iş kalemleri (öncelik sırasıyla):
 
 | # | İş | Etki | Not |
 |---|---|---|---|
-| 1 | `User.public_id` alanı + üretim + benzersizlik ✅/🔜 | Şema + tüm listeler | Bölüm 8 |
-| 2 | Platform rolleri için kullanıcı barındırma kararı | Şema | ❓OD3 engelleyici |
-| 3 | RLS politikasına koşullu platform bayrağı | Migration + politika | Bölüm 3.4; OD1 kararı sonrası |
-| 4 | `AccessRequest` / `AccessGrant` tabloları | Yeni tablolar | Bölüm 7.3 |
-| 5 | İzin kataloğu genişletmesi + yeni migration | Veri migration'ı | Bölüm 5.2 (uygulanmış migration değiştirilmez) |
-| 6 | Rol kodu eşlemesi: `manager` → `dept_manager`, `tenant_officer` eklenmesi | Veri migration'ı | Bölüm 4.2; OD5 kararı sonrası |
-| 7 | `user_roles.scope_org_unit_id` (kapsam) | Şema | Organizasyon modülüyle birlikte |
-| 8 | Alan sınıflandırma + maskeleme katmanı (sunucu tarafı) | Servis/çıktı filtresi | Bölüm 7.2 |
-| 9 | Evrak: `contains_personal_data`, `classification`, `retention` | Şema | Bölüm 9 |
-| 10 | `audit_logs` yeni alanlar + zincirleme | Şema + servis | Bölüm 10 |
-| 11 | Kapsam koşulları için ortak kontrol yardımcıları | Servis katmanı | Bölüm 5.4 |
-| 12 | Negatif test seti T6–T14 | Test | Bölüm 12 |
+| 1 | `User.public_id` alanı + üretim + benzersizlik ✅/🔜 | Şema + tüm listeler | Bölüm 8; OD2 biçim kararı bekliyor |
+| 2 | **Ayrı `platform_users` modeli + ayrı giriş yolu** | Yeni tablo + kimlik doğrulama yolu | Bölüm 3.4; OD3 **kapalı** |
+| 3 | **Ayrı platform şeması + `persopyro_platform` veritabanı rolü** (kiracı RLS politikaları DEĞİŞMEZ, `BYPASSRLS` yok) | Şema + yetkiler | Bölüm 3.4; OD1/OD3 **kapalı** |
+| 4 | **`AccessRequest` / `AccessGrant`: onay akışı (tek onay / çift onay), gerekçe nitelik denetimi, süre sonunda otomatik kapanma** | Yeni tablolar + servis | Bölüm 7.3; OD1/OD4 **kapalı** |
+| 5 | **Platform denetim akışı (ayrı akış) + kiracı görünürlüğü kaydı** | Yeni tablo + servis | Bölüm 3.4/10; OD15 (görünürlük kapsamı) açık |
+| 6 | İzin kataloğu genişletmesi + yeni migration | Veri migration'ı | Bölüm 5.2 (uygulanmış migration değiştirilmez) |
+| 7 | Rol kodu eşlemesi: `manager` → `dept_manager`, `tenant_officer` eklenmesi | Veri migration'ı | Bölüm 4.2; OD5 kararı sonrası |
+| 8 | `user_roles.scope_org_unit_id` (kapsam) | Şema | Organizasyon modülüyle birlikte |
+| 9 | Alan sınıflandırma + maskeleme katmanı (sunucu tarafı) | Servis/çıktı filtresi | Bölüm 7.2 |
+| 10 | Evrak: `contains_personal_data`, `classification`, `retention` | Şema | Bölüm 9 |
+| 11 | `audit_logs` yeni alanlar (`purpose`, `grant_id`, `changed_fields`) + zincirleme | Şema + servis | Bölüm 10 |
+| 12 | Kapsam ve koşul kontrolü için ortak yardımcılar (`PURPOSE_QUALITY`, `DUAL_APPROVAL` dahil) | Servis katmanı | Bölüm 5.4 |
+| 13 | Gerekçe nitelik denetimi (boş / tek kelime / şablon metin reddi) | Servis katmanı | Bölüm 7.3; OD4 kapalı |
+| 14 | Negatif test seti T6–T18 | Test | Bölüm 12 |
 
 **Değişmeyecek olan:** kiracı izolasyonunun üç katmanı, RLS + FORCE, kiracılar
 arası referans yasağı, izin kodlama biçimi, "reddet kazanır", uygulanmış
@@ -789,9 +838,21 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-### OD1 — SUPERADMIN'ın kişisel veriye erişimi
+**Durum (2026-09-11):** **OD1, OD3 ve OD4 KAPATILDI.** Kararlar aşağıda kayıtlı
+ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 10.1, 13) işlenmiştir. Kapalı
+kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
 
-- **Çelişki:** "SUPERADMIN tam yetkilidir" ↔ "kişisel veriler varsayılan olarak
+### OD1 — SUPERADMIN'ın kişisel veriye erişimi — **KAPALI** ✅ (2026-09-11)
+
+- **KARAR:** Varsayılan erişim **YOK**. SUPERADMIN kişisel veriye ancak
+  **gerekçeli erişim talebi + onay + süreli erişim kaydı** ile ulaşır. Erişim
+  süresi dolduğunda **otomatik olarak kapanır**. Erişim ve erişim nedeni
+  **denetim kaydına** yazılır.
+- **İşlendiği yerler:** bölüm 3.4 (madde 5), bölüm 5.4 (`GRANT_VALID`), bölüm 6.2/A,
+  bölüm 6.3, bölüm 7.3, bölüm 10.1, bölüm 13; `docs/SECURITY.md` bölüm 4.2 ve 6;
+  `docs/ARCHITECTURE.md` (K19).
+- **Uygulama parametresi:** varsayılan süre 60 dakika; üst sınır yapılandırılabilir.
+- **Çelişki (kayıt için):** "SUPERADMIN tam yetkilidir" ↔ "kişisel veriler varsayılan olarak
   korunmalıdır".
 - **Seçenekler:** (A) Tam yetki — kişisel veri dahil her şeye doğrudan erişir,
   yalnızca kayıt tutulur. (B) Sistem yönetimi tam; kişisel veri **onaylı ve
@@ -814,9 +875,24 @@ verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 - **Etki:** Uzunluk sabitlenir; kullanıcı arayüzü ve entegrasyonlar bu biçime
   göre tasarlanır. Kiracı adı değişirse ön ek değişmez (karar gerekli).
 
-### OD3 — Platform kullanıcılarının barındırılması (engelleyici)
+### OD3 — Platform kullanıcılarının barındırılması — **KAPALI** ✅ (2026-09-11)
 
-- **Çelişki:** Mevcut şemada her kullanıcı bir kiracıya bağlıdır
+- **KARAR:** SUPERADMIN ve ADMIN için **ayrı `platform_users` modeli** kullanılır.
+  Bu kullanıcılar **kiracıya bağlı olmaz**; kiracı kullanıcıları ile platform
+  kullanıcıları **aynı kimlik/kiracı tablosunda zorla birleştirilmez**. Kiracı
+  RLS kuralları platform kullanıcıları için **gevşetilmez** (politikaya istisna
+  eklenmez). **`BYPASSRLS` kullanılmaz.** Platform erişimi **ayrı ve kontrollü bir
+  servis/authorization katmanı** üzerinden tasarlanır.
+- **Tasarım sonucu:** platform verisi ayrı şemada; kiracı yolu (`persopyro_app`)
+  ile platform yolu (`persopyro_platform`) ayrı veritabanı rolleri; kiracı
+  bağlamını yalnızca platform katmanı, geçerli bir erişim onayıyla ve **tek işlem**
+  için kurar (bölüm 3.4).
+- **Seçenekler (kayıt için):** (A) `users.tenant_id` boş bırakılır + RLS istisnası.
+  (B) Ayrı `platform_users` + ayrı giriş yolu. (C) Teknik "platform kiracısı"
+  satırı. → **(B) seçildi; (A) ve (C) reddedildi.**
+- **İşlendiği yerler:** bölüm 3.4, bölüm 6.2/A, bölüm 13; `docs/SECURITY.md`
+  bölüm 4.2 ve 5; `docs/ARCHITECTURE.md` (K19, K21, K22).
+- **Çelişki (kayıt için):** Mevcut şemada her kullanıcı bir kiracıya bağlıdır
   (`users.tenant_id` zorunlu ve RLS ile korunur). SUPERADMIN/ADMIN hiçbir
   kiracıya ait olmamalıdır.
 - **Seçenekler:** (A) `users.tenant_id` boş olabilir + RLS politikasında platform
@@ -829,9 +905,20 @@ verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 - **Etki:** OD1/OD8 ile birlikte platform erişim mimarisini belirler. Bu karar
   verilmeden 2, 3, 4 numaralı geçiş işleri başlayamaz.
 
-### OD4 — Kişisel veri erişim talebini kim onaylar
+### OD4 — Kişisel veri erişim talebini kim onaylar — **KAPALI** ✅ (2026-09-11)
 
-- **Seçenekler:** (A) Yalnızca ŞİRKET YÖNETİCİSİ (veri sorumlusu kiracıdır).
+- **KARAR:** Kiracı içindeki kişisel veri erişimlerinde **şirket yöneticisi / onay
+  yetkilisi** temel onay mekanizmasıdır. Platform tarafındaki erişimlerde **ikinci
+  kontrol (çift onay)** kullanılır. **Boş veya anlamsız gerekçe ile erişim talebi
+  oluşturulamaz.** Her **talep, onay, red, erişim başlangıcı ve erişim bitişi**
+  denetim kaydına yazılır.
+- **Koşullar:** `SEPARATE_ACTOR` (talep sahibi onaylayamaz), `PURPOSE_QUALITY`
+  (gerekçe niteliği), `DUAL_APPROVAL` (platformda iki farklı onaylayıcı) — bölüm 5.4.
+- **İşlendiği yerler:** bölüm 5.4, bölüm 6.2/I, bölüm 7.3, bölüm 10.1,
+  `docs/SECURITY.md` bölüm 6.
+- **Doğurduğu açık nokta:** tek platform yöneticisi bulunması durumunda çift onayın
+  nasıl uygulanacağı → **OD17**; kiracının onay sürecindeki rolü → **OD18**.
+- **Seçenekler (kayıt için):** (A) Yalnızca ŞİRKET YÖNETİCİSİ (veri sorumlusu kiracıdır).
   (B) Yalnızca SUPERADMIN. (C) Kişinin kendisi (veri sahibi onayı). (D) Kiracı
   yöneticisi + platform çift kontrolü (kullanım amacına göre).
 - **Öneri:** (A) + platform taleplerinde çift kontrol. Gerekçe: KVKK'da veri
@@ -934,6 +1021,35 @@ verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
   kaldırılırsa rollerden düşer ama **kayıt silinmez** (denetim izi), rol
   "güncellenmeli" uyarısı alır.
 
+### OD17 — Platform çift onayının uygulanabilirliği (tek yönetici / acil durum) 🆕
+
+- **Neden açık:** OD4 çift onayı zorunlu kıldı. Ancak sistemde **tek** platform
+  yöneticisi varsa (veya ikincisi erişilemez durumdaysa) ikinci onayı verecek kimse
+  yoktur; tüm kiracıları etkileyen bir acil durumda onay akışı kilitlenebilir.
+- **Seçenekler:** (A) En az iki platform yöneticisi bulundurmak zorunlu; yoksa
+  kişisel veri erişimi **hiç açılamaz** (fail-closed). (B) Tek kişilik durum için
+  önceden tanımlı ikinci hesap (ayrı kimlik bilgisi, elle saklanan). (C) Acil
+  durum için zaman damgalı **break-glass**: onay olmadan açılır, sonradan
+  **zorunlu gözden geçirme** + kayıt + kiracıya bildirim.
+- **Öneri:** (A) + (C). Varsayılan fail-closed kalır; break-glass yalnızca
+  SUPERADMIN için, gerekçe ve sonradan inceleme şartıyla açılır.
+- **Etki:** Platform giriş/onay akışı, kişisel veri erişim servisi, denetim
+  raporu, `docs/SECURITY.md` G6. **Uygulamayı kısmen etkiler** (fail-closed
+  varsayılan uygulanabilir; break-glass tasarımı bu karara bağlı).
+
+### OD18 — Platform kişisel veri erişiminde kiracının rolü 🆕
+
+- **Neden açık:** OD4 platform tarafında çift onayı zorunlu kıldı; ancak
+  **kiracının** (veri sorumlusunun) bu erişimde **onayı mı**, yoksa yalnızca
+  **bilgilendirilmesi mi** gerektiği belirtilmedi. OD15 (kiracı platform erişimini
+  görsün mü) ile birlikte değerlendirilmelidir.
+- **Seçenekler:** (A) Kiracı yalnızca bilgilendirilir (görür, itiraz edebilir).
+  (B) Kiracı onayı da zorunludur (talep + iki platform onayı + kiracı onayı).
+  (C) Kiracı onayı yalnızca K3 (özel nitelikli veri) ve toplu erişimde zorunludur.
+- **Öneri:** (C). Gerekçe: KVKK'da veri sorumlusu kiracıdır; en hassas veri ve
+  toplu erişimde onay alınmalı, rutin destek işleri tıkanmamalıdır.
+- **Etki:** Onay akışı adım sayısı, bildirimler, kiracı denetim ekranı (OD15).
+
 ---
 
 ## 15. Özet
@@ -942,16 +1058,18 @@ verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
   geri gelme tetikleyicileri ölçülebilir şekilde tanımlandı.
 - 6 rol: 2 platform (`superadmin`, `platform_admin`), 4 kiracı (`tenant_admin`,
   `tenant_officer`, `dept_manager`, `employee`).
-- Kiracı izolasyonu üç katmanda ve **istisnasız**; tek istisna süreli, onaylı,
-  kayıtlı **platform erişimi**dir.
+- Kiracı izolasyonu üç katmanda ve **istisnasız**; RLS politikaları hiçbir platform
+  istisnası için gevşetilmez. Platform erişimi ayrı model, ayrı şema ve ayrı
+  veritabanı rolüyle yürür; varsayılan **yok**, süreli ve kayıtlıdır (OD1/OD3 — kapalı).
 - Kişisel veri: varsayılan maskeli; açılması izin + gerekçe + (gerekiyorsa) onay
-  + süre + kayıt gerektirir.
+  + süre + kayıt gerektirir. **SUPERADMIN için de varsayılan erişim yoktur**
+  (OD1 — kapalı); gerekçe boş/anlamsız olamaz (OD4 — kapalı).
 - Genel kimlik: `kiracı-XXXXXXXX` (rastgele, değişmez, türetilmemiş); ters
   çözümleme izinli, gerekçeli, kayıtlı ve hız sınırlı.
 - Evrak: yükleme anında "kişisel veri içeriyor mu?" işareti + sınıflandırma;
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **16 OPEN DECISION** karar bekliyor; uygulamayı engelleyenler: **OD3** (platform
-  kullanıcı barındırma), **OD1** (SUPERADMIN kişisel veri erişimi), **OD4**
-  (kişisel veri erişimini kim onaylar).
+- **Karar durumu:** **OD1, OD3, OD4 KAPATILDI** (2026-09-11). Açık: **15 karar**
+  (OD2, OD5–OD18). **Engelleyici açık karar yoktur**; OD17 (çift onayın
+  uygulanabilirliği) uygulama sırasında netleştirilmelidir.
