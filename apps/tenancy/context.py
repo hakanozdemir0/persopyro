@@ -99,12 +99,18 @@ def tenant_context(tenant_id: uuid.UUID | str | None) -> Iterator[None]:
     """
     Kiracı bağlamını kurar: uygulama tarafı + veritabanı tarafı.
 
-    Bir işlem (transaction) içinde çalışır; işlem bitince veritabanı ayarı
-    kendiliğinden kaybolur. Çıkışta, önceki değer geri yüklenir; böylece iç içe
-    kullanımda dış bağlam sızmaz/bozulmaz.
+    ÖNEMLİ: Bağlam, işlem (transaction) ömrüne bağlıdır. Bu yüzden bu bağlam
+    boyunca TEK bir işlem açık tutulur (`transaction.atomic()` bloğu `yield`i
+    sarar). Aksi halde ayarı kuran işlem hemen commit olur ve ayar kaybolur —
+    ölçüldü: bu hata, gerçek istek/script ortamında tüm sorguların fail-closed
+    (0 satır) dönmesine yol açıyordu; testler pytest'in dış işlemi sayesinde
+    hatayı maskeliyordu.
 
-    `tenant_id=None` verilirse bağlam temizlenir (kiracı dışı işlemler: örneğin
-    yalnızca kiracı kaydı oluşturma).
+    Maliyet: bağlam boyunca açık bir işlem tutulur (uzun işlem). Bu, izolasyonun
+    doğruluğu için bilinçli bir takastır (docs/ARCHITECTURE.md bölüm 2.3).
+
+    Çıkışta önceki değer geri yüklenir; iç içe kullanımda dış bağlam bozulmaz.
+    `tenant_id=None` verilirse bağlam temizlenir (kiracı dışı işlemler).
     """
     token = _TENANT_ID.set(uuid.UUID(str(tenant_id)) if tenant_id else None)
     try:
@@ -112,16 +118,11 @@ def tenant_context(tenant_id: uuid.UUID | str | None) -> Iterator[None]:
             with connection.cursor() as cur:
                 cur.execute(_READ_TENANT_SQL)
                 previous = cur.fetchone()[0]
-        try:
-            with transaction.atomic():
+                cur.execute(_SET_TENANT_SQL, [str(tenant_id) if tenant_id else ""])
+            try:
+                yield
+            finally:
                 with connection.cursor() as cur:
-                    cur.execute(_SET_TENANT_SQL, [str(tenant_id) if tenant_id else ""])
-            yield
-        finally:
-            with transaction.atomic():
-                with connection.cursor() as cur:
-                    cur.execute(
-                        _SET_TENANT_SQL, [str(previous) if previous else ""]
-                    )
+                    cur.execute(_SET_TENANT_SQL, [str(previous) if previous else ""])
     finally:
         _TENANT_ID.reset(token)

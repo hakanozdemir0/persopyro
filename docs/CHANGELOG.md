@@ -101,11 +101,22 @@ kırıyordu.
   7 kiracıya bağlı tabloda `rls=true force=true`, `api_tokens` ve
   `tenant_directory` bilinçli olarak RLS dışı, uygulama rolü `audit_logs` UPDATE
   ve `tenant_directory` INSERT yapamıyor.
+- **Uçtan uca duman testi (`scripts/smoke.sh`)**: gerçek HTTP + gerçek veritabanı
+  üzerinden demo kiracı/kullanıcı oluşturuldu (4 rol, 29 izin), `/api/health` ve
+  `/api/ready` yanıt verdi, `POST /api/v1/auth/token` ile gerçek giriş yapıldı ve
+  token alındı, geçerli token ile çıkış `204`, geçersiz token `401` döndü.
 - `ruff`, `bandit` (0 bulgu), `manage.py check`,
   `makemigrations --check` ("No changes detected") temiz.
 
 ### Bulgular (ölçümle bulunan ve düzeltilen gerçek hatalar)
 
+0. **`tenant_context` gerçek ortamda bağlamı KAYBEDİYORDU (en kritik bulgu).**
+   Ayarı kuran işlem, dış bir işlem yoksa hemen commit oluyor ve `SET LOCAL`
+   ayarı düşüyordu; yani her sorgu bağlamsız kalıp fail-closed (0 satır)
+   dönüyordu. Testler pytest'in dış işlemi sayesinde bu hatayı MASKELİYORDU —
+   yalnızca gerçek HTTP + gerçek veritabanı ile yapılan duman testi yakaladı.
+   `tenant_context` artık işlemi `yield` boyunca açık tutuyor. (Bu, gerçek
+   isteklerde ürünün tamamen çalışmaz olması demekti.)
 1. **FORCE RLS, SECURITY DEFINER fonksiyonu da bağlıyor.** Kiracıyı slug ile
    çözen fonksiyon, tablo sahibi olarak çalışsa bile satırı göremedi (FORCE tablo
    sahibini de kapsar). Çözüm: RLS dışı, salt-okunur **dizin tablosu** (K16).

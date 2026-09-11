@@ -50,8 +50,9 @@ bash scripts/run_tests.sh          # testler (gerçek PostgreSQL üzerinde)
 | `02_grant_app_privileges.sql` | `hr` şeması ve uygulama rolü yetkileri (saf SQL, her veritabanında çalışır) | sahip |
 | `03_verify_isolation.sql` | Kiracı izolasyonu kanıtı (A1–A9 iddiaları) | süper kullanıcı |
 | `bootstrap.sh` | Yukarıdakileri sırayla çalıştırır, parola üretir, `.env` yazar | kullanıcı |
-| `migrate.sh` | Migration'ları sahip rolle çalıştırır, ardından yetkileri tazeler | kullanıcı |
+| `migrate.sh` | Migration'ları sahip rolle çalıştırır, cache tablosunu hazırlar, yetkileri tazeler | kullanıcı |
 | `run_tests.sh` | Testleri doğru rolle çalıştırır | kullanıcı |
+| `smoke.sh` | Uçtan uca duman testi: demo veri + gerçek HTTP giriş akışı | kullanıcı |
 
 Örnek ortam değişkenleri: `.env.example` (gerçek değerler `.env` dosyasında
 tutulur ve depoya girmez; `bootstrap.sh` üretir).
