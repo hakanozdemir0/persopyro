@@ -29,7 +29,9 @@ göremez — API, rapor, dosya ve arama yolları dahil.
 
 ## 2. Kimlik, kullanıcı ve yetki (RBAC)
 
-Durum: Tasarlandı (veri modeli mevcut)
+Durum: **Kısmen kodlandı** (faz 2, 1. dilim) — model, migration, RLS ve izin
+çözümleme servisi hazır; istek hattı, görünümler/API, MFA uçları ve parola
+sıfırlama akışı yazılacak.
 
 - Kullanıcı kaydı ve e-posta doğrulama
 - Giriş, çıkış, token yenileme

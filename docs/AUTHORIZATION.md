@@ -5,17 +5,27 @@ Mevcut veritabanı tasarımındaki RBAC tabloları esas alınır.
 
 ## 1. Kimlik doğrulama (authentication)
 
-- Kullanıcı e-posta + parola ile giriş yapar; parola bcrypt ile doğrulanır
-  (`hr.hash_password`, `hr.verify_password`, `hr.authenticate_user`).
-- Giriş sırasında kiracı bağlamı belirlenir; aynı e-posta farklı kiracılarda
-  bulunabilir, bu nedenle kimlik sorgusu tenant bağlamında yapılır.
+- Kullanıcı e-posta + parola ile giriş yapar; parola Argon2id ile doğrulanır
+  (uygulama katmanında; `apps/accounts/backends.py`).
+- **E-posta kiracı başına tekildir** (aynı e-posta farklı kiracılarda olabilir).
+  Bu nedenle Django'nun `ModelBackend`'i kullanılmaz; kendi backend'imiz kullanılır
+  ve `auth.E003`/`auth.W004` denetimleri bilinçli olarak susturulur.
+- **Giriş, kiracı bağlamı kurulmadan yapılamaz.** Kiracı belirlenemezse giriş
+  reddedilir (fail-closed). Kiracı; oturum/alan adı üzerinden çözümlenir ve
+  backend'e açıkça verilir — istemci gövdesinden okunmaz.
+- **Önkoşul (istek hattı):** kiracı bağlamı, Django'nun `AuthenticationMiddleware`
+  adımından ÖNCE kurulmalıdır; aksi halde oturumdan kullanıcı yüklenemez (RLS
+  satırı gizler). Bu adım faz 2'nin 2. diliminde eklenir.
 - Hatalı parola denemeleri `failed_login_count` ile sayılır, sınır aşılırsa
-  `lockout_until` ile hesap kilitlenir.
+  `lockout_until` ile hesap kilitlenir (`LOGIN_MAX_FAILED_ATTEMPTS`,
+  `LOGIN_LOCKOUT_MINUTES`). Kilitliyken doğru parola da kabul edilmez.
 - Oturumlar kısa ömürlü token ile yönetilir; token yenileme ayrı uç noktadır.
 - `multi_factor_enabled` alanı desteklenir; kritik roller için zorunlu kılınması
   önerilir.
 - Parola sıfırlama: `password_reset_tokens` üzerinden tek kullanımlık, süreli token.
-- Her giriş/çıkış/başarısız deneme `login_audit` tablosuna yazılır.
+- Her giriş/çıkış/başarısız deneme `audit_logs` tablosuna yazılır.
+- Kullanıcı numaralandırmasına karşı: kullanıcı bulunamasa da parola doğrulaması
+  maliyeti ödenir (zamanlama eşitleme).
 
 ## 2. Yetki modeli (RBAC)
 

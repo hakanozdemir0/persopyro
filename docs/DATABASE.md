@@ -92,6 +92,45 @@ Bunlar gerçek PostgreSQL 18.6 üzerinde çalıştırılarak kanıtlanmıştır
   veritabanı/rol oluşturamaz ve `hr` şemasında `CREATE` yetkisi yoktur.
   Uygulama bağlantısı `search_path=hr,public` ile açılır.
 
+### 3.2 Kiracıya bağlı tablolar (RLS uygulanan)
+
+`tenants` (kendi `id`'si üzerinden), `users`, `roles`, `role_permissions`,
+`user_roles`, `user_permission_overrides`, `audit_logs`.
+
+Tek istisna: **`permissions`** tablosu global bir tanım tablosudur (izin kodları),
+kiracı verisi içermez; RLS uygulanmaz. Erişim yolu korunan tablolardan geçer.
+
+**Kural (test ile dayatılır):** kiracıya bağlı (`tenant_id` taşıyan) her tablo
+RLS + FORCE taşımak zorundadır. Yeni bir tablo bu kuralı ihlal ederse
+`tests/test_tenant_isolation.py::test_tum_tenant_tablolarinda_rls_ve_force_etkin`
+kırmızıya döner.
+
+### 3.3 Kiracılar arası referans guard'ı (RLS'in kapatmadığı boşluk)
+
+RLS yalnızca "satırın `tenant_id`'si benim bağlamımla aynı mı?" sorusunu yanıtlar.
+**Yabancı anahtar kontrolü RLS'ten etkilenmez**; bu yüzden `tenant_id` doğru olsa
+bile bir satır, başka kiracının nesnesine bağlanabiliyordu (test yakaladı).
+
+Çözüm: `hr.ensure_same_tenant_ref()` fonksiyonu ve her kiracıya bağlı yabancı
+anahtar için `BEFORE INSERT OR UPDATE` tetikleyicisi. Tetikleyici, hedef satırın
+kiracısını RLS görünürlüğü üzerinden okur; hedef görünmüyorsa `NULL` elde eder ve
+**hata verir (fail-closed)**.
+
+Kapsamdaki referanslar:
+
+| Tablo | Sütun | Hedef |
+|---|---|---|
+| `users` | `created_by_id` | `users` |
+| `roles` | `created_by_id` | `users` |
+| `role_permissions` | `role_id` | `roles` |
+| `user_roles` | `user_id`, `role_id`, `granted_by_id` | `users`, `roles`, `users` |
+| `user_permission_overrides` | `user_id`, `granted_by_id` | `users` |
+| `audit_logs` | `user_id` | `users` |
+
+Yeni bir kiracıya bağlı yabancı anahtar eklendiğinde
+`apps/tenancy/migrations/0003_same_tenant_guard.py` içindeki `GUARDS` listesine
+eklenmelidir.
+
 ## 4. Kurallar (bağlayıcı)
 
 1. Yeni tablo eklenirse `tenant_id` zorunludur (platform geneli tablolar hariç,

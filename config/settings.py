@@ -85,7 +85,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "knox",
     "django_q",
-    # Yerel uygulamalar (faz 2'den itibaren apps/<modül> biçiminde eklenir)
+    # Yerel uygulamalar
+    "apps.tenancy",
+    "apps.accounts",
+    "apps.rbac",
+    "apps.audit",
 ]
 
 MIDDLEWARE = [
@@ -147,9 +151,21 @@ APP_DB_ROLE = os.environ.get("POSTGRES_APP_ROLE", "persopyro_app")
 OWNER_DB_ROLE = os.environ.get("POSTGRES_OWNER_USER", "persopyro_owner")
 
 # --- Kimlik doğrulama --------------------------------------------------------
-# NOT: Özel kullanıcı modeli (AUTH_USER_MODEL) faz 2'de tanımlanacak ve
-# İLK MIGRATION'DAN ÖNCE ayarlanmalıdır; sonradan değiştirmek yüksek maliyetlidir
-# (docs/ARCHITECTURE.md bölüm 5.2).
+# Özel kullanıcı modeli. Bu ayar İLK MIGRATION'DAN ÖNCE yapılmalıdır; sonradan
+# değiştirmek yüksek maliyetlidir (docs/ARCHITECTURE.md bölüm 5.2).
+AUTH_USER_MODEL = "accounts.User"
+
+# Django'nun varsayılan ModelBackend'i global tekil e-posta varsayar ve
+# `get_by_natural_key` ile tek kayıt bekler. Bizde e-posta KİRACI BAŞINA tekildir
+# (aynı e-posta farklı kiracılarda olabilir), bu yüzden kendi backend'imizi
+# kullanırız. Bu nedenle `auth.E003` denetimi bilinçli olarak susturulur.
+SILENCED_SYSTEM_CHECKS = ["auth.E003", "auth.W004"]
+
+AUTHENTICATION_BACKENDS = ["apps.accounts.backends.TenantScopedModelBackend"]
+
+# Giriş güvenliği (docs/SECURITY.md bölüm 3)
+LOGIN_MAX_FAILED_ATTEMPTS = int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

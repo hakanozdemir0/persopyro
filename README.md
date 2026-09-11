@@ -14,13 +14,13 @@ Faz 0 (ortam, depo, test iskeleti) ve Faz 1 (veritabanı: roller, `hr` şeması,
 RLS ile kiracı izolasyonu) tamamlandı. Uygulama özellikleri henüz kodlanmadı.
 
 - Kurulu: Python 3.13.15 (uv), Django 5.2.17 LTS, bağımlılıklar (`uv.lock`),
-  PostgreSQL 18.6 (localhost, kullanıcı tarafından kuruldu).
-- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9 gerçek PostgreSQL üzerinde
-  geçti; testler 19 adet ve yeşil.
-- **Kalan tek adım (senin çalıştırman gerekiyor, sudo şifresi ister):**
-  `bash scripts/bootstrap.sh` — sistem kümesinde rolleri, veritabanını ve `hr`
-  şemasını kurar, parolaları üretip `.env` yazar ve izolasyon doğrulamasını
-  çalıştırır. Betikler ayrı bir geçici kümede (port 5433) uçtan uca doğrulanmıştır.
+  PostgreSQL 18.6 (localhost), roller + `hr` şeması + RLS.
+- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9; 57 test yeşil; şema
+  Django migration'larının sahibi.
+- Faz 2'nin ilk dilimi tamamlandı: kiracı/kullanıcı/RBAC modelleri, RLS ve
+  kiracılar arası referans guard'ı, kimlik doğrulama backend'i ve izin
+  çözümleme servisi. Kalan: istek hattı, görünümler/API, MFA uçları,
+  parola sıfırlama (`docs/CHANGELOG.md` 0.5.0).
 
 ## Geliştirme ortamı
 
@@ -34,6 +34,7 @@ bash scripts/bootstrap.sh
 
 # 3) Kontroller
 .venv/bin/python manage.py check
+bash scripts/migrate.sh            # şema (sahip rolle) + yetki tazeleme
 bash scripts/run_tests.sh          # testler (gerçek PostgreSQL üzerinde)
 .venv/bin/ruff check .
 .venv/bin/bandit -c pyproject.toml -r .
@@ -48,6 +49,7 @@ bash scripts/run_tests.sh          # testler (gerçek PostgreSQL üzerinde)
 | `02_grant_app_privileges.sql` | `hr` şeması ve uygulama rolü yetkileri (saf SQL, her veritabanında çalışır) | sahip |
 | `03_verify_isolation.sql` | Kiracı izolasyonu kanıtı (A1–A9 iddiaları) | süper kullanıcı |
 | `bootstrap.sh` | Yukarıdakileri sırayla çalıştırır, parola üretir, `.env` yazar | kullanıcı |
+| `migrate.sh` | Migration'ları sahip rolle çalıştırır, ardından yetkileri tazeler | kullanıcı |
 | `run_tests.sh` | Testleri doğru rolle çalıştırır | kullanıcı |
 
 Örnek ortam değişkenleri: `.env.example` (gerçek değerler `.env` dosyasında

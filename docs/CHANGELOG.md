@@ -5,6 +5,109 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.5.0] — 2026-09-11 — Faz 2 (1. dilim): veri modeli, ilk migration, RLS ve kimlik doğrulama çekirdeği
+
+Bu sürümde ilk kez uygulama modelleri ve migration'lar yazıldı; veritabanı
+şemasının sahibi artık Django migration'larıdır (`docs/ARCHITECTURE.md` bölüm 5.2).
+Ayrıca kimlik doğrulama ve RBAC çekirdeği kuruldu. **Dört gerçek hata testler
+tarafından yakalandı** (aşağıda "Bulgular").
+
+### Eklenen — uygulamalar
+
+- `apps/common/models.py` — soyut temeller: `UUIDModel`, `TimeStampedModel`,
+  `SoftDeleteModel`, `TenantScopedModel`.
+- `apps/tenancy/` — `Tenant` modeli (+`TenantStatus`), kiracı bağlamı yönetimi
+  (`apps/tenancy/context.py`: `tenant_context`, `require_tenant_id`,
+  `TenantContextMissingError`).
+- `apps/accounts/` — özel `User` modeli (e-posta ile giriş, zorunlu `tenant`,
+  kilit/MFA/token alanları, `UserManager`) ve `TenantScopedModelBackend`.
+- `apps/rbac/` — `Role`, `Permission`, `RolePermission`, `UserRole`,
+  `UserPermissionOverride` + `services.py` (etkin izin çözümlemesi).
+- `apps/audit/` — `AuditLog` (+`AuditAction`) ve `services.py` (`log_action`,
+  `masked_changes`).
+
+### Eklenen — migration ve veritabanı güvenliği
+
+- `tenancy.0001_initial` — `hr` şemasını ve `hr.current_tenant_id()` fonksiyonunu
+  oluşturur (tablolar oluşmadan önce).
+- `tenancy.0002_enable_rls` — kiracıya bağlı 7 tabloda **RLS + FORCE** ve
+  `tenant_isolation` politikası.
+- `tenancy.0003_same_tenant_guard` — **kiracılar arası referans guard'ı**:
+  `hr.ensure_same_tenant_ref()` fonksiyonu ve 8 tetikleyici. RLS yalnızca satırın
+  kendi `tenant_id`'sini denetlediği için, başka kiracının nesnesine bağlanan
+  satırlar bu tetikleyicilerle engellenir.
+- `rbac.0002_rolepermission_tenant` — `role_permissions` tablosuna zorunlu
+  `tenant_id` eklendi (bkz. Bulgular #2).
+- `tenancy.0004_rls_role_permissions` — yukarıdaki tablonun RLS'i (bkz. Bulgular #4).
+- `scripts/migrate.sh` — migration'ları **sahip rolle** çalıştırır ve ardından
+  uygulama rolü yetkilerini tazeler (uygulama rolünün `hr` şemasında DDL yetkisi
+  yoktur; bu bilinçlidir).
+
+### Verilen kararlar
+
+- **E-posta kiracı başına tekildir**, global tekil değil. Bu nedenle Django'nun
+  `ModelBackend`'i kullanılamaz; kendi backend'i yazıldı ve `auth.E003`/`auth.W004`
+  denetimleri bilinçli olarak susturuldu.
+- **Kimlik doğrulama kiracı bağlamı içinde çalışır** (RLS nedeniyle zorunludur).
+- **Kiracı, isteğin sorumluluğundadır**: istemciden gelen gövde/parametre ile
+  belirlenmez; oturum/alan adı üzerinden çözümlenir ve `authenticate()`'e açıkça
+  verilir. Kiracı çözümlenemezse giriş yapılmaz (fail-closed).
+- **`permissions` tablosu globaldir** (kiracı verisi içermez, RLS dışıdır);
+  diğer tüm kiracıya bağlı tablolar `tenant_id` taşır ve RLS'lidir.
+
+### Doğrulanan (gerçek çalıştırma, PostgreSQL 18.6)
+
+- `manage.py migrate`: 4 uygulamanın migration'ları gerçek kümede uygulandı;
+  `makemigrations --check`: **"No changes detected"** (model ile migration uyumlu).
+- Gerçek kümede sorgulanarak doğrulandı: `tenants`, `users`, `roles`,
+  `role_permissions`, `user_roles`, `user_permission_overrides`, `audit_logs`
+  tablolarında `rls=true force=true`; `permissions` bilinçli olarak RLS dışı;
+  8 guard tetikleyicisi kurulu.
+- `audit_logs` yetkileri: uygulama rolü `SELECT=true INSERT=true UPDATE=false
+  DELETE=false` → denetim kaydı **değiştirilemez**.
+- **pytest: 57 test geçti** (önceki 19 → +38). Yeni testler:
+  `tests/test_tenant_isolation.py` (yapısal RLS denetimi, fail-closed davranış,
+  çapraz kiracı okuma/yazma/güncelleme/silme reddi, iç içe bağlam, guard'lar,
+  denetim kaydı yetkileri) ve `tests/test_auth_rbac.py` (izin çözümlemesi,
+  allow/deny istisnaları, süresi geçmiş rol, giriş/kilitlenme/pasif kullanıcı,
+  denetim kayıtları).
+- `ruff`, `bandit`, `manage.py check`: temiz.
+
+### Bulgular (testlerin yakaladığı gerçek hatalar)
+
+1. **Kimlik doğrulama kiracı bağlamı olmadan çalışıyordu** → RLS kullanıcıyı
+   göstermediği için hiç kimse giriş yapamazdı. Backend, tüm akışı
+   `tenant_context` içine alacak şekilde düzeltildi.
+2. **`role_permissions` tablosu çapraz kiracı açığıydı.** İlk tasarımda "tanım
+   tablosu" sayılıp RLS dışı bırakılmıştı; A kiracısı bağlamında B kiracısının
+   rolüne izin kaydı eklenebiliyordu. Tabloya zorunlu `tenant_id` eklendi, RLS'e
+   alındı. Kural sadeleşti: kiracıya bağlı her tablo `tenant_id` taşır.
+3. **RLS tek başına çapraz kiracı referansı engellemiyor.** Yabancı anahtar
+   kontrolü RLS'ten etkilenmediği için, `tenant_id` doğru olsa bile satır başka
+   kiracının nesnesine bağlanabiliyordu. Guard tetikleyicileri eklendi (#2 ve #3
+   aynı kök nedeni paylaşır: "tanım tablosu" varsayımı).
+4. **Uygulanmış bir migration dosyası sonradan düzenlenmişti.** `role_permissions`
+   RLS'i ilk migration'ın listesine eklenmiş, ancak o migration zaten
+   uygulandığı için veritabanına yansımamıştı. Düzeltme ayrı bir migration ile
+   yapıldı (`tenancy.0004_rls_role_permissions`). Kural: uygulanmış migration
+   dosyası değiştirilmez; düzeltme yeni migration'la gelir.
+5. Test kaynaklı yanlış varsayımlar da düzeltildi: beklenen veritabanı hataları
+   savepoint içinde üretilmeli (aksi halde işlem kilitleniyor) ve `refresh_from_db`
+   kiracı bağlamı gerektirir.
+
+### Kalan (Faz 2'nin 2. dilimi)
+
+- **İstek hattı (middleware)**: kiracı bağlamını istek başına kurmak —
+  `AuthenticationMiddleware`'ten ÖNCE çalışmalıdır, aksi halde oturumdan kullanıcı
+  yüklenemez (RLS). Ayrıca `request_id` üretimi.
+- **Görünümler ve API**: giriş/çıkış uçları, DRF yetki sınıfı (`required_permissions`),
+  knox token uçları, OpenAPI şeması.
+- **MFA (TOTP)**: alan modelde hazır; kayıt/doğrulama akışı ve testleri yazılacak.
+- **Parola sıfırlama** uçları (`password_reset_tokens`), e-posta gönderimi.
+- Örnek izin kodları ve varsayılan rollerin veri migration'ı ile eklenmesi.
+
+---
+
 ## [0.4.0] — 2026-09-11 — Faz 1: veritabanı, rol ayrımı ve kiracı izolasyonu (RLS)
 
 PostgreSQL 18.6 kullanıcı tarafından kuruldu (sudo gerektirdiği için ajan

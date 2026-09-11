@@ -586,6 +586,9 @@ tekrar değerlendirilir.
 | K9 | Django migration'ları şema sahibi | Kabul | Mevcut SQL ile uyumsuzluk çıkarsa (spike sonucu) |
 | K10 | Uygulama katmanında kimlik doğrulama | Kabul | Halihazırda çalışan bir veri göçü gerektirirse (uyumluluk hasher'ı) |
 | K11 | Python **3.13** (3.14 değil) | Kabul ve uygulandı | Bağımlılık sürümleri 3.13'ü desteklemezse veya 3.14 ekosistemi olgunlaşırsa |
+| K12 | E-posta **kiracı başına tekil** (global değil) + özel auth backend | Kabul ve uygulandı | Global tekil e-posta zorunlu olursa (o zaman kullanıcı adı politikası değişir) |
+| K13 | Kiracılar arası referans **guard tetikleyicisiyle** engellenir | Kabul ve uygulandı | PostgreSQL'de bileşik yabancı anahtar desteği Django'ya gelirse tetikleyici yerine kısıt kullanılabilir |
+| K14 | Bağlam yokken **fail-closed**: DB 0 satır döndürür, uygulama açık hata verir | Kabul ve uygulandı | — (güvenlik davranışı; değiştirilmez) |
 
 K11 gerekçesi: Django 5.2.8+ Python 3.14'ü de destekliyor, ancak üçüncü parti
 paketlerin (psycopg, django-q2, argon2-cffi vb.) 3.13 üzerindeki uyumluluğu daha
@@ -597,7 +600,7 @@ oturmuştur. Proje Python 3.13.15 üzerine kurulmuştur; `pyproject.toml` içind
 | Risk | Etki | Önlem |
 |---|---|---|
 | RLS'in yanlış yapılandırılması (uygulama rolü tablo sahibi olursa izolasyon sessizce kaybolur) | Felaket | Rol ayrımı (5.3), `FORCE RLS`, cross-tenant testlerinin CI'da zorunlu olması |
-| Tenant bağlamının bir istekte unutulması | Yüksek | Bağlam middleware ile zorunlu kılınır; bağlam yoksa sorgu hata verir (boş dönmez) |
+| Tenant bağlamının bir istekte unutulması | Yüksek | İki katman: (a) veritabanı **fail-closed** — bağlam yoksa RLS 0 satır döndürür, sızma olmaz; (b) uygulama katmanı `require_tenant_id()` ile açık hata verir. Bağlam, istek hattında zorunlu kılınır (faz 2, 2. dilim) |
 | Django şeması ile mevcut SQL tasarımının ayrışması | Yüksek | Modül modül port + DDL karşılaştırması; mevcut dosyalar salt-okunur referans |
 | Kişisel verinin loga/rapora sızması | Yüksek | Log filtresi, maskeleme, test |
 | Tek VPS = tek hata noktası | Orta | Otomatik yedek + denenmiş geri yükleme; ölçekleme yolu hazır |
@@ -611,7 +614,7 @@ oturmuştur. Proje Python 3.13.15 üzerine kurulmuştur; `pyproject.toml` içind
 |---|---|---|
 | 0 | Ortam kurulumu, depo başlatma, test iskeleti — **TAMAMLANDI (2026-09-11)** | `pytest` 10 test geçti, `ruff`/`bandit`/`pip-audit` temiz, `manage.py check` sorunsuz |
 | 1 | Veritabanı spike'ı: RLS + rol ayrımı + tenant bağlamı + enum/uuid kararları — **TAMAMLANDI (2026-09-11)** | `scripts/03_verify_isolation.sql` A1–A9 iddialarının tamamı geçti; roller ve yetkiler kurulu; 19 test yeşil |
-| 2 | Kiracı + kullanıcı + kimlik doğrulama + RBAC çekirdeği | Giriş/kilit/MFA/token testleri geçer |
+| 2 | Kiracı + kullanıcı + kimlik doğrulama + RBAC çekirdeği — **1. dilim TAMAMLANDI (2026-09-11)**: modeller, migration'lar, RLS + guard tetikleyicileri, kimlik doğrulama backend'i, izin çözümleme servisi, 57 test | Kalan dilim: istek hattı (middleware), görünümler/API, MFA uçları, parola sıfırlama |
 | 3 | Organizasyon + çalışan | Yetki matrisi testleri geçer |
 | 4 | İzin yönetimi | Bakiye ve onay testleri geçer |
 | 5 | Vardiya + devam | Çakışma/hesaplama testleri geçer |
