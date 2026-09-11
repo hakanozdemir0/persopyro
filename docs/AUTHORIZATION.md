@@ -839,10 +839,10 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1, OD2, OD3 ve OD4 KAPATILDI.** Kararlar aşağıda
-kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13) işlenmiştir.
-Kapalı kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
-Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
+**Durum (2026-09-11):** **OD1, OD2, OD3, OD4 ve OD19 KAPATILDI.** Kararlar
+aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
+işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
+Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
 
 ### OD1 — SUPERADMIN'ın kişisel veriye erişimi — **KAPALI** ✅ (2026-09-11)
 
@@ -1053,22 +1053,47 @@ Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
   toplu erişimde onay alınmalı, rutin destek işleri tıkanmamalıdır.
 - **Etki:** Onay akışı adım sayısı, bildirimler, kiracı denetim ekranı (OD15).
 
-### OD19 — Django'nun kullanılmayan yetki tabloları ve `/admin/` yolu 🆕
+### OD19 — Django admin / `auth_*` paralel yetki yolu — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık (ölçüm):** `hr` şemasında `auth_permission`, `auth_group`,
-  `auth_group_permissions`, `django_admin_log` tabloları var ve `config/urls.py`
-  `/admin/` yolunu yayınlıyor. `create_superuser` `is_staff=True` atıyor. Bunlar
-  uygulamanın RBAC'inden **bağımsız ikinci bir yetkilendirme yolu**dur; RLS
-  satırları korur ama yetki kararı Django'nun kendi sistemine kayar.
-- **Seçenekler:** (A) `/admin/` yolunu ve `django.contrib.admin`'i kaldır; `auth_*`
-  tablolarını uygulama rolünden tamamen geri al (yalnızca SELECT veya hiç yetki).
-  (B) Admin'i koru ama yalnızca okuma/teşhis için, `is_staff` yalnızca bootstrap
-  hesabında. (C) Olduğu gibi bırak.
-- **Öneri:** (A). Tek yetkilendirme yolu ilkesi (bkz. `docs/SECURITY.md` bölüm 5);
-  iç panel ihtiyacı kendi RBAC'imizle karşılanır.
-- **Etki:** `INSTALLED_APPS`, `config/urls.py`, yetki betiği (`scripts/`),
-  `docs/DATABASE.md` M22. **Uygulamayı kısmen etkiler** (bugün hiçbir model
-  kayıtlı olmadığı için işlev kaybı yok).
+- **KARAR (kabul edildi):**
+  1. Üretimde **Django Admin kullanıcı yetkilendirmesi kullanılmaz**.
+  2. **`/admin/` yolu kaldırılır** (koda bağlı değil; route + uygulama listesinden çıkarılacak).
+  3. Django `auth_*` tabloları uygulamanın **gerçek RBAC kaynağı değildir**.
+  4. **`is_staff` / `is_superuser` tek başına hiçbir Persopyro yetkisi vermez.**
+  5. Gerçek yetkilendirme **yalnızca bu belgedeki model** üzerinden yapılır.
+  6. Django'nun teknik tabloları gerekiyorsa **teknik amaçla kalabilir**; izin
+     kaynağı olamaz.
+  7. İleride Django Admin kullanılacaksa **ayrı güvenlik sınırı ve erişim
+     politikası** yazılı olarak tanımlanmadan açılmaz (aşağıdaki koşullar).
+- **Ölçüm (mevcut kod, 2026-09-11):** `config/urls.py:30` `/admin/` rotalı;
+  `django.contrib.admin` uygulama listesinde; `User.is_staff` alanı var ve
+  `create_superuser` onu `True` yapıyor; kurulu Django kaynağında
+  `AdminSite.has_permission` = `user.is_active and user.is_staff` (satır 207) →
+  **`is_staff` tek başına kapıyı açar**. Bugünkü etki sınırlı: hiçbir model
+  kayıtlı değil (`admin.py` yok, `admin.site.register` çağrısı yok) → boş admin
+  dizini. Ancak ileride model kaydedilirse RBAC'i atlayan bir yol doğar.
+- **Neden tamamen kaldırma (internal-only değil):** Django Admin'in yetki modeli
+  (`is_staff` + `has_module_perms`) kendi RBAC'imizle hizalandırılamaz; kalan her
+  yol kalıcı bakım, denetim ve yanlış yapılandırma riski üretir. İç ihtiyaçlar
+  `platform.*` izinleriyle **kendi katmanımızdan** karşılanır.
+- **İmplementasyon kalemleri (bu turda kod yazılmadı):** `/admin/` route'u
+  kaldırılır; `django.contrib.admin` uygulama listesinden çıkarılır;
+  `create_superuser` artık `is_staff=True` atamaz; `auth_group`,
+  `auth_group_permissions`, `auth_permission`, `django_admin_log` tablolarında
+  uygulama rolünün **tüm yetkileri geri alınır**; `is_superuser` alanı
+  **eklenmez**; üretimde `is_staff = true` olan aktif kullanıcı bulunmaması
+  **denetim sorgusu + test** ile zorlanır; kaldırma sonrası **sıfırdan kurulum
+  testi** tekrarlanır.
+- **İleride admin kullanımı için ön koşullar:** ayrı alan adı ve ağ erişim
+  sınırı; `platform_users` ile kimlik doğrulama (kiracı kullanıcısıyla değil);
+  MFA zorunlu; yalnızca `platform.*` izinleriyle erişim; tüm işlemlerin platform
+  denetim akışına yazılması; okuma ve yazma yetkilerinin ayrı tanımlanması.
+- **İşlendiği yerler:** `docs/SECURITY.md` (bölüm 3, 5, T18, G8),
+  `docs/ARCHITECTURE.md` (K23 + Django gerekçesi), `docs/DATABASE.md`
+  (A.1.2, M22, D.6, H3, bölüm I).
+- **Seçenekler (kayıt için):** (A) Kaldır. (B) Yalnızca internal/okuma amaçlı
+  bırak. (C) Olduğu gibi bırak. → **(A) seçildi; (B) yalnızca yukarıdaki
+  ön koşullarla yeniden değerlendirilebilir; (C) reddedildi.**
 
 ### OD20 — Kiracı üst verisinin sahibi (platform kaydı) 🆕
 
@@ -1159,7 +1184,7 @@ Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **Karar durumu:** **OD1, OD2, OD3, OD4 KAPATILDI** (2026-09-11). Açık: **21 karar**
-  (OD5–OD25). **Engelleyici açık karar yoktur**; OD17 (çift onayın
-  uygulanabilirliği), OD19 (Django admin/paralel yetki yolu — **mevcut risk**) ve
-  OD21 (soft-delete/benzersizlik) uygulama sırasında öncelikli netleştirilmelidir.
+- **Karar durumu:** **OD1, OD2, OD3, OD4, OD19 KAPATILDI** (2026-09-11). Açık:
+  **20 karar** (OD5–OD18, OD20–OD25). **Engelleyici açık karar yoktur**; OD17
+  (çift onayın uygulanabilirliği) ve OD21 (soft-delete/benzersizlik) uygulama
+  sırasında öncelikli netleştirilmelidir.

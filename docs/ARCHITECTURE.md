@@ -27,7 +27,7 @@ bir olgun kütüphane, elle yazılan onlarca satır koda tercih edilmiştir.
 
 | Katman | Seçim | Ana gerekçe |
 |---|---|---|
-| Backend | Python 3.13 + Django 5.2 LTS + Django REST Framework | Güvenlik ve yetki altyapısı hazır; az sayıda bağımlılık; Django Admin ile ücretsiz iç panel; LTS = az bakım |
+| Backend | Python 3.13 + Django 5.2 LTS + Django REST Framework | Yetki, oturum, parola hash'leme, CSRF/XSS/SQLi korumaları ve migration çekirdekte; az sayıda bağımlılık; LTS = az bakım. **Django Admin kullanılmaz** (K23) — iç panel ihtiyacı kendi RBAC'imizle karşılanır |
 | Frontend | Django şablonları + HTMX + Alpine.js + Tailwind CSS | Tek kod tabanı, sunucu taraflı render (tarayıcıda token yok), SPA altyapı maliyeti yok |
 | Veritabanı | PostgreSQL 17 (minimum 15) | Mevcut tasarım zaten PostgreSQL; RLS, JSONB, kısıtlar ve güçlü tip sistemi izolasyon için gerekli |
 | Kimlik doğrulama | Django auth + özel User modeli + Argon2id; web'de HttpOnly çerez, API'de opak ve DB'de yalnızca **özeti** saklanan süreli token (kendi modelimiz — K15) | JWT'nin iptal edilememe sorunu yok; token anında geçersiz kılınabilir |
@@ -35,7 +35,7 @@ bir olgun kütüphane, elle yazılan onlarca satır koda tercih edilmiştir.
 | Dosya saklama | S3 uyumlu özel nesne depolama (boto3), ön imzalı URL | VPS diskini büyütmek zorunda kalmadan ölçeklenir; yedekleme kolay; public bucket yok |
 | Cache | Django'nun yerleşik veritabanı cache'i (+ oturumlar DB'de) | Ek servis yok, ek RAM yok; Redis gerektirmez |
 | Redis | **İlk sürümde yok** | Bir ihtiyaç değil, bir maliyet (RAM + operasyon). Tetikleyiciler bölüm 6.2'de |
-| Background jobs | django-q2 (Django ORM broker) + systemd worker | Ayrı broker servisi yok; zamanlanmış + asenkron görev; Admin entegrasyonu |
+| Background jobs | django-q2 (Django ORM broker) + systemd worker | Ayrı broker servisi yok; zamanlanmış + asenkron görev; ek servis yok |
 | E-posta | Django SMTP + sağlayıcı bağımsız SMTP relay (SES/Postmark/Mailgun vb.) | Sağlayıcıya kilitlenme yok; kuyruk + yeniden deneme uygulama tarafında |
 | Audit log | PostgreSQL `audit_logs` + tetikleyiciler; uygulama rolüne yalnızca INSERT/SELECT | Uygulama kaydı silemez/değiştiremez; ayrıcalıklı kullanıcı bile kaydı bozamaz |
 | Teknik log | Yapılandırılmış JSON → stdout → journald (+ isteğe bağlı Sentry) | Kişisel veri içermez; merkezî log altyapısı gerekmez |
@@ -108,9 +108,13 @@ Gerekçeler:
   migration sistemi çekirdekte gelir. Bu, FastAPI gibi bir çatıda elle
   birleştirilecek 8-10 kütüphanenin yerine tek ve güvenlik açısından olgun bir
   temel sağlar (öncelik 8).
-- **Django Admin**, çalışan/izin/rol/kiracı gibi yönetim verisini düzenlemek
-  için hazır bir iç panel verir. Ayrı iç panel yazmamak küçük ekipte ciddi
-  bakım ve maliyet tasarrufudur (öncelik 3, 4).
+- **Django Admin kullanılmaz** (karar K23, 2026-09-11): admin'in yetki modeli
+  (`is_staff` + `has_module_perms`) uygulamanın RBAC'inden bağımsız **ikinci bir
+  yetkilendirme yolu** yaratır. Ölçüm: Django'nun `AdminSite.has_permission`
+  kapısı `is_active and is_staff`'tır; yani `is_staff=True` olan aktif bir kiracı
+  kullanıcısı, mevcut oturumuyla admin dizinini açabilir. Bu yüzden `/admin/`
+  rotası ve `django.contrib.admin` kaldırılır; iç panel ihtiyacı kendi
+  RBAC'imizle (`platform.*` izinleri) karşılanır.
 - Python, yerel ortamda zaten var (`python3 3.14.4`, `uv 0.12.10`); raporlama,
   veri işleme ve ileride analitik için aynı dil kullanılır.
 - DRF, `API.md` ile tanımlanan sürümlü REST sözleşmesini ve izin sınıflarını
@@ -120,7 +124,7 @@ Reddedilen alternatifler:
 
 | Alternatif | Neden reddedildi |
 |---|---|
-| FastAPI | Yetki, oturum, Admin, migration elle birleştirilir; daha çok bağımlılık ve daha çok güvenlik sorumluluğu |
+| FastAPI | Yetki, oturum ve migration elle birleştirilir; daha çok bağımlılık ve daha çok güvenlik sorumluluğu |
 | NestJS (Node) | Aynı CRUD/ağırlıklı İK işi için daha fazla glue kod; hazır iç panel yok; ikinci dil |
 | Laravel (PHP) | Eşdeğer ölçüde uygun bir aday; ancak ortamda Python hazır, veri/rapor tarafı için ikinci dil gerekir |
 | Go | Üretim maliyeti düşük ama geliştirme hızı yavaş; bu ürün CRUD ve iş kuralı ağırlıklı |
@@ -329,8 +333,8 @@ Ayrıntı: `AUTHORIZATION.md` (izin listesi ve nesne kapsamı kuralları).
 **Seçim: django-q2, Django ORM broker ile.**
 
 Gerekçe: ayrı broker süreci (Redis/RabbitMQ) gerektirmez; zamanlanmış (cron
-benzeri) ve asenkron görevleri, yeniden deneme ve Admin görünümü ile birlikte
-sağlar; Python 3.13 / Django 5.2 desteği günceldir (aktif geliştiriliyor).
+benzeri) ve asenkron görevleri yeniden denemeyle birlikte sağlar; Python 3.13 /
+Django 5.2 desteği günceldir (aktif geliştiriliyor).
 
 Planlanan görevler (kiracı bazlı çalışır, tenant bağlamı zorunludur):
 
@@ -597,6 +601,7 @@ tekrar değerlendirilir.
 | K20 | Genel kullanıcı kimliği: `kiracı-XXXXXXXX` (rastgele, değişmez, türetilmemiş) | Tasarım (OD2) | Biçim değişirse tüm arayüz/entegrasyon etkilenir |
 | K21 | Platform verisi **ayrı şema**da; kiracı yolu (`persopyro_app`) ile platform yolu (`persopyro_platform`) **ayrı veritabanı rolleri**; platform kullanıcıları `platform_users` (kiracı tablosuyla birleştirilmez) | **Kabul edildi (2026-09-11) — OD3 kapalı**, uygulanacak | Kiracı rolüne platform şeması yetkisi verilirse tasarım bozulur |
 | K22 | Platform denetim akışı **ayrı** tutulur (kiracı denetim tablosuna tenant'sız satır eklenmez); platform erişimleri ayrıca kiracının denetim akışına da yazılır | **Kabul edildi (2026-09-11)**, uygulanacak | Denetim tek akışta birleştirilmek istenirse kiracı RLS'i gevşetmek gerekir → yeniden değerlendirilir |
+| K23 | **Django Admin ve `auth_*` paralel yetki yolu kapatılır**: `/admin/` kaldırılır, `django.contrib.admin` uygulama listesinden çıkarılır, `auth_*` ve `django_admin_log` tablolarının uygulama rolü yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez | **Kabul edildi (2026-09-11) — OD19 kapalı**, uygulanacak | Django Admin ileride kullanılacaksa OD19'daki ön koşullar yazılı tanımlanmalı |
 
 K11 gerekçesi: Django 5.2.8+ Python 3.14'ü de destekliyor, ancak üçüncü parti
 paketlerin (psycopg, django-q2, argon2-cffi vb.) 3.13 üzerindeki uyumluluğu daha

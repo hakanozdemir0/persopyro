@@ -5,6 +5,102 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.10.0] — 2026-09-11 — OD19 KAPATILDI: Django admin / `auth_*` paralel yetki yolu (kod yok)
+
+Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:
+`git status` yalnızca `.md` dosyaları gösterir).
+
+### Kapatılan karar (OD19)
+
+Üretimde **Django Admin kullanıcı yetkilendirmesi kullanılmaz**: `/admin/` yolu ve
+`django.contrib.admin` kaldırılır; `auth_*` tabloları **gerçek RBAC kaynağı
+değildir**; **`is_staff`/`is_superuser` tek başına hiçbir Persopyro yetkisi
+vermez**; gerçek yetkilendirme yalnızca `docs/AUTHORIZATION.md` modeli üzerinden
+yapılır. Django'nun teknik tabloları teknik amaçla kalabilir, izin kaynağı olamaz.
+İleride admin kullanımı için ön koşullar yazılı olarak tanımlandı (ayrı alan adı/ağ
+sınırı, `platform_users` ile kimlik doğrulama, MFA, `platform.*` izinleri, platform
+denetim akışı).
+
+**Seçim:** (A) kaldır → seçildi. (B) internal-only → yalnızca ön koşullarla
+yeniden değerlendirilebilir. (C) olduğu gibi bırak → reddedildi.
+
+### Kod incelemesi (gerçek dosyalardan)
+
+| Nokta | Ölçüm |
+|---|---|
+| `/admin/` rotası | **var** — `config/urls.py:30` |
+| `django.contrib.admin` | uygulama listesinde (`config/settings.py:78`) |
+| `admin.py` / `admin.site.register` | **yok** (hiçbir model kayıtlı değil) |
+| `is_staff` alanı | var (`apps/accounts/models.py:153`), varsayılan `False` |
+| `create_superuser` | `is_staff=True` atıyor (`apps/accounts/models.py:135`) |
+| `has_perm` | kendi RBAC'imize delege ediyor (`models.py:215-218`) |
+| `has_module_perms` | `user_has_any_permission(self)` — "herhangi bir izin var mı" (`models.py:220-223`) |
+| Django'nun admin kapısı | `AdminSite.has_permission` = `user.is_active and user.is_staff` (kurulu kaynak, `sites.py:207`) |
+| `is_superuser` alanı | **yok** (`PermissionsMixin` kullanılmıyor) |
+| DRF oturum kimlik doğrulaması | açık (`SessionAuthentication`) — izinler yine kendi sınıflarımızdan |
+| `/admin/login/` formu | kiracı olmadan kimlik doğrulama **fail-closed** (`backends.py:59-62`) → form çalışmaz |
+
+### Güvenlik bulguları (kod yazılmadı, yalnızca raporlandı)
+
+- **F1 (Yüksek) — mevcut oturum + `is_staff` admin kapısını açıyor.** Kimlik
+  doğrulama admin formuyla yapılamasa da, `is_staff=True` olan **aktif** bir
+  kullanıcı, normal girişte aldığı oturumla `/admin/` dizinini açabilir. Bugünkü
+  etki: boş admin dizini (0 kayıtlı model) + `django_admin_log` yazımı. İleride
+  model kaydedilirse RBAC'i atlayan yol doğar. **Karar OD19 ile kapatıldı;
+  uygulama M22–M22c bekliyor.**
+- **F2 (Orta) — `has_module_perms` "herhangi bir izin" olarak yorumlanıyor.**
+  Admin korunacak olsaydı, elinde tek bir izin bulunan bir kullanıcı modül
+  kontrolünü geçerdi. Kaldırma kararı bu bulguyu da kapatıyor.
+- **F3 (Orta) — `create_superuser` riski hedefliyor.** Akış hem kiracı bağını
+  zorunlu kılıyor hem `is_staff=True` atıyor; yani "superuser" tam olarak riskli
+  kombinasyonu (kiracı kullanıcısı + admin kapısı açık) üretiyor. Kodda bu akış
+  hiçbir yerde **kullanılmıyor** (scripts/config/tests taraması: çağrı yok).
+- **F4 (Düşük) — `is_superuser` alanı yok ama Django admin kodu/şablonları bu
+  özniteliği okuyabilir.** Statik incelemede `django/contrib/admin/*.py` ve
+  `options.py` içinde `is_superuser` okuması bulunamadı; şablonlarda
+  (AttributeError'ı yutan) sessiz boş değer riski sürer. Kaldırma ile konu
+  kapanıyor. **Bu madde çalıştırılarak doğrulanmadı** (aşağıya bakınız).
+- **F5 (Bilgilendirme) — `SILENCED_SYSTEM_CHECKS = ["auth.E003","auth.W004"]`.**
+  Bilinçli (e-posta kiracı başına tekil), gerekçesi `SECURITY.md` bölüm 3'te;
+  kabul edilen risk olarak kayıtlı.
+- **F6 (Bilgilendirme) — DRF'de `SessionAuthentication` açık.** Tasarım gereği;
+  CSRF koruması ve her uçta izin sınıfı zorunluluğu (liste yoksa **reddet**)
+  korunuyor.
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/AUTHORIZATION.md` | OD19 **KAPALI** olarak işaretlendi (yedi maddelik karar + ölçüm + implementasyon kalemleri + ileride admin kullanımı ön koşulları); durum satırı ve özet karar sayıları güncellendi (kapalı 5, açık 20) |
+| `docs/SECURITY.md` | Bölüm 3'e **admin kapısı kapalı** + **`is_staff`/`is_superuser` kuralı** + "admin giriş formu kiracısız çalışmaz" maddeleri; bölüm 5 "tek yetkilendirme yolu" **karar verildi** olarak güncellendi; **T18** kontrolü karara bağlandı; **G8 kapatıldı**, G1/G8 kapalı kararlar başlığı altında toplandı |
+| `docs/ARCHITECTURE.md` | Django Admin'i gerekçe gösteren 4 yer düzeltildi (teknoloji tablosu, django-q2 gerekçesi, FastAPI reddi, gelişmiş gerekçe bölümü); **K23 eklendi** |
+| `docs/DATABASE.md` | A.1.2 tablo satırları + karar notu; **M22 → M22/M22b/M22c/M22d** olarak detaylandırıldı (route/app kaldırma, `REVOKE ALL`, `create_superuser` düzeltmesi + `is_staff` denetimi, sıfırdan kurulum testi); D.6 yetki tablosuna kullanılan/kullanılmayan Django tabloları ayrımı; **H3** riski "uygulama kalemi"ne döndü; bölüm I'de OD19 kapalı |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Doğrulanan / doğrulanmayan
+
+- **Doğrulandı (kaynak okuma):** Yukarıdaki "kod incelemesi" tablosunun tamamı
+  gerçek dosyalardan ve kurulu Django kaynağından okunarak çıkarıldı
+  (`config/urls.py`, `config/settings.py`, `apps/accounts/models.py`,
+  `apps/accounts/backends.py`, `apps/rbac/permissions.py`,
+  `.venv/.../django/contrib/admin/sites.py`). `scripts/`, `config/`, `tests/`
+  içinde `create_superuser`/`is_staff` **kullanımı yok** (tarama).
+- **Doğrulanmadı:** `/admin/` erişimini uçtan uca kanıtlayacak çalıştırma
+  denemesi **yapılmadı** (komut onay almadı ve hiç çalışmadı). Bu nedenle F1/F4
+  "kaynak okumaya dayalı" bulgulardır; kanıt, Django'nun `AdminSite.has_permission`
+  gövdesi (`is_active and is_staff`) ve `is_staff` alanının varlığıdır — bu ikisi
+  kesin. "Oturumla admin dizininin açıldığı" sonucu bu ikisinden **türetilmiştir**,
+  çalıştırılarak gösterilmemiştir.
+
+### Kalan
+
+`docs/DATABASE.md` **M22, M22b, M22c, M22d** (uygulama kalemleri) ve OD19'da
+listelenen kod düzeltmeleri (`/admin/` route, uygulama listesi, `create_superuser`,
+yetki geri alma, `is_staff` denetim sorgusu/testi). Karar durumu: **kapalı 5**
+(OD1–OD4, OD19), **açık 20** (OD5–OD18, OD20–OD25), engelleyici yok.
+
+---
+
 ## [0.9.0] — 2026-09-11 — Veritabanı envanteri, hedef şema ve migration planı (kod yok)
 
 Yalnızca doküman. **Uygulama kodu, migration dosyaları ve veritabanı

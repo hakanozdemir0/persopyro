@@ -45,7 +45,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T15** | **Süresi geçmiş/iptal edilmiş onayla erişim (yetki kalıntısı)** | **Yüksek** | **Koşul kontrolü her istekte (GRANT_VALID), veritabanı politika kontrolü** 🔜 |
 | **T16** | **Kendi kendini yetkilendirme (self-elevation)** | **Yüksek** | **Ayrılık ilkesi: talep eden onaylayamaz, kendi kapsamını genişletemez** 🔜 |
 | **T17** | **Yedek/export üzerinden toplu veri sızması** | **Yüksek** | **Maskeli varsayılan export, kayıtlı/kısıtlı toplu indirme, şifreli yedek** 🔜 |
-| **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **`/admin/` kaldırılır, `auth_*` tabloları uygulama rolünden geri alınır, `is_staff` yalnızca bootstrap hesabında kalır (OD19)** ⚠️ |
+| **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **Karar verildi (OD19 — kapalı): `/admin/` kaldırılır, `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez.** Uygulama bekliyor 🔜 |
 | **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
 
 ---
@@ -77,6 +77,23 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 - Parola sıfırlama 🔜: tek kullanımlık, süreli, hash'li token; kullanıcı
   numaralandırmasına karşı her durumda aynı yanıt.
 - MFA zorunluluğu rollerle ilişkilendirilir ❓OD10.
+- **Django Admin kapısı kapalı (OD19 — kapalı):** üretimde `/admin/` yolu
+  yayınlanmaz ve `django.contrib.admin` uygulama listesinde tutulmaz. Belirleyici
+  ölçüm: Django'nun `AdminSite.has_permission` kapısı `is_active and is_staff`
+  (kurulu kaynak, `django/contrib/admin/sites.py:207`) — yani `is_staff=True` olan
+  **aktif** bir kullanıcı, ayrı bir admin girişi yapmadan mevcut oturumuyla admin
+  dizinini açabilir. Bugün etki boş dizinle sınırlıdır (hiçbir model kayıtlı
+  değil), ama kapı kapatılır.
+- **`is_staff` / `is_superuser` kuralı (OD19 — kapalı):** `is_superuser` alanı
+  **hiç eklenmez** (`PermissionsMixin` kullanılmaz); `is_staff` **tek başına hiçbir
+  Persopyro yetkisi vermez**, varsayılanı `False`'dur ve üretimde **hiçbir kiracı
+  kullanıcısında `True` olmamalıdır**; `create_superuser` akışı artık
+  `is_staff=True` atamaz (uygulama kalemi). Üretimde `is_staff = true` olan aktif
+  kullanıcı bulunması **denetim sorgusu** ile izlenir ve testle zorlanır.
+- **Admin giriş formu kiracısız çalışmaz (mevcut koruma):** kimlik doğrulama
+  backend'imiz `tenant` olmadan `None` döner (fail-closed), dolayısıyla
+  `/admin/login/` formu bir kiracı kullanıcısıyla giriş yapamaz. Riski yaratan şey
+  bu form değil, **mevcut oturum + `is_staff`** birleşimidir.
 - Kurtarma akışı (MFA cihaz kaybı) kimlik doğrulamalı ve kayıtlı olmalıdır 🔜;
   kurtarma, güvenlik zincirinin en zayıf halkasıdır.
 
@@ -156,11 +173,14 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 - Kendi kendini yükseltme yasağı 🔜: kullanıcı kendi rolüne izin ekleyemez,
   kapsamını genişletemez, kendi talebini onaylayamaz (ayrılık ilkesi).
 - Son kiracı yöneticisi kaldırılamaz/pasifleştirilemez 🔜 (kilitlenme koruması).
-- **Tek yetkilendirme yolu:** Yetki kararı **yalnızca** bu modelde verilir.
-  Django'nun kendi yetki sistemi (`auth_permission`, `auth_group`, `/admin/`,
-  `is_staff`) üretimde kullanılmaz; uygulama rolünün bu tablolarda yazma yetkisi
-  olmamalıdır ⚠️🔜 (OD19; ölçüm: `/admin/` şu anda rotalı ve `auth_*` tabloları
-  `hr` şemasında mevcut — `docs/DATABASE.md` A.1.2).
+- **Tek yetkilendirme yolu — KARAR VERİLDİ (OD19 kapalı):** Yetki kararı
+  **yalnızca** bu modelde verilir. Django'nun kendi yetki sistemi
+  (`auth_permission`, `auth_group`, `/admin/`, `is_staff`, `is_superuser`) üretimde
+  **hiçbir yetki vermez**; `/admin/` kaldırılır; `auth_*` ve `django_admin_log`
+  tablolarında uygulama rolünün **tüm yetkileri geri alınır**. Bu tablolar teknik
+  olarak kalabilir (`django.contrib.auth`, `AbstractBaseUser`, parola hash'leme ve
+  oturum kimlik doğrulaması için gereklidir) ama **izin kaynağı değildir**.
+  İleride admin kullanımının ön koşulları OD19'da yazılıdır.
 - **Tanım tabloları salt okunur:** `hr.permissions` (global katalog) ve yansı/dizin
   tabloları uygulama rolünde yalnızca **SELECT** olmalıdır; `ALTER DEFAULT
   PRIVILEGES` ile gelen geniş DML her yeni tabloda daraltılır 🔜
@@ -376,12 +396,16 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
 ## 15. Açık güvenlik kararları
 
 Yetkilendirme tarafındaki kararlar `docs/AUTHORIZATION.md` bölüm 14'te
-listelenmiştir (OD1–OD18).
+listelenmiştir (OD1–OD25).
 
-**Kapatılan güvenlik kararı (2026-09-11):** **G1** — platform erişiminin teknik
-mekanizması. OD1/OD3 kapatıldı; karar: **ayrı servis/authorization katmanı +
-ayrı veritabanı rolü, kiracı RLS politikaları değişmez, `BYPASSRLS` yasak**
-(bölüm 4.2).
+**Kapatılan güvenlik kararları (2026-09-11):**
+
+- **G1** — platform erişiminin teknik mekanizması (OD1/OD3 kapalı): **ayrı
+  servis/authorization katmanı + ayrı veritabanı rolü, kiracı RLS politikaları
+  değişmez, `BYPASSRLS` yasak** (bölüm 4.2).
+- **G8** — Django'nun paralel yetki yolu (OD19 kapalı): **`/admin/` kaldırılır,
+  `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek
+  başına yetki vermez** (bölüm 3 ve 5).
 
 Açık olanlar:
 
@@ -393,5 +417,4 @@ Açık olanlar:
 | G5 | `FIELD_ENCRYPTION_KEY` rotasyon planı | Anahtar sürümleme + yeniden şifreleme betiği |
 | G6 | Acil durum (break-glass) erişiminin sınırları ve sonradan gözden geçirme | Sonradan zorunlu inceleme; kayıt silinemez; **OD17** ile birlikte kararlaştırılır |
 | G7 | Platform çift onayının tek yönetici / acil durum durumunda uygulanması | Fail-closed varsayılan + sınırlı break-glass (**OD17**) |
-| G8 | Django'nun paralel yetki yolu (`/admin/`, `is_staff`, `auth_*` tabloları) — **mevcut risk** | `/admin/` kaldır, `auth_*` yetkilerini geri al, `is_staff` yalnızca bootstrap hesabında (**OD19**) |
 | G9 | Fazla yetki turu: global tanım tabloları ve yansılarda uygulama rolü yazma yetkisi | `permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6) |

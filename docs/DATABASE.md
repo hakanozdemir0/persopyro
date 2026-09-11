@@ -75,16 +75,19 @@ düşmüştür, çünkü bağlantı `search_path=hr,public` ile açılıyor.
 | `django_content_type` | `contenttypes` | ✅ gerekli (bağımlılık) |
 | `cache_table` | Veritabanı cache | ✅ gerekli (K17) |
 | `django_q_ormq`, `django_q_schedule`, `django_q_task` | `django_q` | ✅ gerekli (kuyruk) |
-| `auth_permission`, `auth_group`, `auth_group_permissions` | `django.contrib.auth` | ❌ **kullanılmıyor** — kendi RBAC'imiz var ⚠️OD19 |
-| `django_admin_log` | `django.contrib.admin` | ❌ kullanılmıyor; `/admin/` **rotalı** ⚠️OD19 |
+| `auth_permission`, `auth_group`, `auth_group_permissions` | `django.contrib.auth` | ❌ **kullanılmıyor** — kendi RBAC'imiz var; **yetkiler geri alınacak** (OD19 kapalı) |
+| `django_admin_log` | `django.contrib.admin` | ❌ kullanılmıyor; `/admin/` **kaldırılacak** (OD19 kapalı) |
 
-**Neden önemli:** `auth_group`/`auth_permission` + `/admin/` yolu, uygulamanın
-RBAC'inden **bağımsız ikinci bir yetkilendirme yolu**dur. Bugün `/admin/`
-altında hiçbir model kayıtlı değil (`admin.site.register` çağrısı yok), ama
-`create_superuser` (`apps/accounts/models.py:135`) `is_staff=True` atar ve
-`config/urls.py:30` `/admin/` yolunu yayınlar. Bir kullanıcıya `is_staff`
-verilirse, Django'nun kendi yetki kontrolü devreye girer ve RLS dışında hiçbir
-uygulama kontrolü araya girmez. Bu bir **karar** gerektiriyor (OD19).
+**Karar (OD19 — kapalı, 2026-09-11):** `/admin/` yolu kaldırılır,
+`django.contrib.admin` uygulama listesinden çıkarılır, `create_superuser` artık
+`is_staff=True` atamaz ve bu tabloların (`auth_*`, `django_admin_log`) uygulama
+rolü yetkileri **tamamen geri alınır**. Tablolar teknik olarak kalabilir
+(`django.contrib.auth`; `AbstractBaseUser`, parola hash'leme ve oturum kimlik
+doğrulaması için gereklidir) ama **izin kaynağı olamaz**. Belirleyici ölçüm:
+Django'nun `AdminSite.has_permission` kapısı `is_active and is_staff`
+(`django/contrib/admin/sites.py:207`) — yani `is_staff=True` olan aktif bir kiracı
+kullanıcısı mevcut oturumuyla admin dizinini açabilir (bugün 0 model kayıtlı
+olduğu için etki boş dizinle sınırlıdır).
 
 ## A.2 Tablo kartları (mevcut)
 
@@ -524,7 +527,10 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M19** | `hr.platform_access_notices` + platform servisinin kiracı bağlamıyla yazma yolu | Yeni | M18 | DROP TABLE |
 | **M20** | `hr.audit_logs` genişletme: `actor_kind`, `actor_public_id`, `purpose`, `grant_id`, `changed_fields`, `source` (+ zincirleme OD13 kararına bağlı) | Şema | M19 | Kolonlar DROP |
 | **M21** | `hr.tenant_directory`'nin `platform.tenant_registry` ile tutarlılığı için test + (OD20 kararı) birleştirme | Test/kod | M4 | — |
-| **M22** | Django admin/kullanılmayan yetki tabloları (OD19 kararı): `/admin/` kaldırma + `auth_*` tablolarına `REVOKE` | Kod + yetki | — | Geri alınabilir |
+| **M22** | **`/admin/` yolunun kaldırılması + `django.contrib.admin`'in uygulama listesinden çıkarılması** (OD19 kapalı) | Kod + ayar | — | Route/uygulama geri eklenebilir |
+| **M22b** | `auth_group`, `auth_group_permissions`, `auth_permission`, `django_admin_log` tablolarında `persopyro_app` yetkilerinin **tamamen geri alınması** (`REVOKE ALL`) | Yetki | M22 | Yetki geri verilebilir (istenmez) |
+| **M22c** | `create_superuser`'ın `is_staff=True` atamaması + üretimde `is_staff = true` olan **aktif kullanıcı bulunmaması** için denetim sorgusu ve test | Kod + test | M22b | Kod geri alınır |
+| **M22d** | Kaldırma sonrası **sıfırdan kurulum testi** (boş DB → migrate → doğrulama): admin çıkarılınca `django_admin_log` oluşmaz ve kurulum farkı gözlemlenir | Test | M22c | — |
 | **M23** | Test genişletmesi: RLS yapısal testine yeni tablolar; T15–T18 davranış testleri; guard testleri | Test | M10–M20 | — |
 | **M24** | İndeks turu (bölüm E) + `ANALYZE` | Şema | M10–M20 | İndeks DROP |
 
@@ -612,6 +618,8 @@ yeni tablo migration'ı sonunda **açık bir yetki turu** yapılır:
 | Denetim/olay tablosu (`audit_logs`, `platform_access_notices`) | **INSERT, SELECT** (UPDATE/DELETE revoke) |
 | Yansı/dizin tablosu (`tenant_directory`) | **SELECT** |
 | Global tanım tablosu (`permissions`) | **SELECT** |
+| Django teknik tabloları — kullanılanlar (`django_session`, `cache_table`, `django_migrations`, `django_q_*`, `django_content_type`) | Gereken en az yetki (mevcut hâli) |
+| Django teknik tabloları — kullanılmayanlar (`auth_group`, `auth_group_permissions`, `auth_permission`, `django_admin_log`) | **Hiç yetki (`REVOKE ALL`)** — OD19 kapalı |
 
 ---
 
@@ -703,7 +711,7 @@ diye sayılır ve varsa migration hata verir; (4) veri göçü ve şema değişi
 |---|---|---|---|
 | **H1** | Platform şeması/rolü yanlış yapılandırılırsa kiracı verisi sızabilir | Felaket | `persopyro_app`'e `platform` USAGE verilmez; `BYPASSRLS` yasak; T16/T17 testleri; erişim yalnızca onay kaydıyla |
 | **H2** | Yansı tabloları (`tenant_directory`, `platform.tenant_registry`) `hr.tenants`'tan sapabilir | Orta | Tek kaynak `hr.tenants`; tek yansı tetikleyicisi deseni; tutarlılık testi (M21) |
-| **H3** | Django admin/`auth_*` paralel yetkilendirme yolu (`is_staff`) uygulamanın RBAC'ini atlar | **Yüksek** | ⚠️OD19: `/admin/` kaldır, `auth_*` tablolarına REVOKE, `is_staff`i yalnızca süper kullanıcı oluşturmada bırak |
+| **H3** | Django admin/`auth_*` paralel yetkilendirme yolu (`is_staff`) uygulamanın RBAC'ini atlar | **Yüksek** | **Karar verildi (OD19 — kapalı):** `/admin/` + `django.contrib.admin` kaldırılır, `auth_*`/`django_admin_log` yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez. Uygulama M22–M22d ile yapılır → **uygulama kalemi**, açık karar değil |
 | **H4** | Soft-delete + benzersizlik: silinen kaydın benzersiz değeri yeni kaydı engeller | Orta | ❓OD21: kısmi benzersiz indeksler |
 | **H5** | `public_id` geri doldurma çakışması/biçim değişikliği | Orta | Global benzersiz indeks + yeniden deneme; biçim OD2 ile sabit |
 | **H6** | Yeni tabloda RLS/guard unutulması | **Yüksek** | Yapısal test (RLS+FORCE) + guard testleri; `M23` zorunlu adım |
@@ -724,7 +732,7 @@ ortaya çıkanlar aynı numaralandırmayla **orada** kayıtlıdır:
 | # | Konu | Öneri |
 |---|---|---|
 | **OD2** | Genel kimlik biçimi — **kullanıcı kararıyla KAPATILDI** (kiracı ön eki + Crockford Base32 + 8 rastgele karakter) | Uygulanacak |
-| **OD19** | Django'nun kullanılmayan yetki tabloları ve `/admin/` yolu | `/admin/` kaldır; `auth_group`/`auth_permission`'a yalnızca SELECT ver ya da hiç yetki verme; `is_staff` yalnızca bootstrap hesabında |
+| **OD19** | Django admin / `auth_*` paralel yetki yolu — **KAPATILDI** (2026-09-11) | `/admin/` + `django.contrib.admin` kaldırılır; `auth_*`/`django_admin_log` yetkileri geri alınır; `is_staff`/`is_superuser` tek başına yetki vermez (M22–M22d) |
 | **OD20** | Kiracı üst verisinin sahibi: `hr.tenants` tek kaynak mı, `platform.tenant_registry` ticari alanları mı taşıyacak? | `hr.tenants` tek kaynak; registry yalnızca **yansı + ticari** alanlar, tetikleyiciyle |
 | **OD21** | Soft-delete ile benzersizlik çakışması | Kısmi benzersiz indeksler (`WHERE deleted_at IS NULL`) |
 | **OD22** | Platform API token'ı nerede tutulacak (`platform.tokens` mi, `hr.api_tokens`'a nullable tenant mı?) | Ayrı `platform.tokens` (kiracı tablosuna platform kaydı karıştırılmaz) |
