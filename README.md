@@ -57,6 +57,10 @@ bash scripts/run_tests.sh          # testler (gerçek PostgreSQL üzerinde)
 Örnek ortam değişkenleri: `.env.example` (gerçek değerler `.env` dosyasında
 tutulur ve depoya girmez; `bootstrap.sh` üretir).
 
+Manuel test arayüzü (yalnızca geliştirme/test): `http://127.0.0.1:8000/test-ui/login/`
+— kurulum, demo kullanıcılar ve adımlar için `docs/DEVELOPMENT_RULES.md` →
+"Manuel test arayüzü" bölümü.
+
 Not: Testler `scripts/run_tests.sh` ile çalıştırılır; çünkü testler kendi test
 veritabanını oluşturmak zorundadır ve uygulama rolüne bilinçli olarak
 veritabanı oluşturma yetkisi verilmemiştir.

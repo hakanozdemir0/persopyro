@@ -3,6 +3,76 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.24.0] — 2026-09-11 — Manuel test arayüzü (`/test-ui/`): organizasyon + izin akışını tarayıcıdan test
+
+**Baseline (son commit `97fe3cb`):** çalışma ağacı temiz, tam test suite **369 passed**.
+
+Bu tur bir **ürün özelliği değildir**: mevcut backend'i tarayıcıdan gerçek kullanıcı
+gibi elle denemek için **geliştirme/test arayüzü** eklenir. Kapsam dışı (bu turda
+**dokunulmadı**): RBAC/RLS/kapsam karar mantığı, kimlik doğrulama mekanizması,
+üretim API sözleşmesi (`/api/v1/*`), vardiya/devam (M15), evrak (M16), dashboard,
+onboarding/billing, frontend zinciri (React/Vite/Tailwind/npm), impersonation,
+tema/tasarım sistemi.
+
+### Ölçüm
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| Test sayısı | 369 | **388** (+19: arayüz, kapsam görünürlüğü, yetki reddi, bakiye) |
+| Yeni migration | — | **0** (arayüz uygulaması model içermez) |
+| Yeni Python bağımlılığı | — | **0** (Django şablonu + gömülü vanilla JS/CSS) |
+| `/test-ui/*` (üretim varsayılanı, `DJANGO_DEBUG=0`) | — | **404** (`TEST_UI_ENABLED` kapalı) |
+| Değişen güvenlik kuralı | — | **yok** (RLS, kapsam, servis katmanı yetkisi aynen yürürlükte) |
+| Demo hesaplar | 1 (`demo@`) | **4** (`demo@` kiracı yöneticisi, `finans.mudur@` dept_manager, `personel@` employee, `ik.calisan@` employee) |
+
+### Eklenen / değişen
+
+- **Yeni uygulama `apps/testui`** — model **yok**, migration **yok**; `views.py`
+  (giriş sayfası + panel kabuğu), `api.py` (JSON uçları + tek yerde hata eşlemesi),
+  `urls.py`, şablonlar (`base`, `login`, `app`).
+- **`/test-ui/` yolu ve kapı** — `config/settings.py`: `TEST_UI_ENABLED`
+  (`PERSOPYRO_TEST_UI`, varsayılan `DJANGO_DEBUG`) ve `TEST_UI_DEMO_USERS`;
+  `config/urls.py` yolu koşulsuz kaydeder, kapı **çalışma anında** uygulanır:
+  kapalıyken bütün `/test-ui/*` yolları **404** döner (davranış testlerde ölçülebilir
+  kalır; üretimde varsayılan kapalıdır).
+- **Uçlar** (`/test-ui/api/*`, hepsi oturum çerezi + CSRF): `me`, `dashboard`,
+  `lookups`, `departments` (GET/POST), `departments/<id>/move|delete`,
+  `employees` (GET/POST), `employees/<id>/balances`, `leave-requests` (GET/POST),
+  `leave-requests/<id>/decision|cancel`. Yeni kimlik doğrulama yolu **eklenmedi**;
+  giriş/çıkış mevcut `/api/v1/auth/login|logout` uçlarıdır.
+- **Yetki kararı arayüzde verilmez** — tüm işlemler servis katmanına delege edilir;
+  arayüz yalnızca buton görünürlüğünü ayarlar (tek güvenlik kontrolü değildir).
+  Yetki/kapsam reddi HTTP **403** ve "Bu işlem için yetkiniz veya organizasyon
+  kapsamınız yok." mesajıyla döner; kapsam dışı nesne **404** (RLS nesneyi göstermez).
+  Hata gövdeleri yığın izi (stack trace) içermez.
+- **`apps/organization/services.py`** — yetki/kapsam redleri için
+  `OrganizationAuthorizationError(OrganizationError)` alt sınıfı eklendi; HTTP
+  katmanı bunu **403** olarak eşler. Mevcut `pytest.raises(OrganizationError)`
+  beklentileri etkilenmez (alt sınıf).
+- **Demo verisi** (`scripts/_demo_data.py`) — çalışan kullanıcıları (`personel@`,
+  `ik.calisan@`), Finans müdürü kullanıcısının çalışan kaydıyla eşlenmesi, izin
+  türleri + yıllık politika (14 gün) + dönem hakedişi ve **iki bekleyen talep**:
+  biri kapsam **içi** (Muhasebe, `IZIN_TESTI_MUHASEBE`), biri kapsam **dışı**
+  (İnsan Kaynakları, `IZIN_TESTI_IK`). Parolalar yalnızca betiğe verilen
+  `DEMO_PASSWORD` ile üretilir; migration'lara/repoya secret konmaz.
+- **`scripts/verify_fresh_install.sh`** — HTTP adımına **6c-1…6c-4** eklendi:
+  giriş sayfası + oturumsuz 403, gerçek oturumla panel/veri, **kapsam görünürlüğü**
+  (Muhasebe görünür, İK görünmez/onaylanamaz), yetkisiz departman oluşturma **403**,
+  ve **üretim varsayılanında 404**.
+
+### Doğrulama
+
+- `scripts/run_tests.sh`: **388 passed** (öncesi 369).
+- `tests/test_testui.py` (19 test): giriş sayfası, geçerli/hatalı giriş, oturumsuz
+  yönlendirme, çalışanın yalnız kendi talepleri, dept_manager alt ağaç görünürlüğü,
+  sibling DENY (403), onay → bakiye, red → bakiye tüketilmez, iptal, çıkış,
+  `/admin/` 404, askıdaki kiracı, cross-tenant, arayüz kapalıyken 404, departman
+  oluşturma yetkisi, kapsamla sınırlı çalışan listesi, kişisel veri sızmaması.
+- `verify_fresh_install.sh`: sıfırdan kurulum, **0 FAIL** (bkz. commit raporu).
+- `ruff`, `bandit` (0 bulgu), `manage.py check`, `makemigrations --check`: temiz.
+- Canlı geliştirme DB'sinde gerçek HTTP ile elle geçiş yapıldı (giriş, kapsam,
+  onay/red, 403/404 yolları).
+
 ## [0.23.0] — 2026-09-11 — M14: izin (leave) modülü — tür, politika, hakediş, talep, onay
 
 **Baseline (son commit `042dfc7`):** çalışma ağacı temiz, migration'lar tam uygulanmış,

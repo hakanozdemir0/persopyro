@@ -10,8 +10,19 @@ Parola `DEMO_PASSWORD` ortam değişkeninden okunur (koda yazılmaz).
 
 import os
 import uuid
+from datetime import timedelta
+from decimal import Decimal
+
+from django.utils import timezone
 
 from apps.accounts.models import User
+from apps.leave.models import LeavePolicy, LeaveRequest, LeaveRequestStatus, LeaveType
+from apps.leave.services import (
+    accrue_leave_entitlements,
+    create_default_leave_types,
+    create_leave_policy,
+    create_leave_request,
+)
 from apps.rbac.models import Role, UserRole
 from apps.rbac.services import create_default_roles
 from apps.tenancy.context import tenant_context
@@ -128,6 +139,72 @@ with tenant_context(TENANT_ID):
     izin_sayisi = len(
         {p for p in rol.role_permissions.values_list("permission__code", flat=True)}
     )
+
+    # --- Manuel test arayüzü (/test-ui/) için kapsam senaryosu -----------------
+    # Finans müdürü = DEMO-001 kaydı; böylece yöneticinin çalışan kaydı ve
+    # birincil yönetici ilişkisi (DEMO-002 → DEMO-001) tutarlı olur.
+    if finans_muduru.user_id is None:
+        finans_muduru.user = finans_yoneticisi
+        finans_muduru.save(update_fields=["user", "updated_at"])
+
+    # Çalışan kullanıcıları: Muhasebe (kapsam içi) ve İK (kapsam dışı/sibling).
+    def _calisan_kullanicisi(eposta: str, ad: str, soyad: str, calisan):  # noqa: ANN001, ANN202
+        kisi, _olustu = User.objects.get_or_create(
+            tenant=kiracı,
+            email=eposta,
+            defaults={"first_name": ad, "last_name": soyad},
+        )
+        kisi.set_password(PAROLA)
+        kisi.save(update_fields=["password", "password_changed_at", "updated_at"])
+        employee_rol = Role.objects.get(tenant=kiracı, code="employee")
+        UserRole.objects.get_or_create(tenant=kiracı, user=kisi, role=employee_rol)
+        if calisan.user_id is None:
+            calisan.user = kisi
+            calisan.save(update_fields=["user", "updated_at"])
+        return kisi
+
+    _calisan_kullanicisi(
+        "personel@persopyro.test", "Personel", "Muhasebe", muhasebe_calisani
+    )
+    _calisan_kullanicisi(
+        "ik.calisan@persopyro.test", "İK", "Çalışan", ik_calisani
+    )
+
+    # İzin türleri, yıllık hakediş politikası ve dönem hakedişi (idempotent).
+    create_default_leave_types(actor=kullanıcı, tenant=kiracı)
+    yillik_tur = LeaveType.objects.get(tenant=kiracı, code="annual_leave", deleted_at__isnull=True)
+    if not LeavePolicy.objects.filter(leave_type=yillik_tur, deleted_at__isnull=True).exists():
+        create_leave_policy(
+            actor=kullanıcı,
+            leave_type=yillik_tur,
+            accrual_method="fixed",
+            fixed_days=Decimal("14.0"),
+        )
+    accrue_leave_entitlements(
+        actor=kullanıcı, tenant=kiracı, period_year=timezone.localdate().year
+    )
+
+    # Onay ekranı için bekleyen talepler: biri kapsam İÇİ (Muhasebe), biri kapsam
+    # DIŞI (İK). Böylece Finans müdürü yalnızca birincisini görür/onaylayabilir.
+    def _bekleyen_talep(calisan, tur, gun: int, gerekce: str):  # noqa: ANN001, ANN202
+        mevcut = LeaveRequest.objects.filter(
+            employee=calisan, reason=gerekce, status=LeaveRequestStatus.PENDING
+        ).first()
+        if mevcut is not None:
+            return mevcut
+        baslangic = timezone.localdate() + timedelta(days=10)
+        return create_leave_request(
+            actor=kullanıcı,
+            employee=calisan,
+            leave_type=tur,
+            start_date=baslangic,
+            end_date=baslangic + timedelta(days=gun - 1),
+            reason=gerekce,
+            submit=True,
+        )
+
+    _bekleyen_talep(muhasebe_calisani, yillik_tur, 3, "IZIN_TESTI_MUHASEBE")
+    _bekleyen_talep(ik_calisani, yillik_tur, 2, "IZIN_TESTI_IK")
 
 # F11 smoke: askıya alınmış kiracı. Giriş denemesi 403 dönmelidir; bu kiracı
 # yalnızca geliştirme ortamında ve yalnızca bu denetim için tutulur.

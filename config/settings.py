@@ -58,6 +58,27 @@ def env_list(name: str, default: str = "") -> list[str]:
 # Varsayılan olarak üretim davranışı (DEBUG kapalı). Geliştirmede DJANGO_DEBUG=1.
 DEBUG = env_bool("DJANGO_DEBUG", False)
 
+# --- Manuel test arayüzü (`/test-ui/`) — YALNIZCA geliştirme/test -------------
+# Varsayılan olarak DEBUG'a bağlıdır: üretimde yol **kaydedilmez**. Açıkça
+# `PERSOPYRO_TEST_UI=1` verilirse üretimde de açılabilir (bilinçli, geçici karar).
+# Güvenlik: bu arayüz hiçbir kontrolü atlamaz; tüm kararlar servis katmanında ve
+# RLS ile verilir. Ayrıntı: docs/DEVELOPMENT_RULES.md.
+TEST_UI_ENABLED = env_bool("PERSOPYRO_TEST_UI", DEBUG)
+
+#: Giriş ekranında **yalnızca örnek e-posta** gösterilir (parola repoda tutulmaz;
+#: demo parolası bootstrap/demo betiği tarafından üretilip terminale yazılır).
+TEST_UI_DEMO_USERS = env_list(
+    "PERSOPYRO_TEST_UI_DEMO_USERS",
+    ",".join(
+        [
+            "demo@persopyro.test (tenant_admin)",
+            "finans.mudur@persopyro.test (dept_manager - Finans)",
+            "personel@persopyro.test (employee - Muhasebe)",
+            "ik.calisan@persopyro.test (employee - İnsan Kaynakları)",
+        ]
+    ),
+)
+
 # Secret koda yazılmaz ve hiçbir ortam için koda gömülü yedek değer bulunmaz.
 # Her ortamda (geliştirme dahil) ortam değişkeninden okunur; tanımsızsa uygulama
 # bilinçli olarak başlamaz. Geliştirmede: export DJANGO_SECRET_KEY=...
@@ -100,6 +121,8 @@ INSTALLED_APPS = [
     "apps.organization",
     # İzin yönetimi (M14; OD21/OD24/OD5 kapalı).
     "apps.leave",
+    # Manuel test arayüzü (yalnızca geliştirme/test; model içermez, migration üretmez).
+    "apps.testui",
     # Platform katmanı (OD3/OD20/OD22/OD25): AYRI GÜVENLİK SINIRI — kiracı
     # tablolarıyla birleşmez, ORM modeli yoktur (ham SQL migration + servis).
     "apps.platform",

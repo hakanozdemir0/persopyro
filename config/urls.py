@@ -36,3 +36,13 @@ urlpatterns = [
     path("api/health", health, name="health"),
     path("api/ready", readiness, name="readiness"),
 ]
+
+# Manuel test arayüzü (`/test-ui/`) — YALNIZCA geliştirme/test.
+#
+# NEDEN KOŞULSUZ KAYIT + ÇALIŞMA ANINDA 404: gating çalışma anında yapılır
+# (`TEST_UI_ENABLED`, bkz. `apps/testui/views.py` ve `apps/testui/api.py`), çünkü
+# (a) davranış testlerde ölçülebilir kalır, (b) URL yapılandırması import anında
+# dondurulmuş bir karara bağlı olmaz. Üretimde `TEST_UI_ENABLED` varsayılan olarak
+# kapalıdır (DEBUG'a bağlı): tüm `/test-ui/*` yolları **404** döner ve hiçbir veri
+# açılmaz. Güvenlik kararları bu arayüzde verilmez; servis katmanı + RLS geçerlidir.
+urlpatterns += [path("test-ui/", include("apps.testui.urls"))]

@@ -91,6 +91,36 @@ Giriş uçlarının davranışı:
   de aynı kodla reddedilir.
 - Bu uçlar en katı hız sınırı sınıfındadır (`auth`); sınır aşımında `429`.
 
+### 4.2 Geliştirme/test uçları (`/test-ui/api/*`) — **üretim sözleşmesi DEĞİLDİR**
+
+Manuel test arayüzünün (`/test-ui/`) kullandığı uçlar, sürümlenmiş üretim API'sinin
+(`/api/v1/*`) parçası **değildir**; ayrı önek altında tutulur ki üretim sözleşmesi
+genişlemesin. Tümü **oturum çerezi** ile çalışır (yeni kimlik doğrulama yolu
+eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **kapalıdır**:
+`TEST_UI_ENABLED` (`PERSOPYRO_TEST_UI`, varsayılan `DEBUG`) kapalıyken bütün yol
+**404** döner.
+
+| Uç nokta | Yöntem | Notlar |
+|---|---|---|
+| `/test-ui/api/me` | GET | Oturumdaki kullanıcı, kiracı, roller, etkin izinler, organizasyon kapsamı |
+| `/test-ui/api/dashboard` | GET | Panel: çalışan kaydı, dönem bakiyeleri, kendi talepleri, onay kuyruğu |
+| `/test-ui/api/lookups` | GET | Form seçenekleri (birimler, unvanlar, aktif izin türleri) |
+| `/test-ui/api/departments` | GET / POST | Birim ağacı / yeni birim (`org.department.manage` ∧ kapsam) |
+| `/test-ui/api/departments/<uuid>/move` | POST | Üst birim değiştir (OD24 ağaç guard'ları) |
+| `/test-ui/api/departments/<uuid>/delete` | POST | Soft delete (OD21) |
+| `/test-ui/api/employees` | GET / POST | Kapsamdaki çalışanlar / yeni çalışan (`employee.create` ∧ kapsam) |
+| `/test-ui/api/employees/<uuid>/balances` | GET | Çalışanın dönem bakiyeleri (`leave.balance.read`) |
+| `/test-ui/api/leave-requests?scope=mine\|pending` | GET | Kendi talepleri / onay kuyruğu |
+| `/test-ui/api/leave-requests` | POST | Talep oluştur (gün sayısı **sunucuda** hesaplanır) |
+| `/test-ui/api/leave-requests/<uuid>/decision` | POST | Onay/red (`decision`: `approved`/`rejected`) |
+| `/test-ui/api/leave-requests/<uuid>/cancel` | POST | İptal (gerekçe zorunlu) |
+
+Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama, `401/403` kimlik
+ve yetki/kapsam, `404` kapsam dışı veya yok, `409` durum/iş kuralı çakışması.
+Arayüz hiçbir yetki kararını kendisi vermez: her işlem servis katmanına delege
+edilir (`apps/organization/services.py`, `apps/leave/services/*`), RLS yürürlükte
+kalır ve hata gövdeleri yığın izi (stack trace) içermez.
+
 ## 5. Yanıt biçimi
 
 Başarılı tekil kayıt:

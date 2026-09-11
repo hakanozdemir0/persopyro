@@ -60,6 +60,15 @@ class OrganizationError(RuntimeError):
     """Organizasyon işlemi reddedildi (izin, kapsam veya iş kuralı)."""
 
 
+class OrganizationAuthorizationError(OrganizationError):
+    """
+    İzin veya organizasyon kapsamı yetersiz (fail-closed).
+
+    `OrganizationError`'un alt sınıfıdır: mevcut çağıranlar (`pytest.raises(OrganizationError)`)
+    etkilenmez; HTTP katmanı bu türü **403** olarak eşler.
+    """
+
+
 class OrganizationTreeError(OrganizationError):
     """Ağaç garantisi ihlali (döngü, derinlik, silinmiş ata) — DB tarafından reddedildi."""
 
@@ -70,22 +79,22 @@ class OrganizationTreeError(OrganizationError):
 def _aktoru_dogrula(actor, izin_kodu: str) -> None:  # noqa: ANN001
     """Aktör aktif mi ve gerekli izne sahip mi? (fail-closed)"""
     if actor is None or not getattr(actor, "is_authenticated", False) or not actor.is_active:
-        raise OrganizationError("İşlem için aktif bir kullanıcı gerekir.")
+        raise OrganizationAuthorizationError("İşlem için aktif bir kullanıcı gerekir.")
     if not user_has_permission(actor, izin_kodu):
-        raise OrganizationError(f"Bu işlem için '{izin_kodu}' izni gerekir.")
+        raise OrganizationAuthorizationError(f"Bu işlem için '{izin_kodu}' izni gerekir.")
 
 
 def _kapsam_dogrula(actor, *, department_id, islem: str) -> None:  # noqa: ANN001
     """Hedef birim aktörün organizasyon kapsamında mı? (izin ∧ kapsam)"""
     if not object_in_org_scope(actor, department_id=department_id):
-        raise OrganizationError(
+        raise OrganizationAuthorizationError(
             f"{islem}: hedef birim aktörün organizasyon kapsamı dışında (OD5 fail-closed)."
         )
 
 
 def _ayni_kiracili_mi(actor, nesne, islem: str) -> None:  # noqa: ANN001
     if str(getattr(nesne, "tenant_id", None)) != str(getattr(actor, "tenant_id", None)):
-        raise OrganizationError(f"{islem}: nesne ve aktör aynı kiracıda olmalıdır.")
+        raise OrganizationAuthorizationError(f"{islem}: nesne ve aktör aynı kiracıda olmalıdır.")
 
 
 # --- Birim (department) servisleri ------------------------------------------

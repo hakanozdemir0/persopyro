@@ -91,3 +91,79 @@ ancak açık gerekçe ve kayıtla değiştirilir.
 5. Test yaz ve çalıştır.
 6. Kontrol listesini işaretle, `CHANGELOG.md`'yi güncelle.
 7. Ne değişti, ne doğrulandı, ne kaldı — kısa rapor ver.
+
+## Manuel test arayüzü (`/test-ui/`)
+
+Amaç: organizasyon + izin akışını **tarayıcıdan gerçek kullanıcı gibi** uçtan uca
+denemek. Üretim kullanıcı arayüzü değildir; yeni frontend zinciri (React/Vite/
+Tailwind/npm) kurulmaz — Django şablonu + vanilla JS/CSS kullanılır.
+
+Kapı: `TEST_UI_ENABLED` (`PERSOPYRO_TEST_UI`, varsayılan `DJANGO_DEBUG`). Yani
+`DJANGO_DEBUG=1` iken arayüz açıktır; üretimde (`DJANGO_DEBUG=0`, `PERSOPYRO_TEST_UI`
+verilmemiş) bütün `/test-ui/*` yolları **404** döner ve hiçbir veri açılmaz.
+Güvenlik kararı arayüzde verilmez: tüm işlemler servis katmanına gider
+(`izin ∧ kapsam`), RLS yürürlükte kalır, CSRF/oturum mevcut mekanizmadır.
+
+### Çalıştırma (Ubuntu — birkaç komut)
+
+```bash
+cd ~/persopyro
+set -a && . ./.env && set +a
+
+# 1) Demo verisi + demo kullanıcılar (yazma: sahip rol; parola SADECE bu komutta geçer,
+#    depoya yazılmaz, migration'lara konmaz)
+POSTGRES_USER="$POSTGRES_OWNER_USER" POSTGRES_PASSWORD="$POSTGRES_OWNER_PASSWORD" \
+DEMO_PASSWORD="Demo-Parola-1234" .venv/bin/python manage.py shell < scripts/_demo_data.py
+
+# 2) Sunucu (okuma/yazma: uygulama rolü — .env'deki değerler)
+.venv/bin/python manage.py runserver 127.0.0.1:8000
+```
+
+Avantaj: şema hazırsa (`bash scripts/migrate.sh`) ek kurulum gerekmez. Demo verisi
+idempotenttir; betik tekrar çalıştırılabilir.
+
+### URL
+
+`http://127.0.0.1:8000/test-ui/login/` (panel: `/test-ui/`)
+
+### Demo kullanıcılar (parola: 1. adımda verilen `DEMO_PASSWORD`)
+
+| E-posta | Rol | Kapsam | Ne için |
+|---|---|---|---|
+| `demo@persopyro.test` | `tenant_admin` | kiracı geneli | her şeyi görmek, nihai onay |
+| `finans.mudur@persopyro.test` | `dept_manager` | **Finans** (+ alt ağaç) | kapsam/onay testi |
+| `personel@persopyro.test` | `employee` | yalnız kendisi | Muhasebe çalışanı; kendi talebi |
+| `ik.calisan@persopyro.test` | `employee` | yalnız kendisi | **kapsam dışı** (İnsan Kaynakları) |
+
+Kiracı `slug`: `demo`.
+
+### Elle test adımları (önerilen sıra)
+
+1. `demo@persopyro.test` ile gir → **Panel**: kullanıcı, kiracı, roller, kapsam
+   ("Kiracı geneli (TENANT)"), çalışan kaydı, izin bakiyesi, onay kuyruğu.
+2. **Departmanlar** sekmesi: ağaç görünümü (`Genel Müdürlük → Finans → Muhasebe`,
+   `→ İnsan Kaynakları`); yetkiniz varsa birim oluştur / taşı / soft delete.
+3. **Çalışanlar**: kapsamdaki çalışanlar; birim + unvan seçerek yeni çalışan
+   oluştur; "Bakiye" ile dönem hakediş/kullanılan/bekleyen/kalan değerleri gör.
+4. **İzin Talebi**: bir çalışan seç, tür + tarih ver, oluştur → sonuçta
+   **sunucunun hesapladığı** gün sayısı ve durum (`pending`) görünür.
+5. Çıkış yap, `finans.mudur@persopyro.test` ile gir → **Onaylar**: yalnızca
+   *Muhasebe* talebi (`IZIN_TESTI_MUHASEBE`) görünür; *İnsan Kaynakları* talebi
+   (`IZIN_TESTI_IK`) görünmez. **Onayla** → durum ilerler (nihai onay için 1. adım:
+   `demo@persopyro.test`); **Reddet** gerekçe ister.
+6. `personel@persopyro.test` ile gir → **Panel**: bakiye değişimini (bekleyen →
+   kullanılan) doğrula; **İzin Talebi → Taleplerim** yalnızca kendi kayıtlarını
+   gösterir. `ik.calisan@persopyro.test` ile girip aynı onay denenirse **403**
+   ("Bu işlem için yetkiniz veya organizasyon kapsamınız yok.") alınır.
+
+### Otomatik doğrulama
+
+`bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki) ve
+`bash scripts/verify_fresh_install.sh` (**6c-1…6c-4** adımları: giriş, kapsam
+görünürlüğü, yetkisiz 403, üretim varsayılanında 404).
+
+### Kapsam dışı
+
+Impersonation **yok** (kullanıcı değiştirmek için çıkış + giriş). Üretim UI'ı,
+tema/tasarım sistemi, JS çerçevesi, arayüz üzerinden yetki yönetimi bu kapsamda
+değildir.

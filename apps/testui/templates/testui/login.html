@@ -1,0 +1,58 @@
+{% extends "testui/base.html" %}
+{% block title %}Giriş — Persopyro manuel test{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <div class="card">
+    <h1>Giriş</h1>
+    <p class="muted">
+      Mevcut oturum ucu kullanılır (<code>/api/v1/auth/login</code>); paralel bir
+      kimlik doğrulama yolu yoktur. Kiracı bağlamı girişten sonra oturuma sabitlenir.
+    </p>
+    <form id="login-form">
+      <label for="tenant">Kiracı (slug)</label>
+      <input id="tenant" name="tenant" value="demo" autocomplete="organization" required>
+
+      <label for="email">E-posta</label>
+      <input id="email" name="email" type="email" autocomplete="username" required>
+
+      <label for="password">Parola</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+      <label for="totp">MFA kodu (varsa)</label>
+      <input id="totp" name="totp_code" inputmode="numeric" autocomplete="one-time-code">
+
+      <p><button class="primary" type="submit">Giriş yap</button></p>
+    </form>
+    <h3>Demo hesaplar (yalnızca e-posta)</h3>
+    <ul class="muted">
+      {% for k in demo_users %}<li><code>{{ k }}</code></li>{% endfor %}
+    </ul>
+    <p class="muted">
+      Parola repoda tutulmaz; demo parolası <code>scripts/_demo_data.py</code> /
+      <code>scripts/smoke.sh</code> çalıştırıldığında terminale yazılır.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+  const form = document.getElementById("login-form");
+  form.addEventListener("submit", async (olay) => {
+    olay.preventDefault();
+    const govde = {
+      tenant: document.getElementById("tenant").value.trim(),
+      email: document.getElementById("email").value.trim(),
+      password: document.getElementById("password").value,
+      totp_code: document.getElementById("totp").value.trim(),
+    };
+    try {
+      await PERSOPYRO_UI.cagir("/api/v1/auth/login", { method: "POST", body: govde });
+      window.location.href = "/test-ui/";
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+    }
+  });
+</script>
+{% endblock %}

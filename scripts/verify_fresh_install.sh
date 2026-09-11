@@ -145,7 +145,8 @@ django_owner() {
 django_app_server() {
     # `exec`: arka planda çalıştırıldığında `$!` GERÇEK python sürecinin PID'i
     # olsun (sarmalayıcı alt kabuk değil) — temizlik bunu varsayar.
-    exec env DJANGO_ENV_FILE=/dev/null DJANGO_SECRET_KEY="$SECRET" DJANGO_DEBUG=1 \
+    exec env DJANGO_ENV_FILE=/dev/null DJANGO_SECRET_KEY="$SECRET" \
+        DJANGO_DEBUG="${SUNUCU_DEBUG:-1}" \
         DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1" \
         POSTGRES_DB="$FRESH_DB" POSTGRES_USER="$APP_ROLE" POSTGRES_PASSWORD="$APP_PASS" \
         POSTGRES_HOST="$PG_HOST" POSTGRES_PORT="$PG_PORT" \
@@ -179,6 +180,13 @@ kontrol_metni() {  # kontrol_metni <açıklama> <çıktı> <beklenen parça>
     case "$2" in
         *"$3"*) bilgi "OK   $1" ;;
         *) bilgi "FAIL $1 (beklenen içerik: '$3')"; HATA_VAR=1 ;;
+    esac
+}
+
+kontrol_yok() {  # kontrol_yok <açıklama> <çıktı> <olmaması gereken parça>
+    case "$2" in
+        *"$3"*) bilgi "FAIL $1 (beklenmeyen içerik: '$3')"; HATA_VAR=1 ;;
+        *) bilgi "OK   $1" ;;
     esac
 }
 
@@ -496,7 +504,7 @@ if [ "$(tablo_var "$FRESH_DB" "hr.leave_types")" = "$VAR" ]; then
         "$([ "$IZIN1" = "$IZIN2" ] && echo 1 || echo 0)" "1"
 fi
 
-adim "6c/8 Gerçek HTTP (roller: app)"
+adim "6c/8 Gerçek HTTP + manuel test arayüzü (roller: app)"
 
 django_app_server manage.py runserver "127.0.0.1:$VERIFY_PORT" --noreload \
     >"$SMOKE_LOG" 2>&1 &
@@ -528,6 +536,83 @@ bekle "POST /auth/token/logout" \
 bekle "logout sonrası aynı token" \
     "$(kod -X POST "http://127.0.0.1:$VERIFY_PORT/api/v1/auth/token/logout" -H "Authorization: Token $TOKEN")" "401"
 
+# --- 6c-1) Manuel test arayüzü (`/test-ui/`) — geliştirme modu (DJANGO_DEBUG=1) ---
+bilgi "manuel test arayüzü kontrolleri (6c-1): geliştirme modunda AÇIK"
+bekle "GET  /test-ui/login/" "$(kod "http://127.0.0.1:$VERIFY_PORT/test-ui/login/")" "200"
+bekle "GET  /test-ui/api/me (oturum yok → 403)" \
+    "$(kod "http://127.0.0.1:$VERIFY_PORT/test-ui/api/me")" "403"
+
+# Oturum açma: çerez kavanozu + CSRF başlığı (tarayıcıdaki akışın aynısı).
+CEREZ="$(mktemp)"
+curl -fsS -c "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/login/" >/dev/null
+csrf_basligi() {  # giriş/çıkış CSRF token'ını döndürür → her POST'ta yeniden okunur
+    awk '$6 == "csrftoken" {print $7}' "$CEREZ" | tail -1
+}
+[ -n "$(csrf_basligi)" ] || { echo "HATA: csrftoken çerezi alınamadı." >&2; exit 1; }
+
+oturum_ac() {  # $1=eposta → giriş (HTTP kodu döner)
+    curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "http://127.0.0.1:$VERIFY_PORT/api/v1/auth/login" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d "{\"tenant\":\"demo\",\"email\":\"$1\",\"password\":\"$DEMO_PASSWORD\"}"
+}
+oturum_kapat() {
+    curl -s -o /dev/null -b "$CEREZ" -c "$CEREZ" \
+        -X POST "http://127.0.0.1:$VERIFY_PORT/api/v1/auth/logout" -H "X-CSRFToken: $(csrf_basligi)"
+}
+
+bekle "POST /auth/login (demo yönetici)" "$(oturum_ac "demo@persopyro.test")" "200"
+bekle "GET  /test-ui/api/me (oturum var)" \
+    "$(kod -b "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/api/me")" "200"
+bekle "GET  /test-ui/api/dashboard" \
+    "$(kod -b "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/api/dashboard")" "200"
+kontrol_metni "GET /test-ui/api/departments (Finans görünür)" \
+    "$(curl -fsS -b "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/api/departments")" "Finans"
+bekle "GET  /test-ui/api/employees" \
+    "$(kod -b "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/api/employees")" "200"
+oturum_kapat
+
+# --- 6c-2) Kapsam görünürlüğü: Finans müdürü --------------------------------------
+bilgi "kapsam testi (6c-2): Finans müdürü = Finans + Muhasebe, İK HARİÇ"
+bekle "POST /auth/login (finans müdürü)" "$(oturum_ac "finans.mudur@persopyro.test")" "200"
+CALISAN_JSON="$(curl -fsS -b "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/api/employees")"
+BEKLEYEN_JSON="$(curl -fsS -b "$CEREZ" "http://127.0.0.1:$VERIFY_PORT/test-ui/api/leave-requests?scope=pending")"
+kontrol_metni "kapsam: Muhasebe çalışanı GÖRÜNÜR" "$CALISAN_JSON" "DEMO-002"
+kontrol_yok "kapsam: İK çalışanı GÖRÜNMEZ" "$CALISAN_JSON" "DEMO-003"
+kontrol_metni "kapsam: Muhasebe talebi onay havuzunda" "$BEKLEYEN_JSON" "IZIN_TESTI_MUHASEBE"
+kontrol_yok "kapsam: İK talebi onay havuzunda DEĞİL" "$BEKLEYEN_JSON" "IZIN_TESTI_IK"
+oturum_kapat
+
+# --- 6c-3) Yetki: çalışan rolü departman oluşturamaz (403) ------------------------
+bekle "POST /auth/login (çalışan rolü)" "$(oturum_ac "personel@persopyro.test")" "200"
+bekle "POST /test-ui/api/departments (yetkisiz → 403)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "http://127.0.0.1:$VERIFY_PORT/test-ui/api/departments" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"code":"IZINSIZ","name":"Olmamali"}')" "403"
+oturum_kapat
+rm -f "$CEREZ"
+
+kill "$SUNUCU_PID" 2>/dev/null || true
+wait "$SUNUCU_PID" 2>/dev/null || true
+SUNUCU_PID=""
+
+# --- 6c-4) Üretim varsayılanı: arayüz KAPALI (DJANGO_DEBUG=0) ---------------------
+bilgi "üretim varsayılanı (6c-4): /test-ui/* kapalı olmalı"
+# NOT: `DJANGO_SECURE_SSL_REDIRECT=0` yalnızca yerel HTTP üzerinden ölçüm içindir;
+# kapı ayarı (`TEST_UI_ENABLED`) bundan bağımsızdır ve DEBUG'a bağlıdır.
+SUNUCU_DEBUG=0 DJANGO_SECURE_SSL_REDIRECT=0 django_app_server manage.py runserver "127.0.0.1:$VERIFY_PORT" --noreload \
+    >"$SMOKE_LOG" 2>&1 &
+SUNUCU_PID=$!
+hazir=0
+for _ in $(seq 1 $((TIMEOUT_SECONDS * 2))); do
+    if curl -fsS "http://127.0.0.1:$VERIFY_PORT/api/health" >/dev/null 2>&1; then hazir=1; break; fi
+    sleep 0.5
+done
+[ "$hazir" = "1" ] || { echo "HATA: üretim modu sunucusu ayağa kalkmadı." >&2; exit 1; }
+bekle "GET  /test-ui/login/ (kapalı → 404)" "$(kod "http://127.0.0.1:$VERIFY_PORT/test-ui/login/")" "404"
+bekle "GET  /test-ui/api/me (kapalı → 404)" "$(kod "http://127.0.0.1:$VERIFY_PORT/test-ui/api/me")" "404"
+bekle "GET  /admin/ (kapalı → 404)" "$(kod "http://127.0.0.1:$VERIFY_PORT/admin/")" "404"
 kill "$SUNUCU_PID" 2>/dev/null || true
 wait "$SUNUCU_PID" 2>/dev/null || true
 SUNUCU_PID=""

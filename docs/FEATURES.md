@@ -198,7 +198,38 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 12. Öncelik sırası (önerilen)
+## 12. Geliştirme/test arayüzü (`/test-ui/`) — manuel test paneli
+
+Durum: Uygulandı (yalnızca geliştirme/test; üretim özelliği değildir)
+
+Amaç: organizasyon + izin akışını **gerçek kullanıcı gibi** tarayıcıdan uçtan uca
+denemek. Üretim kullanıcı arayüzü değildir; yeni frontend zinciri (React/Vite/
+Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
+
+- Giriş: kiracı (`slug`) + e-posta + parola ile **mevcut** oturum ucu üzerinden
+  (`/api/v1/auth/login`); yeni/paralel kimlik doğrulama yok, çıkış aynı şekilde
+  hızlı (impersonation **yok**).
+- Panel: kullanıcı, kiracı, roller, organizasyon kapsamı, çalışan kaydı, dönem
+  izin bakiyesi, kendi talepleri, onay kuyruğu — UUID yerine okunabilir adlar.
+- Departmanlar: ağaç görünümü, oluşturma, üst birim değiştirme, soft delete
+  (`org.department.manage` ∧ `OD5` kapsamı).
+- Çalışanlar: kapsamla sınırlı liste/oluşturma; birim + unvan seçimi, yönetici
+  görünürlüğü, dönem bakiyesi. **K2/K3 kişisel veri gösterilmez**.
+- İzin: talep oluşturma (gün sayısı sunucuda hesaplanır), kendi talepleri,
+  "Bekleyen İzinler" ekranı, Onayla/Reddet (red için gerekçe), iptal.
+- Kapsam testi görünür: Finans müdürü Finans + Muhasebe'yi görür, İnsan Kaynakları
+  çalışanını/talebini **görmez ve onaylayamaz**.
+- Hata gösterimi: `400/401/403/409/500` anlaşılır Türkçe mesajlarla; yetki
+  reddinde "Bu işlem için yetkiniz veya organizasyon kapsamınız yok." Güvenlik
+  ayrıntısı/yığın izi gösterilmez.
+- Güvenlik: RLS, superuser/`is_staff` bypass, authorization disable veya sabit
+  kiracı bağlamı **yok**; tüm kararlar backend servis katmanında verilir ve arayüz
+  yalnızca buton görünürlüğünü ayarlar. Üretimde varsayılan olarak **kapalıdır**
+  (tüm `/test-ui/*` yolları 404).
+- Kalıcılık: demo kullanıcılar/parolalar yalnız demo/bootstrap betiğinde üretilir;
+  migration'lara parola konmaz, depoya gerçek secret yazılmaz.
+
+## 13. Öncelik sırası (önerilen)
 
 1. Kiracı + kimlik/RBAC (ürünün güvenlik temeli)
 2. Organizasyon + çalışan kaydı

@@ -1,0 +1,384 @@
+{% extends "testui/base.html" %}
+{% block title %}Panel — Persopyro manuel test{% endblock %}
+
+{% block content %}
+<div class="tabs">
+  <button data-tab="panel" class="active">Panel</button>
+  <button data-tab="departments">Departmanlar</button>
+  <button data-tab="employees">Çalışanlar</button>
+  <button data-tab="leave">İzin Talebi</button>
+  <button data-tab="approvals">Onaylar</button>
+  <button data-tab="raw">Kapsam / Yetki</button>
+</div>
+
+<section id="tab-panel" class="tab"></section>
+<section id="tab-departments" class="tab" hidden></section>
+<section id="tab-employees" class="tab" hidden></section>
+<section id="tab-leave" class="tab" hidden></section>
+<section id="tab-approvals" class="tab" hidden></section>
+<section id="tab-raw" class="tab" hidden></section>
+{% endblock %}
+
+{% block script %}
+<script>
+  const esc = (d) => String(d === null || d === undefined ? "" : d)
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  const bos = (d) => JSON.stringify(d, null, 2);
+  let ME = null;      // /api/me yanıtı
+  let LOOKUPS = null; // form seçenekleri
+  let EMPLOYEES = []; // kapsamdaki çalışanlar
+
+  const durumPill = (durum) =>
+    `<span class="pill ${esc(durum)}">${esc(durum)}</span>`;
+
+  // --- Panel ---------------------------------------------------------------
+  async function yuklePanel() {
+    const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/dashboard");
+    const k = ME.data;
+    const calisan = data.employee;
+    const bakiyeler = data.balances.length
+      ? `<table><thead><tr><th>Tür</th><th>Dönem</th><th>Hakediş</th><th>Devreden</th>
+         <th>Düzeltme</th><th>Kullanılan</th><th>Bekleyen</th><th>Kalan</th></tr></thead><tbody>
+         ${data.balances.map((b) => `<tr><td>${esc(b.leave_type)} <span class="muted">(${esc(b.leave_type_code)})</span></td>
+           <td>${esc(b.period_year)}</td><td>${esc(b.entitled_days)}</td><td>${esc(b.carried_forward_days)}</td>
+           <td>${esc(b.adjustment_days)}</td><td>${esc(b.used_days)}</td><td>${esc(b.reserved_days)}</td>
+           <td><strong>${esc(b.available_days)}</strong></td></tr>`).join("")}
+         </tbody></table>`
+      : `<p class="muted">Bu dönem için bakiye kaydı yok (hakediş henüz üretilmemiş olabilir).</p>`;
+
+    const talepler = data.my_requests.length
+      ? `<table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Aşama</th><th></th></tr></thead><tbody>
+         ${data.my_requests.map((t) => `<tr><td>${esc(t.leave_type)}</td>
+           <td>${esc(t.start_date)} → ${esc(t.end_date)}</td><td>${esc(t.days_requested)}</td>
+           <td>${durumPill(t.status)}</td><td>${t.current_step_no ? "adım " + esc(t.current_step_no) : "—"}</td>
+           <td>${t.can_cancel ? `<button data-cancel="${esc(t.id)}">İptal</button>` : ""}</td></tr>`).join("")}
+         </tbody></table>`
+      : `<p class="muted">Henüz talebiniz yok.</p>`;
+
+    document.getElementById("tab-panel").innerHTML = `
+      <div class="card">
+        <h1>Panel</h1>
+        <div class="grid">
+          <div><h3>Kullanıcı</h3>${esc(k.user.email)}<br><span class="muted">${esc(k.user.name)}
+            · ${esc(k.user.public_id)}</span></div>
+          <div><h3>Kiracı</h3>${esc(k.tenant.name)}<br><span class="muted"><code>${esc(k.tenant.id)}</code></span></div>
+          <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r)}</span>`).join(" ") || "<span class='muted'>—</span>"}</div>
+          <div><h3>Organizasyon kapsamı</h3>
+            ${k.scope.tenant_wide ? "Kiracı geneli (TENANT)" : (k.scope.unit_count ? k.scope.unit_count + " birim + alt ağaç (UNIT)" : "yalnızca kendi kaydı (SELF)")}
+          </div>
+          <div><h3>Çalışan kaydı</h3>${calisan
+            ? `${esc(calisan.employee_no)} · ${esc(calisan.department)}${calisan.position ? " · " + esc(calisan.position) : ""}
+               ${calisan.manager ? `<br><span class="muted">yönetici: ${esc(calisan.manager.employee_no)}</span>` : ""}`
+            : "<span class='muted'>bağlı çalışan kaydı yok</span>"}</div>
+        </div>
+      </div>
+      <div class="card"><h2>İzin bakiyem (${esc(data.period_year)})</h2>${bakiyeler}
+        <p class="muted">Kalan gün <strong>backend'de üretilen</strong> kolondan gelir; arayüz hesap yapmaz.</p></div>
+      <div class="card"><h2>İzin taleplerim</h2>${talepler}</div>
+      <div class="card"><h2>Onayımı bekleyen talepler (${esc(data.pending_count)})</h2>
+        ${data.pending_requests.length ? data.pending_requests.map((t) => `
+          <div class="row" style="border-bottom:1px solid var(--line); padding:8px 0">
+            <div>${esc(t.employee_no)} · ${esc(t.department)}</div>
+            <div>${esc(t.leave_type)}</div>
+            <div>${esc(t.start_date)} → ${esc(t.end_date)} (${esc(t.days_requested)} gün)</div>
+            <div>${durumPill(t.status)}</div>
+            <div>${t.can_approve ? `<button class="primary" data-approve="${esc(t.id)}">Onayla</button>` : "<span class='muted'>yetki yok</span>"}</div>
+          </div>`).join("") : "<p class='muted'>Onayınızı bekleyen talep yok.</p>"}
+      </div>`;
+    baglaPanel();
+  }
+
+  function baglaPanel() {
+    document.querySelectorAll("[data-cancel]").forEach((d) =>
+      d.addEventListener("click", () => iptalEt(d.dataset.cancel)));
+    document.querySelectorAll("[data-approve]").forEach((d) =>
+      d.addEventListener("click", () => karar(d.dataset.approve, "approved")));
+  }
+
+  async function iptalEt(id) {
+    const neden = prompt("İptal gerekçesi (en az 5 karakter):");
+    if (!neden) return;
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/leave-requests/${id}/cancel`,
+        { method: "POST", body: { reason: neden } });
+      PERSOPYRO_UI.mesaj("ok", "Talep iptal edildi.");
+      await yuklePanel();
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  async function karar(id, kararTipi) {
+    let neden = "";
+    if (kararTipi === "rejected") {
+      neden = prompt("Red gerekçesi:");
+      if (!neden) return;
+    }
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/leave-requests/${id}/decision`,
+        { method: "POST", body: { decision: kararTipi, reason: neden } });
+      PERSOPYRO_UI.mesaj("ok", kararTipi === "approved" ? "Talep onaylandı." : "Talep reddedildi.");
+      await Promise.all([yuklePanel(), yukleOnaylar()]);
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  // --- Departmanlar --------------------------------------------------------
+  async function yukleDepartmanlar() {
+    const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/departments");
+    const cocuklar = (parentId) => data.filter((d) => d.parent_id === parentId);
+    const dal = (parentId) => {
+      const alt = cocuklar(parentId);
+      if (!alt.length) return "";
+      return `<ul>${alt.map((d) => `<li>
+        <strong>${esc(d.code)}</strong> — ${esc(d.name)}
+        <span class="muted">(${esc(d.employee_count)} çalışan${d.manager_employee_no ? ", sorumlu " + esc(d.manager_employee_no) : ""})</span>
+        ${meta.can_manage ? `
+          <button data-move="${esc(d.id)}">Taşı</button>
+          <button class="danger" data-del="${esc(d.id)}">Sil (soft)</button>` : ""}
+        ${dal(d.id)}</li>`).join("")}</ul>`;
+    };
+    document.getElementById("tab-departments").innerHTML = `
+      <div class="card"><h1>Departmanlar</h1>
+        <p class="muted">Ağaç <strong>adjacency list</strong> üzerinden gelir (OD24); yetki kararı servis katmanında verilir.</p>
+        <div class="tree"><ul>${dal(null)}</ul></div>
+      </div>
+      <div class="card"><h2>Yeni departman</h2>
+        ${meta.can_manage ? `
+        <div class="row">
+          <div><label>Kod</label><input id="dep-code" placeholder="ORNEK"></div>
+          <div><label>Ad</label><input id="dep-name" placeholder="Örnek Birim"></div>
+          <div><label>Üst birim</label><select id="dep-parent">${lookupSecenekler(LOOKUPS.data.departments)}</select></div>
+          <div><button class="primary" id="dep-create">Oluştur</button></div>
+        </div>` : `<p class="muted">Yetkiniz yok: <code>org.department.manage</code> izni ve kapsam gerekir.</p>`}
+      </div>`;
+    const olustur = document.getElementById("dep-create");
+    if (olustur) olustur.addEventListener("click", async () => {
+      try {
+        await PERSOPYRO_UI.cagir("/test-ui/api/departments", { method: "POST", body: {
+          code: document.getElementById("dep-code").value.trim(),
+          name: document.getElementById("dep-name").value.trim(),
+          parent_id: document.getElementById("dep-parent").value || null,
+        }});
+        PERSOPYRO_UI.mesaj("ok", "Departman oluşturuldu.");
+        await Promise.all([yukleDepartmanlar(), yukleLookups()]);
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    document.querySelectorAll("[data-move]").forEach((d) => d.addEventListener("click", async () => {
+      const hedef = prompt("Yeni üst birim kimliği (boş = kök):", "");
+      if (hedef === null) return;
+      try {
+        await PERSOPYRO_UI.cagir(`/test-ui/api/departments/${d.dataset.move}/move`, {
+          method: "POST", body: { parent_id: hedef || null, reason: "test arayüzü taşıma" }});
+        PERSOPYRO_UI.mesaj("ok", "Birim taşındı (kapsam yeni ağaca göre hesaplanır).");
+        await yukleDepartmanlar();
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    }));
+    document.querySelectorAll("[data-del]").forEach((d) => d.addEventListener("click", async () => {
+      const neden = prompt("Silme gerekçesi:");
+      if (!neden) return;
+      try {
+        await PERSOPYRO_UI.cagir(`/test-ui/api/departments/${d.dataset.del}/delete`, {
+          method: "POST", body: { reason: neden }});
+        PERSOPYRO_UI.mesaj("ok", "Birim soft-delete edildi (OD21).");
+        await yukleDepartmanlar();
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    }));
+  }
+
+  // --- Çalışanlar ----------------------------------------------------------
+  async function yukleCalisanlar() {
+    const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/employees");
+    EMPLOYEES = data;
+    document.getElementById("tab-employees").innerHTML = `
+      <div class="card"><h1>Çalışanlar</h1>
+        <p class="muted">Yalnızca <strong>kapsamınızdaki</strong> çalışanlar listelenir
+          (TENANT / UNIT alt ağacı / SELF). Kişisel veri (K2/K3) gösterilmez.</p>
+        <table><thead><tr><th>No</th><th>Birim</th><th>Unvan</th><th>Yönetici</th>
+          <th>Durum</th><th>Kullanıcı</th><th></th></tr></thead><tbody>
+          ${data.map((c) => `<tr><td>${esc(c.employee_no)}</td><td>${esc(c.department)}</td>
+            <td>${esc(c.position) || "—"}</td>
+            <td>${c.manager ? esc(c.manager.employee_no) : "—"}</td>
+            <td>${durumPill(c.status)}</td><td>${esc(c.user_email) || "—"}</td>
+            <td><button data-bal="${esc(c.id)}">Bakiye</button></td></tr>`).join("")}
+        </tbody></table>
+        <div id="balance-out"></div>
+      </div>
+      <div class="card"><h2>Yeni çalışan</h2>
+        ${meta.can_create ? `
+        <div class="row">
+          <div><label>Çalışan no</label><input id="emp-no" placeholder="MUH-2"></div>
+          <div><label>Birim</label><select id="emp-dep">${lookupSecenekler(LOOKUPS.data.departments)}</select></div>
+          <div><label>Unvan</label><select id="emp-pos">${lookupSecenekler(LOOKUPS.data.positions)}</select></div>
+          <div><label>İşe giriş</label><input id="emp-hire" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+          <div><label>Bağlanacak kullanıcı e-postası (opsiyonel)</label><input id="emp-user" placeholder="kullanici@ornek.test"></div>
+          <div><button class="primary" id="emp-create">Oluştur</button></div>
+        </div>` : `<p class="muted">Yetkiniz yok: <code>employee.create</code> izni ve kapsam gerekir.</p>`}
+      </div>`;
+    const olustur = document.getElementById("emp-create");
+    if (olustur) olustur.addEventListener("click", async () => {
+      try {
+        await PERSOPYRO_UI.cagir("/test-ui/api/employees", { method: "POST", body: {
+          employee_no: document.getElementById("emp-no").value.trim(),
+          department_id: document.getElementById("emp-dep").value,
+          position_id: document.getElementById("emp-pos").value || null,
+          hire_date: document.getElementById("emp-hire").value,
+          user_email: document.getElementById("emp-user").value.trim() || null,
+        }});
+        PERSOPYRO_UI.mesaj("ok", "Çalışan oluşturuldu.");
+        await yukleCalisanlar();
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    document.querySelectorAll("[data-bal]").forEach((d) => d.addEventListener("click", async () => {
+      try {
+        const { data: b, meta: m } = await PERSOPYRO_UI.cagir(
+          `/test-ui/api/employees/${d.dataset.bal}/balances`);
+        document.getElementById("balance-out").innerHTML = b.length
+          ? `<h3>${esc(m.employee_no)} — bakiye</h3><table><thead><tr><th>Tür</th><th>Hakediş</th>
+             <th>Kullanılan</th><th>Bekleyen</th><th>Kalan</th></tr></thead><tbody>
+             ${b.map((x) => `<tr><td>${esc(x.leave_type)}</td><td>${esc(x.entitled_days)}</td>
+               <td>${esc(x.used_days)}</td><td>${esc(x.reserved_days)}</td>
+               <td><strong>${esc(x.available_days)}</strong></td></tr>`).join("")}</tbody></table>`
+          : `<p class="muted">${esc(m.employee_no)} için bu dönemde bakiye kaydı yok.</p>`;
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    }));
+  }
+
+  // --- İzin talebi ---------------------------------------------------------
+  async function yukleIzin() {
+    const turler = LOOKUPS.data.leave_types;
+    const bugun = new Date().toISOString().slice(0, 10);
+    document.getElementById("tab-leave").innerHTML = `
+      <div class="card"><h1>İzin talebi</h1>
+        <p class="muted">Gün sayısı <strong>sunucuda</strong> hesaplanır (takvim günü);
+          istemci değeri gönderilmez. Durum adları backend kapalı kümesindendir.</p>
+        <div class="row">
+          <div><label>Çalışan</label><select id="lr-emp">${[
+            ...(ME.data.employee ? [`<option value="${esc(ME.data.employee.id)}">kendim — ${esc(ME.data.employee.employee_no)}</option>`] : []),
+            ...EMPLOYEES.map((c) => `<option value="${esc(c.id)}">${esc(c.employee_no)} · ${esc(c.department)}</option>`),
+          ].join("")}</select></div>
+          <div><label>İzin türü</label><select id="lr-type">${turler.map((t) =>
+            `<option value="${esc(t.id)}">${esc(t.name)}${t.requires_document ? " (belge zorunlu)" : ""}</option>`).join("")}</select></div>
+          <div><label>Başlangıç</label><input id="lr-start" type="date" value="${bugun}"></div>
+          <div><label>Bitiş</label><input id="lr-end" type="date" value="${bugun}"></div>
+          <div><label>Gerekçe</label><input id="lr-reason" placeholder="Yıllık izin"></div>
+          <div><button class="primary" id="lr-create">Talep oluştur ve onaya sun</button></div>
+        </div>
+        <div id="lr-out"></div>
+      </div>
+      <div class="card"><h2>Taleplerim</h2><div id="lr-mine"></div></div>`;
+    document.getElementById("lr-create").addEventListener("click", async () => {
+      try {
+        const { data: t } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests", {
+          method: "POST", body: {
+            employee_id: document.getElementById("lr-emp").value,
+            leave_type_id: document.getElementById("lr-type").value,
+            start_date: document.getElementById("lr-start").value,
+            end_date: document.getElementById("lr-end").value,
+            reason: document.getElementById("lr-reason").value.trim(),
+            submit: true,
+          }});
+        document.getElementById("lr-out").innerHTML = `
+          <p class="muted" style="margin-top:10px">Sunucunun hesapladığı gün: 
+             <strong>${esc(t.days_requested)}</strong> · durum: ${durumPill(t.status)}</p>`;
+        PERSOPYRO_UI.mesaj("ok", "Talep oluşturuldu ve onaya sunuldu.");
+        await Promise.all([yukleIzinTaleplerim(), yuklePanel(), yukleOnaylar()]);
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    await yukleIzinTaleplerim();
+  }
+
+  async function yukleIzinTaleplerim() {
+    const hedef = document.getElementById("lr-mine");
+    if (!hedef) return;
+    const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests?scope=mine");
+    hedef.innerHTML = data.length
+      ? `<table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Gerekçe</th></tr></thead><tbody>
+         ${data.map((t) => `<tr><td>${esc(t.leave_type)}</td><td>${esc(t.start_date)} → ${esc(t.end_date)}</td>
+           <td>${esc(t.days_requested)}</td><td>${durumPill(t.status)}</td><td>${esc(t.reason)}</td></tr>`).join("")}
+         </tbody></table>`
+      : `<p class="muted">Kayıt yok.</p>`;
+  }
+
+  // --- Onaylar -------------------------------------------------------------
+  async function yukleOnaylar() {
+    const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests?scope=pending");
+    document.getElementById("tab-approvals").innerHTML = `
+      <div class="card"><h1>Bekleyen izin talepleri</h1>
+        <p class="muted">Yalnızca <strong>yetkiniz ve kapsamınız</strong> içindeki talepler listelenir;
+          onay/red kararı backend'de <code>izin ∧ kapsam ∧ adım sahipliği ∧ farklı aktör</code> ile doğrulanır.</p>
+        ${data.length ? `<table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
+          <th>Gün</th><th>Durum</th><th>Onaylama</th></tr></thead><tbody>
+          ${data.map((t) => `<tr><td>${esc(t.employee_no)}</td><td>${esc(t.department)}</td>
+            <td>${esc(t.leave_type)}</td><td>${esc(t.start_date)} → ${esc(t.end_date)}</td>
+            <td>${esc(t.days_requested)}</td><td>${durumPill(t.status)}${t.requires_document && !t.document_ref ? " <span class='pill rejected'>belge yok</span>" : ""}</td>
+            <td>${t.can_approve ? `<button class="primary" data-ok="${esc(t.id)}">Onayla</button>
+              <button class="danger" data-no="${esc(t.id)}">Reddet</button>` : "<span class='muted'>yetki/kapsam yok</span>"}</td>
+            </tr>`).join("")}</tbody></table>` : "<p class='muted'>Bekleyen talep yok.</p>"}
+      </div>`;
+    document.querySelectorAll("[data-ok]").forEach((d) =>
+      d.addEventListener("click", () => karar(d.dataset.ok, "approved")));
+    document.querySelectorAll("[data-no]").forEach((d) =>
+      d.addEventListener("click", () => karar(d.dataset.no, "rejected")));
+  }
+
+  // --- Kapsam / yetki özeti (elle test için görünürlük) --------------------
+  function yukleOzet() {
+    const k = ME.data;
+    document.getElementById("tab-raw").innerHTML = `
+      <div class="card"><h1>Kapsam ve yetki (oturumdaki kullanıcı)</h1>
+        <div class="grid">
+          <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r)}</span>`).join(" ") || "—"}</div>
+          <div><h3>Kapsam</h3><pre>${esc(bos(k.scope))}</pre></div>
+          <div><h3>Çalışan</h3><pre>${esc(bos(k.employee))}</pre></div>
+        </div>
+        <h3>Etkin izinler (${k.permissions.length})</h3>
+        <p>${k.permissions.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>
+        <p class="muted">Bu liste yalnızca arayüz kolaylığı içindir; <strong>tek güvenlik kontrolü değildir</strong>.</p>
+      </div>`;
+  }
+
+  // --- Ortak ---------------------------------------------------------------
+  function lookupSecenekler(liste) {
+    return [`<option value="">(seçiniz)</option>`]
+      .concat(liste.map((x) => `<option value="${esc(x.id)}">${esc(x.code)} — ${esc(x.name)}</option>`))
+      .join("");
+  }
+
+  async function yukleLookups() {
+    LOOKUPS = await PERSOPYRO_UI.cagir("/test-ui/api/lookups");
+  }
+
+  const YUKLEYICILER = {
+    panel: yuklePanel,
+    departments: yukleDepartmanlar,
+    employees: yukleCalisanlar,
+    leave: yukleIzin,
+    approvals: yukleOnaylar,
+    raw: async () => yukleOzet(),
+  };
+
+  async function sekmeAc(ad) {
+    document.querySelectorAll(".tabs button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.tab === ad));
+    Object.keys(YUKLEYICILER).forEach((k) => {
+      document.getElementById("tab-" + k).hidden = k !== ad;
+    });
+    try {
+      await YUKLEYICILER[ad]();
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  document.querySelectorAll(".tabs button").forEach((b) =>
+    b.addEventListener("click", () => sekmeAc(b.dataset.tab)));
+
+  (async () => {
+    try {
+      ME = await PERSOPYRO_UI.cagir("/test-ui/api/me");
+      await yukleLookups();
+      await sekmeAc("panel");
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+      if (hata.message.includes("Oturum")) window.location.href = "/test-ui/login/";
+    }
+  })();
+</script>
+{% endblock %}

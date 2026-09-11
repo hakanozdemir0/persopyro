@@ -1,0 +1,142 @@
+{% comment %}
+Manuel test arayüzü — ortak kabuk (yalnızca geliştirme).
+
+Stil/JS bilinçli olarak gömülüdür: yeni bir frontend zinciri (npm/Vite/Tailwind)
+kurulmaz; ek bağımlılık yoktur.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Persopyro — Manuel Test Arayüzü{% endblock %}</title>
+  <style>
+    :root {
+      --fg: #12181f; --muted: #5b6b7c; --bg: #f5f7fa; --card: #ffffff;
+      --line: #d9e0e8; --accent: #1f6feb; --ok: #127a44; --warn: #9a6b00;
+      --err: #b3261e; --dev: #7a3e9d;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    header { background: var(--card); border-bottom: 1px solid var(--line);
+      padding: 12px 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    header .brand { font-weight: 700; }
+    .badge { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+      background: #f0e6f7; color: var(--dev); border: 1px solid #ddc8ec; }
+    .badge.dev::after { content: " · yalnızca test"; font-weight: 500; }
+    header .spacer { margin-left: auto; }
+    main { max-width: 1150px; margin: 20px auto; padding: 0 16px 60px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 16px 18px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    h2 { font-size: 16px; margin: 0 0 10px; }
+    h3 { font-size: 14px; margin: 14px 0 6px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: .04em; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
+    input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+      border-radius: 8px; font: inherit; background: #fff; }
+    button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+      background: #fff; font: inherit; cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.danger { background: #fff; border-color: #e6b3b0; color: var(--err); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line);
+      vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; color: var(--muted); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+    .row > div { flex: 1 1 160px; }
+    .muted { color: var(--muted); }
+    .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+    .pill.approved { background: #e7f5ec; color: var(--ok); border-color: #bfe3cd; }
+    .pill.pending { background: #fdf3e0; color: var(--warn); border-color: #efd9ab; }
+    .pill.rejected, .pill.canceled { background: #fdeceb; color: var(--err); border-color: #f0c2bf; }
+    .pill.taken, .pill.draft { background: #eef2f7; color: var(--muted); }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+    .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .msg { border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; display: none; }
+    .msg.show { display: block; }
+    .msg.error { background: #fdeceb; border: 1px solid #f0c2bf; color: var(--err); }
+    .msg.ok { background: #e7f5ec; border: 1px solid #bfe3cd; color: var(--ok); }
+    .tree ul { list-style: none; margin: 4px 0 4px 18px; padding: 0;
+      border-left: 1px dashed var(--line); }
+    .tree li { padding: 4px 0; }
+    code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+    .login-wrap { max-width: 420px; margin: 8vh auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand">Persopyro</span>
+    <span class="badge dev">Manuel Test Arayüzü</span>
+    {% block header_extra %}{% endblock %}
+    {% if user.is_authenticated %}
+      <span class="spacer"></span>
+      <span class="muted">{{ user.email }}</span>
+      <button id="logout-btn" type="button">Çıkış</button>
+    {% endif %}
+  </header>
+  <main>
+    <div id="global-msg" class="msg"></div>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // Ortak yardımcılar: CSRF'li fetch + anlaşılır hata mesajları.
+    window.PERSOPYRO_UI = {
+      csrf() {
+        const m = document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/);
+        return m ? decodeURIComponent(m[2]) : "";
+      },
+      mesaj(tip, metin) {
+        const el = document.getElementById("global-msg");
+        el.className = "msg show " + tip;
+        el.textContent = metin;
+        if (tip === "ok") setTimeout(() => { el.className = "msg"; }, 4000);
+      },
+      // HTTP durum kodlarını kullanıcıya anlaşılır biçimde eşler.
+      hata(statusi, govde) {
+        const e = (govde && govde.error) || {};
+        const eslesme = {
+          400: "Girdi geçersiz: ",
+          401: "Oturum bulunamadı veya süresi doldu. Lütfen yeniden giriş yapın.",
+          403: "Bu işlem için yetkiniz veya organizasyon kapsamınız yok.",
+          404: "Kayıt bulunamadı (veya kapsamınız dışında).",
+          409: "İşlem mevcut durumla çakışıyor: ",
+          500: "Sunucuda beklenmeyen bir hata oluştu. Ayrıntı sunucu günlüğünde.",
+        };
+        if (eslesme[statusi] === undefined) return "Beklenmeyen yanıt (" + statusi + ")";
+        if (statusi === 500) return eslesme[500];
+        const detay = e.message || "";
+        return (eslesme[statusi] + detay).trim();
+      },
+      async cagir(yol, { method = "GET", body = null } = {}) {
+        const basliklar = { "Accept": "application/json" };
+        const secenekler = { method, headers: basliklar, credentials: "same-origin" };
+        if (body !== null) {
+          basliklar["Content-Type"] = "application/json";
+          basliklar["X-CSRFToken"] = this.csrf();
+          secenekler.body = JSON.stringify(body);
+        }
+        const yanit = await fetch(yol, secenekler);
+        let govde = null;
+        try { govde = await yanit.json(); } catch (e) { govde = null; }
+        if (!yanit.ok) throw new Error(this.hata(yanit.status, govde));
+        return govde;
+      },
+    };
+    const cikis = document.getElementById("logout-btn");
+    if (cikis) {
+      cikis.addEventListener("click", async () => {
+        try {
+          await PERSOPYRO_UI.cagir("/api/v1/auth/logout", { method: "POST" });
+        } catch (e) { /* oturum zaten kapalı olabilir */ }
+        window.location.href = "/test-ui/login/";
+      });
+    }
+  </script>
+  {% block script %}{% endblock %}
+</body>
+</html>

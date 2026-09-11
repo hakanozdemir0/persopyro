@@ -1,0 +1,57 @@
+"""
+Manuel test arayüzü URL'leri (önek: `/test-ui/`).
+
+Üretimde **kaydedilmez**: `config/urls.py` bu modülü yalnızca `TEST_UI_ENABLED`
+açıkken dahil eder. Ek olarak her görünüm/uç, ayar kapalıysa 404 döner
+(savunma derinliği).
+
+Giriş/çıkış için **yeni uç yoktur**: mevcut oturum uçları kullanılır
+(`/api/v1/auth/login`, `/api/v1/auth/logout`).
+"""
+
+from django.urls import path
+
+from apps.testui import api, views
+
+urlpatterns = [
+    # Sayfalar
+    path("", views.app_page, name="test-ui-app"),
+    path("login/", views.login_page, name="test-ui-login"),
+    # JSON uçları (yalnızca bu ad alanı: üretim `/api/v1` sözleşmesine dokunulmaz)
+    path("api/me", api.MeView.as_view(), name="test-ui-me"),
+    path("api/dashboard", api.DashboardView.as_view(), name="test-ui-dashboard"),
+    path("api/lookups", api.LookupView.as_view(), name="test-ui-lookups"),
+    path("api/departments", api.DepartmentListView.as_view(), name="test-ui-departments"),
+    path(
+        "api/departments/<str:department_id>/move",
+        api.DepartmentMoveView.as_view(),
+        name="test-ui-department-move",
+    ),
+    path(
+        "api/departments/<str:department_id>/delete",
+        api.DepartmentDeleteView.as_view(),
+        name="test-ui-department-delete",
+    ),
+    path("api/employees", api.EmployeeListView.as_view(), name="test-ui-employees"),
+    path(
+        "api/employees/<str:employee_id>/move",
+        api.EmployeeMoveView.as_view(),
+        name="test-ui-employee-move",
+    ),
+    path(
+        "api/employees/<str:employee_id>/balances",
+        api.EmployeeBalanceView.as_view(),
+        name="test-ui-employee-balances",
+    ),
+    path("api/leave-requests", api.LeaveRequestListView.as_view(), name="test-ui-leave-requests"),
+    path(
+        "api/leave-requests/<str:request_id>/decision",
+        api.LeaveRequestDecisionView.as_view(),
+        name="test-ui-leave-decision",
+    ),
+    path(
+        "api/leave-requests/<str:request_id>/cancel",
+        api.LeaveRequestCancelView.as_view(),
+        name="test-ui-leave-cancel",
+    ),
+]
