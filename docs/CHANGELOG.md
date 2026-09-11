@@ -5,6 +5,81 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.11.0] — 2026-09-11 — OD20, OD21, OD22 KAPATILDI (mimari karar; kod yok)
+
+Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:
+`git status` yalnızca `.md` gösterir).
+
+### Kapatılan kararlar
+
+- **OD20 — Kiracı üst verisinin sahibi.** `hr.tenants` **canonical** kalır;
+  `platform.tenant_registry` **minimum referans indeksi**dir (ikinci tam kopya değil).
+  Alan sahipliği tablosu yazıldı (kiracı alanları → `hr.tenants`; `plan_code`,
+  `billing_ref`, `internal_note` → registry). Senkronizasyon **tek yönlü**
+  (`hr.tenants` → registry) ve **fail-closed**: tetikleyici aynı işlemde çalışır,
+  yansı yazılamazsa kaynak yazımı geri alınır → sapma oluşmaz. Ters yön yoktur.
+- **OD21 — Soft delete ve benzersizlik politikası.** `deleted_at` = silme,
+  `status` = yaşam döngüsü, **`is_active` sütunu yok** (yalnızca türeyen özellik).
+  Fiziksel `DELETE` yalnızca CASCADE yansıları, KVKK saklama sonu ve geri alınmış
+  migration için. **Sessiz yeniden etkinleştirme yasak** (`*.restore` izni + kayıt).
+  Benzersizlik **kısmi indekslerle** (`WHERE deleted_at IS NULL`); **istisnalar:
+  `public_id` ve kiracı `slug`ı kalıcı rezerve**. `audit_logs` `deleted_at` almaz.
+  Tablo bazlı politika (users, employees, departments, positions, roles, documents,
+  org ilişkileri) tek tek yazıldı.
+- **OD22 — Platform API token'ları.** Yalnızca `platform.tokens`; ham token
+  saklanmaz (SHA-256 özeti); zorunlu `scope` + `purpose`; `expires_at` NOT NULL,
+  `revoked_at` ile iptal kaydı; `interactive` ≤ 24 saat, `service` ≤ 90 gün ve
+  **superadmin kapsamı yasak**; boş kapsam reddedilir. Platform token'ı **tenant RLS
+  sınırını aşamaz**; kiracı verisi yalnızca erişim onayı mekanizmasından geçer.
+
+### Ortaya çıkan SECURITY FINDING'ler (kod düzeltilmedi, raporlandı)
+
+- **F7 (Yüksek) — Soft-delete yetkiyi kaldırmıyor.** `SoftDeleteModel` var ama
+  filtreleyen yönetici yok; `apps/rbac/services/permissions.py` içindeki
+  `_active_role_ids`, `RolePermission`, `UserPermissionOverride` sorguları
+  `deleted_at` filtresi kullanmıyor → silinmiş rol/atama/`allow` istisnası yetki
+  vermeye devam eder. Bugün sömürü yolu yok (silme servisi yazılmadı) ama ilk
+  "rolü sil" özelliğiyle gerçek açık hâline gelir. Ayrıca `create_default_roles`
+  içindeki `get_or_create` silinmiş rolü "var" sayıp atlıyor. Kapatma: M25/M26/M28.
+- **F8 (Orta) — Tenant token'ı kapsamsız ve iptal izi yok.** `hr.api_tokens`'ta
+  `scope`/`revoked_at` yok, TTL sabit 30 gün → token sahibinin tüm yetkilerini
+  taşır, iptal kanıtlanamaz. Platform tarafı OD22 ile kapatıldı; tenant tarafı
+  **OD26** olarak açıldı (geriye dönük uyumlu ara adım: `revoked_at`).
+
+### Yeni OPEN DECISION
+
+- **OD26 — Tenant API token modelinin hizalanması** (kapsam + iptal izi). Öneri:
+  `scope`, `purpose`, `revoked_at` ekle (OD22 ile simetri).
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/AUTHORIZATION.md` | OD20/OD21/OD22 **KAPALI** (altı başlıklı yapı: karar, gerekçe, şema/migration etkisi, güvenlik etkisi, mevcut kodla çakışma, seçenekler); OD26 eklendi; durum satırı ve özet karar sayıları (kapalı 8, açık 18) |
+| `docs/DATABASE.md` | `platform.tenant_registry` (authoritative alan tablosu + tek yönlü fail-closed senkron) ve `platform.tokens` (alanlar, TTL/kapsam kuralları, iptal) kartları güncellendi; indeks planına kısmi benzersizlikler + `tenants` istisnası eklendi; **M25–M28** eklendi (soft-delete yönetici standardı, yetki çözümlemesi `deleted_at`, kısmi e-posta indeksi, `get_or_create` davranışı); H2/H4 karara bağlandı; bölüm I'de OD20/21/22 kapalı + OD26 |
+| `docs/SECURITY.md` | Tehdit modeline **T20** (yetki çürümesi) ve **T21** (kapsamsız token) eklendi; **§5.1 Açık bulgular (SECURITY FINDING)** bölümü açıldı (F7, F8); §6'ya platform token kuralları |
+| `docs/ARCHITECTURE.md` | **K24, K25, K26** karar kayıtları eklendi |
+| `docs/PROJECT.md` | PostgreSQL sürümü (18 / 18.6) ve şema listesi (`hr` + `platform`) düzeltildi; knox kalıntısı giderildi; `DATABASE.md` tanımı güncellendi |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Doğrulanan / doğrulanmayan
+
+- **Doğrulandı (kaynak okuma):** `hr.api_tokens` alanları ve `API_TOKEN_TTL_HOURS=720`
+  (`config/settings.py`), `ApiToken` modeli (`apps/accounts/models.py`),
+  `SoftDeleteModel` (`apps/common/models.py`), yetki çözümlemesi
+  (`apps/rbac/services/permissions.py`), rol servisi (`apps/rbac/services/roles.py`),
+  `Tenant`/`User` modelleri; mevcut tam benzersiz indeks listesi ve
+  `tenant_directory` tetikleyici deseni (önceki turda ölçülmüştü).
+- **Doğrulanmadı (kasıtlı):** hiçbir kod/migration/DB değişikliği yapılmadı;
+  kararların uygulanması M-listesi iş kalemlerine bırakıldı.
+
+### Kalan
+
+`docs/DATABASE.md` M25–M28 (F7 kapatma) ve M3 (platform token tablosu);
+OD26 kararı; mevcut engelleyici açık karar yok.
+
+---
+
 ## [0.10.0] — 2026-09-11 — OD19 KAPATILDI: Django admin / `auth_*` paralel yetki yolu (kod yok)
 
 Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:

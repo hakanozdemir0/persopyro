@@ -47,6 +47,8 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T17** | **Yedek/export üzerinden toplu veri sızması** | **Yüksek** | **Maskeli varsayılan export, kayıtlı/kısıtlı toplu indirme, şifreli yedek** 🔜 |
 | **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **Karar verildi (OD19 — kapalı): `/admin/` kaldırılır, `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez.** Uygulama bekliyor 🔜 |
 | **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
+| **T20** | **Yetki çürümesi: soft-delete edilmiş rol, atama veya izin istisnası yetki vermeye devam ediyor** | **Yüksek** | **OD21 kararı: yetki çözümlemesi `deleted_at IS NULL` uygular; `objects` silinmişi gizler; geri alma açık izin + kayıt gerektirir (F7)** ⚠️ uygulama bekliyor |
+| **T21** | **Kapsamsız/uzun ömürlü API token'ı: token kullanıcının tüm yetkilerini taşır, iptalin denetim izi kalmaz** | **Orta** | **Platform token'ları OD22 ile sınırlandı (zorunlu kapsam, `revoked_at`, kısa TTL); tenant tarafı OD26 kararı bekliyor (F8)** ⚠️ |
 
 ---
 
@@ -185,12 +187,37 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
   tabloları uygulama rolünde yalnızca **SELECT** olmalıdır; `ALTER DEFAULT
   PRIVILEGES` ile gelen geniş DML her yeni tabloda daraltılır 🔜
   (`docs/DATABASE.md` D.6).
+
 - **Platform rolleri ayrı kimlik alanında yaşar** 🔜 KARAR (OD3 — kapalı): platform
   kullanıcıları kiracı kullanıcı tablosunda barındırılmaz; kiracı RLS politikaları
   onlar için gevşetilmez.
 - **Gerekçe niteliği ve çift onay denetlenir** 🔜 KARAR (OD4 — kapalı): boş veya
   anlamsız gerekçeyle erişim talebi açılamaz; platform tarafında iki farklı
   onaylayıcı aranır.
+
+### 5.1 Açık bulgular (SECURITY FINDING)
+
+**F7 — Soft-delete yetkiyi kaldırmıyor (Yüksek, açık).** Ölçüm:
+`apps/common/models.py` içindeki `SoftDeleteModel` alanı sağlıyor ama **filtreleyen
+yönetici tanımlı değil**; `apps/rbac/services/permissions.py` içindeki
+`_active_role_ids`, `RolePermission` ve `UserPermissionOverride` sorguları
+**`deleted_at` filtresi kullanmıyor**. Sonuç: soft-delete edilmiş bir rol, rol
+ataması veya `allow` istisnası **yetki vermeye devam eder** (yetki çürümesi).
+Bugün **aktif bir sömürü yolu yoktur** (silme/geri alma servisi henüz yazılmadı),
+ancak politika ve temel model hazır olduğu için ilk "rolü sil" özelliğiyle birlikte
+gerçek bir açık hâline gelir. Ayrıca `create_default_roles` içindeki `get_or_create`
+silinmiş rolü "var" sayıp atlar (işlevsel hata). **Kapatma yolu (OD21 kararı):**
+`objects` yöneticisi silinmişi gizler, yetki çözümlemesi `deleted_at IS NULL`
+uygular, geri alma açık `*.restore` izni + denetim kaydı gerektirir (T20).
+
+**F8 — Tenant API token'ı kapsamsız ve iptal izi yok (Orta, açık).** Ölçüm:
+`hr.api_tokens` alanları `tenant_id, user_id, token_hash, label, expires_at,
+last_used_at, created_at`tır; **`scope` ve `revoked_at` yoktur**, TTL sabittir
+(`API_TOKEN_TTL_HOURS=720` = 30 gün). Sonuç: bir token sahibinin **tüm** yetkilerini
+taşır (en az yetki kimlik bilgisi seviyesinde uygulanmaz) ve iptal satır silme
+olduğu için **iptal edildiği kanıtlanamaz**. Platform token'ları OD22 ile
+sınırlandırıldı; tenant tarafı **OD26** kararına bağlandı. Geriye dönük uyumlu ara
+adım: `revoked_at` eklemek (kapsam kararı ayrı) (T21).
 
 ---
 
@@ -219,6 +246,13 @@ erişim.
   erişim) alarm üretir 🔜.
 - **Kiracıya şeffaflık:** kiracı yöneticisi kendi verisine yapılan platform
   erişimlerini görür ❓OD15.
+- **Platform token'ları (OD22 — kapalı):** yalnızca `platform.tokens`'ta tutulur;
+  ham değer saklanmaz (yalnızca SHA-256 özeti); **kapsam (`scope`) ve amaç
+  (`purpose`) zorunludur**; `expires_at` zorunlu, `revoked_at` ile iptal kayıtlıdır;
+  `interactive` TTL ≤ 24 saat, `service` TTL ≤ 90 gün ve **superadmin izin kümesiyle
+  üretilemez**; boş kapsamla üretim reddedilir. **Platform token'ı tenant RLS sınırını
+  hiçbir koşulda aşamaz** (platform rolü `NOBYPASSRLS`); kiracı verisi gerektiğinde
+  erişim onayı mekanizmasından geçer. Uzun ömürlü sınırsız SUPERADMIN token **yasaktır**. 🔜
 - **Acil durum (break-glass):** önceden onay alınamayan gerçek acil durumlarda
   erişim açılabilir; ancak **sonradan gözden geçirme** zorunludur ve kayıt
   silinemez. Sınırları (kim kullanabilir, nasıl incelenir) **OD17** kararına

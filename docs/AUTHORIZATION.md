@@ -839,8 +839,8 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1, OD2, OD3, OD4 ve OD19 KAPATILDI.** Kararlar
-aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
+**Durum (2026-09-11):** **OD1, OD2, OD3, OD4, OD19, OD20, OD21 ve OD22 KAPATILDI.**
+Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
 
@@ -1095,41 +1095,147 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   bırak. (C) Olduğu gibi bırak. → **(A) seçildi; (B) yalnızca yukarıdaki
   ön koşullarla yeniden değerlendirilebilir; (C) reddedildi.**
 
-### OD20 — Kiracı üst verisinin sahibi (platform kaydı) 🆕
+### OD20 — Kiracı üst verisinin sahibi (platform kaydı) — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** Platformun kiracıları listelemesi gerekir; `hr.tenants` FORCE RLS
-  ile korunur ve **bağlam kurulmadan okunamaz** (ölçüldü: bağlamsız sorgu 0 satır).
-  Politika gevşetilmeyeceğine göre (OD3) listeleme kaynağı bir yansı olmalı.
-- **Seçenekler:** (A) `hr.tenants` tek kaynak; `platform.tenant_registry` yalnızca
-  yansı + ticari alanlar (tetikleyiciyle güncellenir). (B) Platform registry tek
-  kaynak, `hr.tenants` yalnızca kiracı-içi ayarlar. (C) İki tablo birleşik görünüm.
-- **Öneri:** (A). Kiracı verisinin sahibi kiracıdır (KVKK); platform yalnızca
-  operasyon için gerekli alanları yansıtır.
-- **Etki:** `docs/DATABASE.md` B.2/M4/M21, tutarlılık testi (H2).
+- **KARAR:** `hr.tenants` **canonical / source-of-truth** kalır. `platform.tenant_registry`
+  tenant verisinin ikinci tam kopyası **değildir**; platform operasyonları için gereken
+  **minimum referans indeksi**dir. **İki bağımsız mutable tenant kaynağı oluşturulmaz.**
+- **Alan sahipliği (authoritative):**
 
-### OD21 — Soft-delete ile benzersizlik çakışması 🆕
+  | Alan | Authoritative tablo | Registry'de var mı? |
+  |---|---|---|
+  | `name`, `legal_name`, `tax_number`, `email`, `phone`, `address`, `country`, `city` | `hr.tenants` | ❌ (yalnızca `name` gerekirse yansı) |
+  | `slug`, `domain` | `hr.tenants` | ✅ yansı (giriş yönlendirmesi ve listeleme için) |
+  | `status` (active/trial/suspended/canceled) | `hr.tenants` | ✅ yansı (platform listeleme/karar için) |
+  | `max_users`, `max_storage_mb`, `settings` | `hr.tenants` | ✅ yalnızca limit alanları (raporlama için) |
+  | `plan_code`, `billing_ref`, `internal_note` (ticari/operasyon) | **`platform.tenant_registry`** | ✅ tek sahibi platform |
+  | `created_at` | `hr.tenants` | ✅ yansı |
+  | `deleted_at` | `hr.tenants` | ✅ yansı (liste filtresi) |
+- **Senkronizasyon yönü:** **tek yönlü:** `hr.tenants` → `platform.tenant_registry`,
+  `SECURITY DEFINER` tetikleyiciyle (mevcut `tenant_directory` ile aynı kanıtlanmış
+  desen). Ters yön **yoktur**: platform, kiracı alanlarını registry üzerinden değiştirmez;
+  değiştirmesi gerekirse platform servisi, geçerli erişim onayıyla **`hr.tenants`'ı
+  kiracı bağlamında** yazar (tek yazar) → tetikleyici yansıyı günceller.
+- **Başarısızlık davranışı:** tetikleyici **aynı işlem içinde** çalışır; yansı yazımı
+  başarısız olursa `hr.tenants` yazımı da geri alınır → **sapma oluşmaz (fail-closed)**.
+  Tetikleyici asla "sessizce yut" yapmaz.
+- **Gerekçe:** Kiracı verisinin sahibi kiracıdır (KVKK'da veri sorumlusu); iki mutable
+  kaynak, "hangi kayıt doğru?" belirsizliği ve yetki kararlarında (askıya alınmış kiracı
+  girişi gibi) tutarsızlık üretir. Tek yönlü yansı, RLS politikalarinı gevşetmeden
+  (OD3) platform listelemesini mümkün kılar.
+- **Şema/migration etkisi:** `platform.tenant_registry` alan kümesi yukarıdakiyle
+  **sınırlandırılır**; yansı tetikleyicisi `hr.tenants` üzerine kurulur; mevcut
+  `hr.tenant_directory` **korunur** (giriş öncesi okuma, uygulama rolünde salt-okunur)
+  ve registry ile tutarlılığı test edilir (M4, M21, F6, F7).
+- **Güvenlik etkisi:** Yansı yalnızca kiracı verisi **olmayan** alanları taşır; registry
+  üzerinden kiracı iş verisine erişim doğmaz. Platform alan yazımı yalnızca platform
+  rolünde; uygulama rolünün registry'de yetkisi yoktur.
+- **Mevcut kodla çakışma:** Bugün `platform` şeması **yok**; `tenant_directory`
+  tetikleyicisi (`sync_tenant_directory`) yansı deseninin çalıştığını kanıtlıyor →
+  çakışma yok, desen yeniden kullanılıyor. `hr.tenants.slug/domain` tekil kısıtları
+  OD21 ile uyumlu hale getirilir.
+- **Seçenekler (kayıt için):** (A) `hr.tenants` canonical + minimum yansı. (B) Registry
+  canonical. (C) Birleşik görünüm. → **(A) seçildi; (B) ve (C) reddedildi.**
 
-- **Neden açık (ölçüm):** `users_tenant_email_uniq (tenant_id, email)`,
+### OD21 — Soft delete ve benzersizlik politikası — **KAPALI** ✅ (2026-09-11)
+
+- **KARAR (standart):**
+  1. **`deleted_at`** = silme işareti (audit/geçmiş gerektiren iş kayıtları).
+     **`status`** = yaşam döngüsü (active/trial/suspended/canceled, aktif/pasif).
+     **`is_active` sütunu açılmaz**; yalnızca `status` + `deleted_at`'ten türeyen
+     Python özelliği olarak kalır (mevcut `User.is_active` deseni standarttır).
+  2. Fiziksel `DELETE` yalnızca (a) kiracı silme/CASCADE yansıları, (b) KVKK saklama
+     süresi sonu anonimleştirme/silme, (c) yeni modülün geri alınmış migration'ı
+     için kullanılır. İş kayıtlarında kullanılmaz.
+  3. **Sessiz yeniden etkinleştirme yasaktır:** silinmiş kaydın yeniden açılması
+     açık bir `*.restore` izni + denetim kaydı gerektirir. `get_or_create` benzeri
+     akışlar silinmiş kaydı **canlandıramaz** (silinmişi görmez).
+  4. **Denetim kaydı asla soft delete edilmez:** `hr.audit_logs` `deleted_at`
+     kolonu **almaz**; append-only + `UPDATE/DELETE` yetkisi yok kuralı korunur.
+- **Tablo bazlı politika ve benzersizlik:**
+
+  | Tablo | Silme | Benzersiz alan | Karar |
+  |---|---|---|---|
+  | `users` | `deleted_at` + `status` (pasifleştirme = status; silme = deleted_at) | `(tenant_id, email)`, `public_id` | e-posta **kısmi** (`WHERE deleted_at IS NULL`) → yeniden kullanılabilir; **`public_id` kısmi DEĞİL** (kimlik asla yeniden kullanılmaz — OD2/OD25) |
+  | `employees` | `deleted_at` (işten çıkış = `termination_date` + status) | `(tenant_id, employee_no)` | **kısmi** |
+  | `departments`, `positions` | `deleted_at` (boş birim arşivlenir) | `(tenant_id, code)` | **kısmi** |
+  | `roles` | `deleted_at` (varsayılan roller silinemez, `is_assignable` ile kapatılır) | `(tenant_id, code)` | **kısmi** |
+  | `user_roles` (atama) | `deleted_at` (+ `expires_at`) | `(user_id, role_id)` | **kısmi** |
+  | `user_permission_overrides` | `deleted_at` | `(user_id, permission_id)` | **kısmi** |
+  | `documents` | `deleted_at` + mantıksal arşiv; hukuki saklama varsa silinemez | varsa belge numarası | **kısmi** |
+  | `organization` ilişkileri (`employee_manager`) | `deleted_at` (+ `effective_to`) | aktif çift | **kısmi** (`WHERE deleted_at IS NULL AND effective_to IS NULL`) |
+  | `tenants` | `deleted_at` (iptal/arşiv) | `slug`, `domain` | **istisna: kısmi DEĞİL** → şirket slug'ı **kalıcı olarak rezerve** (kimlik karışıklığı, destek/denetim belirsizliği ve `public_id` ön ek tutarlılığı için — OD25) |
+  | `audit_logs` | **silinemez** | — | `deleted_at` eklenmez |
+  | `permissions` (global katalog) | **silinemez** | `code` (tam) | Katalog salt okunur |
+- **Gerekçe:** kısmi indeks, soft-delete ile benzersizlik çatışmasını PostgreSQL
+  seviyesinde çözer; veri kaybı olmadan yeniden kayıt açılabilir. Rezerve edilen
+  alanlar (tenant slug'ı, `public_id`, katalog kodları) kimlik/denetim tutarlılığını
+  korur.
+- **Şema/migration etkisi:** Kısmi benzersiz indeksler **yeni migration** ile eklenir
+  (uygulanmış migration'lar değiştirilmez; mevcut tam indeksler düşürülüp kısmi
+  karşılıkları kurulur). Mevcut tam indeksler: `users_tenant_email_uniq`,
   `roles_tenant_code_uniq`, `user_roles_uniq`, `user_permission_overrides_uniq`
-  indeksleri `deleted_at`'i dikkate almaz. Soft-delete edilen bir kaydın
-  e-posta/kodu yeni kayıt açmayı engeller.
-- **Seçenekler:** (A) Kısmi benzersiz indeks (`WHERE deleted_at IS NULL`).
-  (B) Silinen kaydın değerini anonimleştir (ör. `email = email || '.deleted.<id>'`).
-  (C) Değişiklik yok (silinen kayıt değeri kalıcı olarak bloke eder).
-- **Öneri:** (A); e-posta için (A) + (B) birlikte (aynı e-postanın iki kiracıda
-  farklı kişiler olması zaten normaldir).
-- **Etki:** İndeks planı (E), M8, H4.
+  (ölçüldü). M8, M9, E, F1–F2.
+- **Güvenlik etkisi:** **Kritik (bulgu F7, aşağıda).** Soft-delete bugün yetki
+  çözümlemesinde **hiç dikkate alınmıyor**; silinmiş rol/atama/istisna yetki vermeye
+  devam ediyor. Bu kararla birlikte: (a) `objects` yöneticisi silinmiş kayıtları
+  **varsayılan olarak gizler** (varsayılan reddet), (b) `all_objects` yalnızca
+  denetim/geri alma yollarında kullanılır, (c) yetki çözümlemesi `deleted_at IS NULL`
+  koşulunu **açıkça** uygular, (d) silme ve geri alma işlemleri denetim kaydına yazılır.
+- **Mevcut kodla çakışma:** `apps/common/models.py:SoftDeleteModel` var ama **filtreleyen
+  yönetici yok**; `apps/rbac/services/permissions.py` `deleted_at` filtresi kullanmıyor;
+  `apps/rbac/services/roles.py` `get_or_create` ile silinmiş rolü "var" sayıp atlar.
+  Ayrıca `SoftDeleteModel` alan sağlar ama `User`/`Tenant` `deleted_at`'i kendi
+  tanımlar (ortak temel tutarlı değil). → Bulgu **F7** + uygulama kalemleri M25/M26.
+- **Seçenekler (kayıt için):** (A) Kısmi indeks + `deleted_at` standardı. (B) Silinen
+  kaydın benzersiz değerini anonimleştir. (C) Değişiklik yok. → **(A) seçildi; (B)
+  yalnızca e-posta gibi doğal anahtarlarda yardımcı olarak kullanılabilir; (C)
+  reddedildi.**
 
-### OD22 — Platform API token'larının yeri 🆕
+### OD22 — Platform API token'larının yeri ve kuralları — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık:** `hr.api_tokens.tenant_id` **NOT NULL** ve `tenants`'a FK; platform
-  kullanıcısının kiracısı yoktur (OD3).
-- **Seçenekler:** (A) Ayrı `platform.tokens` tablosu. (B) `hr.api_tokens`'ta
-  `tenant_id` nullable yap + `actor_kind` ekle. (C) Platform için token kullanma
-  (yalnızca oturum).
-- **Öneri:** (A). Kiracı tablosuna platform kaydı karıştırmak, RLS ve FK
-  varsayımlarını bozar (B seçeneği mevcut politikayı zayıflatır).
-- **Etki:** `docs/DATABASE.md` B.2/M3.
+- **KARAR:**
+  1. Platform API/service token'ları **yalnızca `platform.tokens`** tablosunda tutulur.
+     `hr.api_tokens`, tenant kullanıcı tabloları veya Django `auth_*`/permission
+     yapılarıyla **karıştırılmaz** (OD19: `auth_*` izin kaynağı değildir).
+  2. **Ham token DB'de saklanmaz**; yalnızca SHA-256 özeti (`token_hash`, benzersiz).
+     Üretim değeri yalnızca üretim anında bir kez gösterilir.
+  3. Zorunlu alanlar: `owner` (`platform_user_id`), `purpose` (zorunlu, anlamlı metin),
+     `scope` (**zorunlu**, izin kodu listesi), `token_kind` (`interactive`/`service`),
+     `created_at`, `expires_at` (**NOT NULL**), `revoked_at`, `last_used_at`, `label`.
+     Ham token alanı **yoktur**.
+  4. Platform token'ı **hiçbir koşulda tenant RLS sınırını aşmaz**: platform DB rolü
+     `NOSUPERUSER`/`NOBYPASSRLS`'tir (OD3) ve kiracı tablolarına erişim yalnızca geçerli
+     `AccessGrant` ile, tek işlem için, denetim kaydıyla açılır (OD1/OD4).
+  5. Kiracı verisi gerektiğinde token **doğrudan bağlam kuramaz**; mevcut platform
+     authorization + erişim onayı mekanizmasından geçer.
+  6. **Uzun ömürlü sınırsız SUPERADMIN token yasaktır.** Somut sınırlar:
+     `interactive` token TTL ≤ **24 saat**; `service` token TTL ≤ **90 gün** ve
+     **superadmin izin kümesiyle üretilemez** (yetki yükseltme yasağı). Boş `scope`
+     ile token üretimi **reddedilir** (varsayılan reddet).
+  7. İptal olayları: `revoked_at` yazılır (kayıt silinmez — denetim izi); rol değişimi,
+     kullanıcı pasifleştirme, MFA değişimi ve parola değişiminde ilgili token'lar
+     **otomatik iptal** edilir.
+- **Gerekçe:** Platform token'ları uygulamanın en ayrıcalıklı kimlik bilgileridir; ayrı
+  şemada tutulmaları (a) RLS varsayımlarını bozmaz, (b) `tenant_id` zorunluluğunu
+  delmeyi gerektirmez, (c) kapsam/süre sınırlarıyla "kalıcı arka kapı" riskini (T12)
+  kapatır.
+- **Şema/migration etkisi:** `platform.tokens` (M3) + iptal indeksi
+  (`(revoked_at, expires_at)` kısmi) + `scope` için `CHECK (array_length(scope,1) > 0)`.
+  Tenant token modeli (`hr.api_tokens`) **değişmez** (aşağıdaki asimetri notu).
+- **Güvenlik etkisi:** Kapsam zorunluluğu, en az yetkiyi token seviyesine indirir;
+  `expires_at` zorunluluğu kalıcı token'ı imkânsız kılar; `revoked_at` ile iptal
+  **kanıtlanabilir** olur. Platform token'ı hiçbir yolda RLS'i atlatamaz.
+- **Mevcut kodla çakışma / asimetri (bulgu F8):** Mevcut `hr.api_tokens` (tenant)
+  **kapsamsız**, **`revoked_at`'siz** (iptal = satır silme) ve sabit 30 gün TTL'lidir
+  (`API_TOKEN_TTL_HOURS=720`). Bu, tenant token'ının kullanıcının **tüm** yetkilerini
+  taşıdığı ve iptalin denetim izinin kaybolduğu anlamına gelir. Platform tarafında bu
+  **kabul edilmez** (yukarıdaki 6. madde). Tenant token modelinin hizalanması ayrı bir
+  karar gerektirdiği için **OD26** olarak açıldı; bu turda tenant modeli değiştirilmedi.
+- **Seçenekler (kayıt için):** (A) Ayrı `platform.tokens`. (B) `hr.api_tokens`'ta
+  `tenant_id` nullable + `actor_kind`. (C) Platform için token yok (yalnızca oturum).
+  → **(A) seçildi; (B) mevcut RLS/FK varsayımlarını zayıflattığı için reddedildi;
+  (C) servis entegrasyonları için yetersiz.**
 
 ### OD23 — Denetim kaydında platform aktörünün temsili 🆕
 
@@ -1164,6 +1270,25 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   referanslar kopmasın); (B) denetim bütünlüğünü bozar.
 - **Etki:** `docs/DATABASE.md` B.3/F1; kiracı yeniden adlandırma akışı.
 
+### OD26 — Tenant API token modelinin hizalanması (kapsam ve iptal izi) 🆕
+
+- **Neden açık (ölçüm — bulgu F8):** Mevcut `hr.api_tokens` **kapsamsız**dır (token,
+  kullanıcının tüm yetkilerini taşır), **`revoked_at` yoktur** (iptal = satır silme →
+  iptal izi kaybolur) ve TTL sabittir (`API_TOKEN_TTL_HOURS=720` = 30 gün). Platform
+  token'ları için OD22 bu üç noktayı **kapatmıştır**; tenant tarafı hâlâ açık.
+- **Seçenekler:** (A) Tenant token'a da `scope` (izin kodu listesi), `revoked_at` ve
+  `purpose` ekle; iptal artık silme değil işaretleme olsun. (B) Yalnızca `revoked_at`
+  ekle (kapsam olmadan; en az yetki kazanımı yok). (C) Değişiklik yok (kabul edilen
+  risk olarak kaydet).
+- **Öneri:** (A). Gerekçe: aynı güvenlik sınıfındaki iki token türünün farklı
+  kurallarla yaşaması bakım ve denetim yükü üretir; kapsamsız token, en az yetki
+  ilkesini (T16) kimlik bilgisi seviyesinde boşaltır.
+- **Etki:** `docs/DATABASE.md` (B.3, M3/M27), `docs/SECURITY.md` bölüm 3/6; mevcut
+  token üretim/doğrulama servisi ve testleri. **Bu turda kod değiştirilmedi.**
+- **Karar beklenmeden yapılacak:** yalnızca `revoked_at` (B alt kümesi) eklenmesi
+  geriye dönük uyumludur ve denetim izini geri kazandırır; **kapsam (A)** karar
+  gerektirir.
+
 ---
 
 ## 15. Özet
@@ -1184,7 +1309,9 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **Karar durumu:** **OD1, OD2, OD3, OD4, OD19 KAPATILDI** (2026-09-11). Açık:
-  **20 karar** (OD5–OD18, OD20–OD25). **Engelleyici açık karar yoktur**; OD17
-  (çift onayın uygulanabilirliği) ve OD21 (soft-delete/benzersizlik) uygulama
-  sırasında öncelikli netleştirilmelidir.
+- **Karar durumu:** **OD1–OD4, OD19, OD20, OD21, OD22 KAPATILDI** (2026-09-11).
+  Açık: **18 karar** (OD5–OD18, OD23–OD26). **Engelleyici açık karar yoktur**;
+  OD17 (çift onayın uygulanabilirliği), **OD26** (tenant token kapsamı) ve OD23
+  (denetimde platform aktörü) uygulama sırasında öncelikli netleştirilmelidir.
+  Açık **SECURITY FINDING**: F7 (soft-delete yetkiyi kaldırmıyor) — OD21 kararı
+  uygulanarak kapatılır.

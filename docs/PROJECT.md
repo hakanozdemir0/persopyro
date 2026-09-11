@@ -24,8 +24,8 @@ Ayrıntılı gerekçeler: `ARCHITECTURE.md`.
 |---|---|
 | Backend | Python 3.13 + Django 5.2 LTS + Django REST Framework |
 | Frontend | Django şablonları + HTMX + Alpine.js + Tailwind CSS |
-| Veritabanı | PostgreSQL 17 (minimum 15), `hr` şeması, RLS |
-| Kimlik doğrulama | Django auth + özel User modeli, Argon2id; web'de HttpOnly çerez, API'de opak token (knox) |
+| Veritabanı | PostgreSQL 18 (kurulu 18.6; minimum 15), `hr` şeması (kiracı) + `platform` şeması (platform) ve RLS |
+| Kimlik doğrulama | Django auth + özel User modeli, Argon2id; web'de HttpOnly çerez, API'de opak ve yalnızca özeti saklanan süreli token (K15) |
 | Yetkilendirme | Mevcut RBAC tabloları; HTTP → servis → RLS olmak üzere üç katman |
 | Dosya saklama | S3 uyumlu özel nesne depolama (boto3), ön imzalı URL |
 | Cache / Redis | Django DB cache; **Redis ilk sürümde yok** |
@@ -103,7 +103,7 @@ Kapsam dışı (şimdilik, bilinçli karar):
 | `ARCHITECTURE.md` | Sistem mimarisi ve teknoloji seçimleri (gerekçeli) |
 | `SECURITY.md` | Güvenlik ilkeleri ve tehdit modeli |
 | `AUTHORIZATION.md` | Kimlik doğrulama, RBAC, yetki modeli |
-| `DATABASE.md` | Veri modeli, mevcut `hrsaas_db` şeması, RLS |
+| `DATABASE.md` | Veri modeli, mevcut şema envanteri (ölçülmüş), hedef şema ve migration planı, RLS |
 | `API.md` | API sözleşmesi kuralları |
 | `ORGANIZATION.md` | Şirket/departman/pozisyon/çalışan yapısı |
 | `FEATURES.md` | Özellik listesi ve durumları |
