@@ -45,6 +45,8 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T15** | **Süresi geçmiş/iptal edilmiş onayla erişim (yetki kalıntısı)** | **Yüksek** | **Koşul kontrolü her istekte (GRANT_VALID), veritabanı politika kontrolü** 🔜 |
 | **T16** | **Kendi kendini yetkilendirme (self-elevation)** | **Yüksek** | **Ayrılık ilkesi: talep eden onaylayamaz, kendi kapsamını genişletemez** 🔜 |
 | **T17** | **Yedek/export üzerinden toplu veri sızması** | **Yüksek** | **Maskeli varsayılan export, kayıtlı/kısıtlı toplu indirme, şifreli yedek** 🔜 |
+| **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **`/admin/` kaldırılır, `auth_*` tabloları uygulama rolünden geri alınır, `is_staff` yalnızca bootstrap hesabında kalır (OD19)** ⚠️ |
+| **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
 
 ---
 
@@ -154,6 +156,15 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 - Kendi kendini yükseltme yasağı 🔜: kullanıcı kendi rolüne izin ekleyemez,
   kapsamını genişletemez, kendi talebini onaylayamaz (ayrılık ilkesi).
 - Son kiracı yöneticisi kaldırılamaz/pasifleştirilemez 🔜 (kilitlenme koruması).
+- **Tek yetkilendirme yolu:** Yetki kararı **yalnızca** bu modelde verilir.
+  Django'nun kendi yetki sistemi (`auth_permission`, `auth_group`, `/admin/`,
+  `is_staff`) üretimde kullanılmaz; uygulama rolünün bu tablolarda yazma yetkisi
+  olmamalıdır ⚠️🔜 (OD19; ölçüm: `/admin/` şu anda rotalı ve `auth_*` tabloları
+  `hr` şemasında mevcut — `docs/DATABASE.md` A.1.2).
+- **Tanım tabloları salt okunur:** `hr.permissions` (global katalog) ve yansı/dizin
+  tabloları uygulama rolünde yalnızca **SELECT** olmalıdır; `ALTER DEFAULT
+  PRIVILEGES` ile gelen geniş DML her yeni tabloda daraltılır 🔜
+  (`docs/DATABASE.md` D.6).
 - **Platform rolleri ayrı kimlik alanında yaşar** 🔜 KARAR (OD3 — kapalı): platform
   kullanıcıları kiracı kullanıcı tablosunda barındırılmaz; kiracı RLS politikaları
   onlar için gevşetilmez.
@@ -382,3 +393,5 @@ Açık olanlar:
 | G5 | `FIELD_ENCRYPTION_KEY` rotasyon planı | Anahtar sürümleme + yeniden şifreleme betiği |
 | G6 | Acil durum (break-glass) erişiminin sınırları ve sonradan gözden geçirme | Sonradan zorunlu inceleme; kayıt silinemez; **OD17** ile birlikte kararlaştırılır |
 | G7 | Platform çift onayının tek yönetici / acil durum durumunda uygulanması | Fail-closed varsayılan + sınırlı break-glass (**OD17**) |
+| G8 | Django'nun paralel yetki yolu (`/admin/`, `is_staff`, `auth_*` tabloları) — **mevcut risk** | `/admin/` kaldır, `auth_*` yetkilerini geri al, `is_staff` yalnızca bootstrap hesabında (**OD19**) |
+| G9 | Fazla yetki turu: global tanım tabloları ve yansılarda uygulama rolü yazma yetkisi | `permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6) |

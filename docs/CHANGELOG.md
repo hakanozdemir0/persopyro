@@ -5,6 +5,89 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.9.0] — 2026-09-11 — Veritabanı envanteri, hedef şema ve migration planı (kod yok)
+
+Yalnızca doküman. **Uygulama kodu, migration dosyaları ve veritabanı
+değiştirilmedi** (doğrulandı: `git status` yalnızca `.md` gösterir). Bu turun
+amacı, kesinleşen yetkilendirme/security tasarımını **mevcut veritabanıyla
+karşılaştırmak** ve güvenli migration planını yazmaktı.
+
+### Ölçümle çıkarılan mevcut durum
+
+- `hr` şemasında **21 tablo**: 10 uygulama + 11 Django/teknik tablo.
+- **7** tablo `RLS + FORCE` (hepsinde politika `tenant_id = hr.current_tenant_id()`;
+  `tenants` için `id = ...`). Politikalarda platform istisnası **yok**.
+- **9** kiracılar arası referans guard tetikleyicisi (6 tablo), **3** fonksiyon.
+- Roller: `persopyro_app` ve `persopyro_owner` (ikisi de `NOSUPERUSER`,
+  `NOBYPASSRLS`). `python` rolü yok; `postgres` uygulamada kullanılmıyor.
+- Uygulanmış migration: `tenancy` 0001–0007, `accounts` 0001–0002,
+  `rbac` 0001–0003, `audit` 0001.
+- Gerçek veri (kiracı bağlamı kurularak ölçüldü): 1 kiracı, 1 kullanıcı, 4 rol
+  (`tenant_admin` 29, `hr_manager` 22, `manager` 7, `employee` 6 izin),
+  64 rol-izin bağı, 29 izin kodu, 2 denetim kaydı.
+- `public_id` (genel kimlik) **şemada ve kodda yok** → hedef şemada eklenecek.
+
+### Bulgular (ölçümle bulunan gerçek durumlar)
+
+1. **Kiracı bağlamı olmadan kiracı tabloları 0 satır döndürüyor.** İlk ölçümde
+   `tenants/users/roles` "0" göründü; bağlam kurulunca 1/1/4 çıktı. RLS'in
+   fail-closed çalıştığının canlı kanıtı — ve her ölçümün bağlamla yapılması
+   gerektiğinin.
+2. **Django'nun kendi yetki tabloları `hr` şemasında** (`auth_permission`,
+   `auth_group`, `auth_group_permissions`, `django_admin_log`) ve `/admin/` yolu
+   **rotalı** (`config/urls.py`); `create_superuser` `is_staff=True` atıyor. Bu,
+   uygulamanın RBAC'inden **bağımsız ikinci bir yetkilendirme yolu** → **OD19**.
+3. **Fazla yetki:** uygulama rolü `hr.permissions` üzerinde INSERT/UPDATE/DELETE
+   yetkisine sahip (ölçüldü). Global katalog salt okunur olmalı → T19, G9.
+4. **Rol kodu farkı:** mevcut şablonda `manager` var; tasarım `dept_manager` ve
+   `tenant_officer` kullanıyor → veri migration'ı gerekiyor (M7/F2/F3).
+5. **Soft-delete ile benzersizlik:** `(tenant_id, email)`, `(tenant_id, code)`,
+   `(user_id, role_id)` benzersiz indeksleri `deleted_at`'i dikkate almıyor →
+   **OD21**.
+6. **Ölü kod temizliği doğrulandı:** `tenancy/0007`, `0006`'da oluşturulan
+   `hr.tenant_id_by_slug/domain` fonksiyonlarını düşürmüş; veritabanında yalnızca
+   3 fonksiyon var (doküman bunu artık doğru gösteriyor).
+7. **Doküman düzeltmesi:** `DATABASE.md` eski 3.3 listesindeki `roles.created_by_id`
+   guard'ı gerçekte yok (kolon da yok) — düzeltildi.
+
+### Karar
+
+- **OD2 KAPATILDI** (kullanıcı kararı): genel kimlik biçimi
+  `<kiracı-slug>-<8×Crockford Base32>`, rastgele, benzersiz, tahmin edilemez.
+- Bu turda ortaya çıkan **7 yeni açık karar**: OD19 (Django admin/paralel yetki
+  yolu — mevcut risk), OD20 (kiracı üst verisinin sahibi), OD21 (soft-delete +
+  benzersizlik), OD22 (platform token'larının yeri), OD23 (denetimde platform
+  aktörü), OD24 (organizasyon ağacı mekanizması), OD25 (slug değişince ön ek).
+- Karar durumu: **kapalı 4** (OD1–OD4), **açık 21** (OD5–OD25), **engelleyici yok**.
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/DATABASE.md` | **Baştan yazıldı**: bölüm A (mevcut şema, tablo kartları, RLS/politikalar, guard'lar, fonksiyonlar, roller/yetkiler, indeksler, migration geçmişi, ölçülen veri), B (hedef şema: `platform` şeması + `persopyro_platform` rolü, platform tabloları, kiracı iş tabloları, ilişki haritası), C (M1–M24 migration planı, 3 parti), D (RLS planı + yetki hijyeni), E (indeks planı), F (veri göçü/backfill F1–F9), G (rollback), H (12 risk), I (veritabanı OPEN DECISION listesi) |
+| `docs/AUTHORIZATION.md` | OD2 **KAPALI** olarak işaretlendi (biçim kararı); OD19–OD25 eklendi; 8.2 güncellendi; özet karar durumu düzeltildi |
+| `docs/SECURITY.md` | Tehdit modeline **T18** (paralel yetki yolu) ve **T19** (fazla yetki) eklendi; bölüm 5'e "tek yetkilendirme yolu" ve "tanım tabloları salt okunur" ilkeleri; G8/G9 açık kararları |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Doğrulanan / doğrulanmayan
+
+- **Doğrulandı:** Tüm mevcut-durum iddiaları canlı veritabanından ve dosyalardan
+  ölçüldü (tablo/kolon/kısıt/indeks/politika/tetikleyici/fonksiyon/yetki/migration
+  listesi/veri sayıları). Hedef şema, kapatılan kararlarla (OD1/OD3/OD4) çelişmiyor:
+  RLS politikası gevşetilmiyor, `BYPASSRLS` yok, platform kullanıcıları kiracıya bağlı
+  değil.
+- **Doğrulanmadı (kasıtlı):** Hedef şemanın SQL'i **yazılmadı**; hiçbir migration
+  çalıştırılmadı. Bu turun çıktısı plan, uygulama değil.
+
+### Kalan
+
+`docs/DATABASE.md` bölüm C'deki **M1–M24** iş kalemleri (Parti 1: M1–M5, M22 →
+Parti 2: M6–M9, M17, M20 → Parti 3: M10–M16, M18–M19, M21, M23–M24). Parti 2
+öncesi şifreli yedek + geri yükleme testi zorunlu; her partiden önce boş
+veritabanında sıfırdan kurulum doğrulaması yapılır.
+
+---
+
 ## [0.8.0] — 2026-09-11 — Yetkilendirme: OD1, OD3, OD4 KAPATILDI (kod yok)
 
 Yalnızca doküman güncellemesi. Uygulama kodu, migration ve veritabanı

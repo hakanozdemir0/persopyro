@@ -630,7 +630,8 @@ ekranları bu kimlik üzerinden çalışır.
 
 **Neden sıralı sayı değil?** İstekte örnek olarak `a-sirketi-00XXXX` verilmişti;
 sıralı/sayılabilir kimlikler numaralandırma (enumeration) saldırısına açıktır ve
-"tahmin edilemez" şartını karşılamaz. Rastgele bölüm bu yüzden zorunludur ❓OD2.
+"tahmin edilemez" şartını karşılamaz. Rastgele bölüm bu yüzden zorunludur — **OD2 kapalı**
+ (kullanıcı kararı: kiracı ön eki + Crockford Base32 + 8 rastgele karakter).
 
 ### 8.3 Kurallar
 
@@ -838,9 +839,10 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1, OD3 ve OD4 KAPATILDI.** Kararlar aşağıda kayıtlı
-ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 10.1, 13) işlenmiştir. Kapalı
-kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
+**Durum (2026-09-11):** **OD1, OD2, OD3 ve OD4 KAPATILDI.** Kararlar aşağıda
+kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13) işlenmiştir.
+Kapalı kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
+Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
 
 ### OD1 — SUPERADMIN'ın kişisel veriye erişimi — **KAPALI** ✅ (2026-09-11)
 
@@ -864,16 +866,17 @@ kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
 - **Etki:** Bölüm 6 matrisindeki SUPERADMIN kişisel veri sütunu; OD4 ile birlikte
   onay akışının tasarımı.
 
-### OD2 — Genel kimlik formatı
+### OD2 — Genel kimlik formatı — **KAPALI** ✅ (2026-09-11, kullanıcı kararı)
 
-- **Seçenekler:** (A) `acme-7F3K9QW2` (kiracı ön eki + rastgele 8 karakter).
-  (B) İstekteki gibi sıralı `a-sirketi-00XXXX`. (C) Kiracı ön eki olmadan
-  global rastgele kimlik.
-- **Öneri:** (A). Sıralı kimlik numaralandırmaya açıktır ve "tahmin edilemez"
-  şartını karşılamaz; kiracı ön eki destek ekibine bağlam verirken kişisel veri
-  sızdırmaz.
-- **Etki:** Uzunluk sabitlenir; kullanıcı arayüzü ve entegrasyonlar bu biçime
-  göre tasarlanır. Kiracı adı değişirse ön ek değişmez (karar gerekli).
+- **KARAR:** Biçim kesinleşti: **kiracı/şirket ön eki + Crockford Base32 + 8 rastgele
+  karakter** (örnek: `acme-7F3K9QW2`). Kimlik **tahmin edilemez** ve **benzersiz**
+  olmalıdır. Sıralı/sayılabilir biçim (`a-sirketi-00XXXX`) **reddedildi**.
+- **İşlendiği yerler:** bölüm 8.2/8.3 (biçim ve kurallar), bölüm 13 (geçiş planı 1. iş),
+  `docs/DATABASE.md` bölüm B.3/M5/F1 (kolon, üretim fonksiyonu, geri doldurma).
+- **Doğurduğu alt soru:** kiracı `slug`'ı değişirse mevcut kimliklerin ön eki ne olur
+  → **OD25** olarak işaretlendi (öneri: ön ek sabit kalır).
+- **Seçenekler (kayıt için):** (A) `acme-7F3K9QW2`. (B) Sıralı `a-sirketi-00XXXX`.
+  (C) Ön eksiz global rastgele. → **(A) seçildi.**
 
 ### OD3 — Platform kullanıcılarının barındırılması — **KAPALI** ✅ (2026-09-11)
 
@@ -1050,6 +1053,92 @@ kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
   toplu erişimde onay alınmalı, rutin destek işleri tıkanmamalıdır.
 - **Etki:** Onay akışı adım sayısı, bildirimler, kiracı denetim ekranı (OD15).
 
+### OD19 — Django'nun kullanılmayan yetki tabloları ve `/admin/` yolu 🆕
+
+- **Neden açık (ölçüm):** `hr` şemasında `auth_permission`, `auth_group`,
+  `auth_group_permissions`, `django_admin_log` tabloları var ve `config/urls.py`
+  `/admin/` yolunu yayınlıyor. `create_superuser` `is_staff=True` atıyor. Bunlar
+  uygulamanın RBAC'inden **bağımsız ikinci bir yetkilendirme yolu**dur; RLS
+  satırları korur ama yetki kararı Django'nun kendi sistemine kayar.
+- **Seçenekler:** (A) `/admin/` yolunu ve `django.contrib.admin`'i kaldır; `auth_*`
+  tablolarını uygulama rolünden tamamen geri al (yalnızca SELECT veya hiç yetki).
+  (B) Admin'i koru ama yalnızca okuma/teşhis için, `is_staff` yalnızca bootstrap
+  hesabında. (C) Olduğu gibi bırak.
+- **Öneri:** (A). Tek yetkilendirme yolu ilkesi (bkz. `docs/SECURITY.md` bölüm 5);
+  iç panel ihtiyacı kendi RBAC'imizle karşılanır.
+- **Etki:** `INSTALLED_APPS`, `config/urls.py`, yetki betiği (`scripts/`),
+  `docs/DATABASE.md` M22. **Uygulamayı kısmen etkiler** (bugün hiçbir model
+  kayıtlı olmadığı için işlev kaybı yok).
+
+### OD20 — Kiracı üst verisinin sahibi (platform kaydı) 🆕
+
+- **Neden açık:** Platformun kiracıları listelemesi gerekir; `hr.tenants` FORCE RLS
+  ile korunur ve **bağlam kurulmadan okunamaz** (ölçüldü: bağlamsız sorgu 0 satır).
+  Politika gevşetilmeyeceğine göre (OD3) listeleme kaynağı bir yansı olmalı.
+- **Seçenekler:** (A) `hr.tenants` tek kaynak; `platform.tenant_registry` yalnızca
+  yansı + ticari alanlar (tetikleyiciyle güncellenir). (B) Platform registry tek
+  kaynak, `hr.tenants` yalnızca kiracı-içi ayarlar. (C) İki tablo birleşik görünüm.
+- **Öneri:** (A). Kiracı verisinin sahibi kiracıdır (KVKK); platform yalnızca
+  operasyon için gerekli alanları yansıtır.
+- **Etki:** `docs/DATABASE.md` B.2/M4/M21, tutarlılık testi (H2).
+
+### OD21 — Soft-delete ile benzersizlik çakışması 🆕
+
+- **Neden açık (ölçüm):** `users_tenant_email_uniq (tenant_id, email)`,
+  `roles_tenant_code_uniq`, `user_roles_uniq`, `user_permission_overrides_uniq`
+  indeksleri `deleted_at`'i dikkate almaz. Soft-delete edilen bir kaydın
+  e-posta/kodu yeni kayıt açmayı engeller.
+- **Seçenekler:** (A) Kısmi benzersiz indeks (`WHERE deleted_at IS NULL`).
+  (B) Silinen kaydın değerini anonimleştir (ör. `email = email || '.deleted.<id>'`).
+  (C) Değişiklik yok (silinen kayıt değeri kalıcı olarak bloke eder).
+- **Öneri:** (A); e-posta için (A) + (B) birlikte (aynı e-postanın iki kiracıda
+  farklı kişiler olması zaten normaldir).
+- **Etki:** İndeks planı (E), M8, H4.
+
+### OD22 — Platform API token'larının yeri 🆕
+
+- **Neden açık:** `hr.api_tokens.tenant_id` **NOT NULL** ve `tenants`'a FK; platform
+  kullanıcısının kiracısı yoktur (OD3).
+- **Seçenekler:** (A) Ayrı `platform.tokens` tablosu. (B) `hr.api_tokens`'ta
+  `tenant_id` nullable yap + `actor_kind` ekle. (C) Platform için token kullanma
+  (yalnızca oturum).
+- **Öneri:** (A). Kiracı tablosuna platform kaydı karıştırmak, RLS ve FK
+  varsayımlarını bozar (B seçeneği mevcut politikayı zayıflatır).
+- **Etki:** `docs/DATABASE.md` B.2/M3.
+
+### OD23 — Denetim kaydında platform aktörünün temsili 🆕
+
+- **Neden açık:** `hr.audit_logs.user_id → users.id` (kiracı kullanıcısı). Platform
+  kullanıcısı bu tabloda yoktur; ama platform erişiminin kiracı akışına da
+  yazılması gerekiyor (şeffaflık, K22).
+- **Seçenekler:** (A) `user_id` NULL + `actor_kind` (`tenant_user`/`platform_user`/
+  `system`) + `actor_public_id`. (B) Ayrı `hr.platform_actor` tablosu ve FK.
+  (C) Platform erişimini yalnızca platform akışına yaz.
+- **Öneri:** (A). (C) şeffaflık şartını karşılamaz; (B) gereksiz karmaşıklık.
+- **Etki:** `docs/DATABASE.md` B.3/M20/F8, `docs/SECURITY.md` bölüm 10.
+
+### OD24 — Organizasyon ağacı mekanizması 🆕
+
+- **Neden açık:** `UNIT` kapsamı (departman ve alt birimleri) her istekte
+  çözülecek; mekanizma seçimi hem güvenliği (kapsam doğruluğu) hem performansı
+  belirler. OD5 (kapsamın alt ağaç mı, doğrudan birim mi olduğu) hâlâ açık.
+- **Seçenekler:** (A) `parent_id` + özyinelemeli CTE. (B) Materialized path
+  (`path` kolonu, `text_pattern_ops` indeks). (C) Closure tablosu.
+- **Öneri:** (A) ile başla; ölçülen yavaşlama veya ağaç derinliği > 6 olduğunda
+  (C)'ye geç. Gerekçe: erken optimizasyon yerine ölçüm.
+- **Etki:** `docs/DATABASE.md` M11/E/H9; kapsam çözümleyicisi.
+
+### OD25 — Kiracı `slug` değişince genel kimlik ön eki 🆕
+
+- **Neden açık:** OD2 biçimi kiracı slug'ını ön ek olarak kullanır; slug tekil ve
+  güncellenebilir bir alandır.
+- **Seçenekler:** (A) Ön ek sabit kalır (kimlik değişmez; eski ön ek görülebilir).
+  (B) Slug değişince tüm kimlikler yeniden üretilir. (C) Ön ek yerine kiracı
+  kimliğinin kısa özeti kullanılır.
+- **Öneri:** (A). Gerekçe: kimlik **değişmez** olmalıdır (denetim izi ve dış
+  referanslar kopmasın); (B) denetim bütünlüğünü bozar.
+- **Etki:** `docs/DATABASE.md` B.3/F1; kiracı yeniden adlandırma akışı.
+
 ---
 
 ## 15. Özet
@@ -1070,6 +1159,7 @@ kararlar listede kalır ama **artık karar beklemez**. Diğer OD'ler açıktır.
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **Karar durumu:** **OD1, OD3, OD4 KAPATILDI** (2026-09-11). Açık: **15 karar**
-  (OD2, OD5–OD18). **Engelleyici açık karar yoktur**; OD17 (çift onayın
-  uygulanabilirliği) uygulama sırasında netleştirilmelidir.
+- **Karar durumu:** **OD1, OD2, OD3, OD4 KAPATILDI** (2026-09-11). Açık: **21 karar**
+  (OD5–OD25). **Engelleyici açık karar yoktur**; OD17 (çift onayın
+  uygulanabilirliği), OD19 (Django admin/paralel yetki yolu — **mevcut risk**) ve
+  OD21 (soft-delete/benzersizlik) uygulama sırasında öncelikli netleştirilmelidir.
