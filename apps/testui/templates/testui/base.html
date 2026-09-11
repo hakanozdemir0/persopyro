@@ -80,6 +80,16 @@ kurulmaz; ek bağımlılık yoktur.
       gap: 4px 12px; margin-top: 6px; }
     .izin-kutu { display: flex; align-items: flex-start; gap: 6px; font-weight: 400; }
     .izin-kutu code { font-size: 11px; color: var(--muted); }
+    .modul summary { cursor: pointer; }
+    .modul.kismi > summary strong::after { content: " •"; color: var(--fg); }
+    .yetki-arac { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 12px; }
+    .yetki-arac input { max-width: 260px; }
+    .yetki-kaydet { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+      margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+    .yetki-kaydet .ozet { color: var(--muted); font-size: 13px; }
+    .yetki-kaydet .ozet.var { color: var(--fg); font-weight: 600; }
+    .salt-okunur { background: #fff8e5; border: 1px solid #f0dfae; color: #7a5b00;
+      border-radius: 8px; padding: 8px 10px; }
     .hakedis { display: inline-block; }
     .hakedis-buyuk { font-size: 15px; }
     .detail-box { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px;

@@ -673,7 +673,7 @@ bekle "POST /role-assignments/<id>/revoke (200)" \
         -d '{"reason":"dogrulama bitti"}')" "200"
 oturum_kapat
 
-# --- 6c-4) Yetki: çalışan rolü departman oluşturamaz (403) ------------------------
+# --- 6c-3b) Yetki: çalışan rolü departman oluşturamaz (403) ----------------------
 bekle "POST /auth/login (çalışan rolü)" "$(oturum_ac "personel@persopyro.test")" "200"
 bekle "POST /test-ui/api/departments (yetkisiz → 403)" \
     "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
@@ -681,6 +681,21 @@ bekle "POST /test-ui/api/departments (yetkisiz → 403)" \
         -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
         -d '{"code":"IZINSIZ","name":"Olmamali"}')" "403"
 oturum_kapat
+# --- 6c-3c) Rol kataloğu/yetki ekranı sınırları + çalışan dizini (PII'siz) ---
+bilgi "yetki sınırları (6c-5): çalışan ne rol listesini görür ne yetki düzenler"
+bekle "POST /auth/login (çalışan rolü)" "$(oturum_ac "personel@persopyro.test")" "200"
+bekle "GET  /test-ui/api/roles (çalışan → 403)" \
+    "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/roles")" "403"
+kontrol_metni "çalışan şirket dizinini görür" \
+    "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")" '"dizin":true'
+DIZIN_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")"
+BASKASI_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x.get("dizin")))' "$DIZIN_JSON")"
+DETAY_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees/$BASKASI_ID")"
+kontrol_metni "başka çalışanın detayı dizin kaydı" "$DETAY_JSON" '"dizin":true'
+kontrol_yok "dizinde izin/bakiye detayı yok" "$DETAY_JSON" '"annual"'
+kontrol_yok "dizinde e-posta/ad yok" "$DETAY_JSON" "persopyro.test"
+oturum_kapat
+
 rm -f "$CEREZ"
 
 kill "$SUNUCU_PID" 2>/dev/null || true

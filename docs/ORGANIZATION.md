@@ -112,6 +112,13 @@ mesajı için).
 
 - Organizasyon şeması görünümü (ağaç) **kişisel veri içermez**: ad yerine **genel
   kullanıcı kimliği** (OD2/OD25), unvan ve birim gösterilir.
+- **Şirket dizini (2026-09-11, ürün sahibi kararı — test arayüzü):** `employee`
+  kapsamlı kullanıcı, organizasyon şemasının yanında **şirket geneli çalışan
+  dizinini** görebilir; ancak bu görünüm yukarıdaki ilkeye uyar: **ad, e-posta ve
+  izin/bakiye bilgisi gösterilmez**, yalnız çalışan numarası + genel kullanıcı
+  kimliği + unvan + birim + durum görünür. Kullanıcı **kendi** kaydını ve kendi izin
+  bakiyesini tam görür. Kapsamı `UNIT`/`TENANT` olan roller (yönetici/yetkili) kapsam
+  içindeki çalışanları izin özetiyle görür (`employee.read` ∧ kapsam).
 - Onay yönlendirmesi: `approval_steps` adımları ya bir **kişiye** (`approver_user_id`)
   ya da bir **role/kapsama** (`approver_role_code` + `UNIT` kapsamı) bağlanır; onaylayan
   kendi talebini onaylayamaz (`SEPARATE_ACTOR`).

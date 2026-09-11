@@ -763,16 +763,73 @@ class DepartmentDeleteView(TestUiView):
         return Response({"data": {"id": str(silinen.pk), "status": "deleted"}})
 
 
+def _dizin_kaydi(employee: Employee) -> dict:  # noqa: ANN001
+    """
+    Şirket dizini kaydı — **kişisel veri içermez** (docs/ORGANIZATION.md §5):
+    ad/e-posta/telefon yerine çalışan numarası, genel kullanıcı kimliği, unvan ve birim.
+    Bakiye/izin özeti **dönmez**.
+    """
+    return {
+        "id": str(employee.pk),
+        "employee_no": employee.employee_no,
+        "public_id": getattr(employee.user, "public_id", None) if employee.user_id else None,
+        "department": employee.department.name if employee.department_id else None,
+        "department_id": str(employee.department_id) if employee.department_id else None,
+        "position": employee.position.name if employee.position_id else None,
+        "position_id": str(employee.position_id) if employee.position_id else None,
+        "status": employee.status,
+        "status_label": employee.get_status_display(),
+        "dizin": True,
+    }
+
+
 class EmployeeListView(TestUiView):
-    """Kapsamdaki çalışanlar + oluşturma."""
+    """
+    Kapsamdaki çalışanlar + oluşturma.
+
+    * `employee.read` sahibi: kapsamındaki kayıtlar (özet + izin bilgisi).
+    * Yalnız `SELF` kapsamı olan kullanıcı: **şirket dizini** (PII'siz, bakiyesiz)
+      + kendi kaydı tam olarak; böylece organizasyon şemasını görebilir ama
+      başkalarının izin/bakiye detaylarını göremez.
+    """
 
     def get(self, request):  # noqa: ANN001
+        kendi = user_employee(request.user)
+        kapsam = user_org_scope(request.user)
+        # Kapsamı yalnızca **kendi kaydı** olan kullanıcı (ör. `employee`) şirket
+        # dizinini görür: PII'siz kimlik bilgisi + unvan + birim ve kendi kaydı tam.
+        # Böylece organizasyon şeması görünür ama başkalarının izin/bakiye detayları
+        # görünmez (docs/ORGANIZATION.md §5 "kişisel veri içermez" ilkesi).
+        if not kapsam.tenant_wide and not kapsam.unit_ids:
+            if not user_has_permission(request.user, "org.department.read"):
+                raise Http404("dizin_yetkisi_yok")
+            dizin = [_dizin_kaydi(e) for e in Employee.objects.filter(deleted_at__isnull=True)]
+            if kendi is not None:
+                dizin = [d for d in dizin if d["id"] != str(kendi.pk)] + [
+                    {
+                        **_calisan_ozeti(kendi),
+                        "dizin": False,
+                        "kendi_kaydim": True,
+                        "annual": _yillik_ozet(kendi),
+                    }
+                ]
+            return Response(
+                {
+                    "data": dizin,
+                    "meta": {
+                        "can_create": False,
+                        "scope": _kapsam_ozeti(request.user),
+                        "directory_only": True,
+                    },
+                }
+            )
         return Response(
             {
                 "data": [_calisan_ozeti(e) for e in kapsamdaki_calisanlar(request.user)],
                 "meta": {
                     "can_create": user_has_permission(request.user, "employee.create"),
                     "scope": _kapsam_ozeti(request.user),
+                    "directory_only": False,
                 },
             }
         )
@@ -904,9 +961,19 @@ def _atanabilir_roller(user) -> list[Role]:  # noqa: ANN001
 
 
 class RoleListView(TestUiView):
-    """Atanabilir roller + aktörün atayıp atayamayacağı (karar servis katmanında)."""
+    """
+    Atanabilir roller + aktörün atayıp atayamayacağı (karar servis katmanında).
+
+    **`role.read` zorunludur**: rol kataloğu (izin/atama sayılarıyla) yalnızca bu
+    izni taşıyan rollere görünür (docs/AUTHORIZATION.md §6.2). İzinsiz kullanıcı
+    `403` alır; arayüz bu durumda listeyi hiç istemez.
+    """
 
     def get(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "role.read"):
+            return TestUiErrors.cevap(
+                RoleAssignmentError("Rolleri görüntülemek için 'role.read' izni gerekir.")
+            )
         roller = []
         for rol in _atanabilir_roller(request.user):
             izin_var, gerekce = can_assign_role(request.user, rol)
@@ -1066,7 +1133,12 @@ class RolePermissionView(TestUiView):
     platform izinleri listelenmez (OD3).
     """
 
+    def initial(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        super().initial(request, *args, **kwargs)
+
     def _rol(self, request, role_id: str):  # noqa: ANN001
+        if not user_has_permission(request.user, "role.read"):
+            raise RoleAssignmentError("Rol yetkilerini görüntülemek için 'role.read' gerekir.")
         rol = Role.objects.filter(
             pk=_uuid(role_id, "role_id"), tenant=request.user.tenant_id, deleted_at__isnull=True
         ).first()
@@ -1075,7 +1147,10 @@ class RolePermissionView(TestUiView):
         return rol
 
     def get(self, request, role_id: str):  # noqa: ANN001
-        rol = self._rol(request, role_id)
+        try:
+            rol = self._rol(request, role_id)
+        except RoleAssignmentError as hata:
+            return TestUiErrors.cevap(hata)
         secili = set(
             RolePermission.objects.filter(role=rol).values_list("permission__code", flat=True)
         )
@@ -1124,7 +1199,10 @@ class RolePermissionView(TestUiView):
         )
 
     def post(self, request, role_id: str):  # noqa: ANN001
-        rol = self._rol(request, role_id)
+        try:
+            rol = self._rol(request, role_id)
+        except RoleAssignmentError as hata:
+            return TestUiErrors.cevap(hata)
         kodlar = request.data.get("permission_codes")
         if not isinstance(kodlar, list):
             return TestUiErrors.cevap(
@@ -1193,7 +1271,21 @@ class EmployeeDetailView(TestUiView):
     """
 
     def get(self, request, employee_id: str):  # noqa: ANN001
-        calisan = _kapsamdaki_calisan(request.user, employee_id)
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            # Kapsam dışı ama kiracı içinde: yalnız PII'siz **dizin** bilgisi
+            # (kapsamı SELF olan kullanıcı organizasyon şemasını görebilsin).
+            kapsam = user_org_scope(request.user)
+            if (not kapsam.tenant_wide and not kapsam.unit_ids) and user_has_permission(
+                request.user, "org.department.read"
+            ):
+                dizin = Employee.objects.filter(
+                    pk=_uuid(employee_id, "employee_id"), deleted_at__isnull=True
+                ).first()
+                if dizin is not None:
+                    return Response({"data": {**_dizin_kaydi(dizin), "yetki_gorunur": False}})
+            raise
         yil = period_year_for()
         ozet = _calisan_ozeti(calisan)
         detay = {

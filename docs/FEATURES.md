@@ -235,6 +235,12 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
 - **Panel karar görünümü:** panelde onay bekleyen / onaylanan / reddedilen / iptal
   sayıları ve son karara bağlanan izinler listelenir (kapsam süzgeciyle: çalışan
   kendi kayıtlarını, yönetici alt ağacındakileri görür).
+- **Görünürlük sınırları (test arayüzünde de geçerli):** rol kataloğu/yetki ekranı
+  yalnızca `role.read` + düzenleme yalnızca `role.manage` (şirket yöneticisi);
+  `employee` kapsamlı kullanıcı **şirket dizinini** (çalışan no, genel kullanıcı
+  kimliği, unvan, birim — ad/e-posta yok) ve **organizasyon şemasını** görür, ancak
+  başkalarının izin/bakiye detaylarını görmez; yaklaşan izinler ve onay kuyruğu
+  yalnız kapsam/yetki dahilinde listelenir.
 - **Departman düzenleme:** yetkili kullanıcı birimin adını ve kodunu değiştirebilir
   (denetimli `org.unit.update`); taşıma ayrı işlemdir, kapsam/ağaç bozulmaz.
 - **Yetki Yönetimi sekmesi (rol izin düzenleme):** şirket yöneticisi (`role.manage`)

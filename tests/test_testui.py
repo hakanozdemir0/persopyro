@@ -834,29 +834,65 @@ def test_ui_yetkisiz_roller_rol_yonetemez(client, tenant_a, user_a) -> None:  # 
     with tenant_context(tenant_a.id):
         rol_ver(tenant_a, lot["kardes_user"], "tenant_officer")
 
-    for kullanici, parola in (
-        (lot["yonetici_user"], PAROLA_LEAVE),
-        (lot["kardes_user"], PAROLA_LEAVE),
-    ):
-        _giris(client, tenant_a, kullanici.email, parola)
-        roller = client.get("/test-ui/api/roles").json()
-        assert roller["meta"]["can_manage"] is False
-        assert all(r["atanabilir"] is False for r in roller["data"])
-        assert (
-            _post(
-                client,
-                f"/test-ui/api/employees/{lot['personel'].pk}/roles",
-                {"role_id": roller["data"][0]["id"]},
-            ).status_code
-            == 403
+    # dept_manager: `role.read` yok → rol listesi dahi kapalı.
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/roles").status_code == 403
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/employees/{lot['personel'].pk}/roles",
+            {"role_id": str(Role.objects.get(tenant=tenant_a, code="employee").pk)},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(f"/test-ui/api/employees/{lot['personel'].pk}").json()["data"]["yetki_gorunur"]
+        is False
+    )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    # tenant_officer: `role.read` var → listeyi görür ama **düzenleyemez**.
+    _giris(client, tenant_a, lot["kardes_user"].email, PAROLA_LEAVE)
+    roller = client.get("/test-ui/api/roles").json()
+    assert roller["meta"]["can_manage"] is False
+    assert all(r["atanabilir"] is False for r in roller["data"])
+    birinci = roller["data"][0]["id"]
+    detay = client.get(f"/test-ui/api/roles/{birinci}/permissions").json()["data"]
+    assert detay["can_edit"] is False
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/roles/{birinci}/permissions",
+            {"permission_codes": ["employee.read"]},
+        ).status_code
+        == 403
+    )
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/employees/{lot['personel'].pk}/roles",
+            {"role_id": birinci},
+        ).status_code
+        == 403
+    )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    # employee (yalnız `employee` rolü): ne rol listesi ne yetki ekranı.
+    with tenant_context(tenant_a.id):
+        UserRole.objects.filter(user=lot["kardes_user"], role__code="tenant_officer").update(
+            deleted_at=timezone.now()
         )
-        assert (
-            client.get(f"/test-ui/api/employees/{lot['personel'].pk}").json()["data"][
-                "yetki_gorunur"
-            ]
-            is False
-        )
-        client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["kardes_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/roles").status_code == 403
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/roles/{birinci}/permissions",
+            {"permission_codes": ["employee.read"]},
+        ).status_code
+        == 403
+    )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
 
 
 # --- madde 4: birim taşıma UX -------------------------------------------------
@@ -1338,11 +1374,12 @@ def test_ui_rol_yetkisi_guardlari(client, tenant_a, user_a) -> None:  # noqa: AN
     assert bos.status_code == 400
     assert "en az bir izin" in bos.json()["error"]["message"].lower()
 
-    # Yetkisiz kullanıcı: hem okuma bayrağı hem yazma.
+    # Yetkisiz kullanıcı (dept_manager): `role.read` yok → rol kataloğu ve yetki
+    # ekranı **403**; yazma da 403 (bildirilen "çalışan yetki düzenleyebiliyor" hatası).
     client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
     _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
-    detay = client.get(f"/test-ui/api/roles/{dm['id']}/permissions").json()["data"]
-    assert detay["can_edit"] is False
+    assert client.get("/test-ui/api/roles").status_code == 403
+    assert client.get(f"/test-ui/api/roles/{dm['id']}/permissions").status_code == 403
     assert (
         _post(
             client,
@@ -1442,3 +1479,122 @@ def test_ui_ust_bar_sabit_ve_sekmeler_sabit_alanda(client, tenant_a, user_a) -> 
     kapanis = govde.index("</div>", sekmeler)
     assert ust_bar < sekmeler < kapanis
     assert "Yetki Yönetimi" in govde
+
+# =============================================================================
+# Bildirim (3. tur): çalışan yetki düzenleyemez, şirket dizini (PII'siz),
+# izin/bakiye detayları yalnız yetkiyle
+# =============================================================================
+
+
+def test_ui_calisan_rol_listesi_ve_yetki_ekranina_erisemez(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """(bildirilen hata) Çalışan ne rol kataloğunu görür ne de yetki düzenleyebilir."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/roles").status_code == 403
+    rol_id = str(Role.objects.get(tenant=tenant_a, code="employee").pk)
+    assert client.get(f"/test-ui/api/roles/{rol_id}/permissions").status_code == 403
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/roles/{rol_id}/permissions",
+            {"permission_codes": ["role.manage"]},
+        ).status_code
+        == 403
+    )
+    # Başkasına rol atayamaz: kapsam dışı çalışan **404** (varlık sızdırılmaz),
+    # kendi kaydı üzerinden **403** (self-elevation yasağı).
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/employees/{lot['kardes'].pk}/roles",
+            {"role_id": rol_id},
+        ).status_code
+        == 404
+    )
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/employees/{lot['personel'].pk}/roles",
+            {"role_id": rol_id},
+        ).status_code
+        == 403
+    )
+    detay = client.get(f"/test-ui/api/employees/{lot['personel'].pk}").json()["data"]
+    assert detay["yetki_gorunur"] is False
+    assert "roles" not in detay or detay.get("roles", []) == [] or detay["yetki_gorunur"] is False
+
+
+def test_ui_calisan_sirket_dizinini_gorur_detaylari_gormez(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Çalışan şirket dizinini (PII'siz, bakiyesiz) ve kendi kaydını görür."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    veri = client.get("/test-ui/api/employees").json()
+    assert veri["meta"]["directory_only"] is True
+    kayitlar = {c["employee_no"]: c for c in veri["data"]}
+    assert {"FIN-M1", "MUH-1", "IK-1"} <= set(kayitlar)  # şirket geneli görünür
+
+    # Başkalarının kaydı: PII (ad/e-posta) ve izin/bakiye bilgisi YOK.
+    kardes = kayitlar["IK-1"]
+    assert kardes["dizin"] is True
+    assert kardes.get("user_email") is None and kardes.get("user_name") is None
+    assert "annual" not in kardes and kardes.get("roles") in (None, [])
+    assert kardes["department"] == "İnsan Kaynakları"  # unvan/birim açık
+
+    # Kendi kaydı tam: izin bakiyesi görünür.
+    kendi = next(c for c in veri["data"] if c.get("kendi_kaydim"))
+    assert kendi["employee_no"] == "MUH-1"
+    assert kendi["annual"]["hakedis_var"] is True
+
+    # Başka çalışanın detayı: yalnız dizin bilgisi; bakiye ucu 404.
+    detay = client.get(f"/test-ui/api/employees/{lot['kardes'].pk}").json()["data"]
+    assert detay["dizin"] is True and "annual" not in detay
+    assert client.get(f"/test-ui/api/employees/{lot['kardes'].pk}/balances").status_code == 404
+
+
+def test_ui_calisan_baskalarinin_izinlerini_gormez(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Panel/onay listeleri yalnız kendi kayıtlarını gösterir (kapsam süzgeci)."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    baslangic = timezone.localdate() + timedelta(days=40)
+    for calisan, gerekce in ((lot["kardes"], "kardes izni"), (lot["personel"], "personel izni")):
+        assert (
+            _post(
+                client,
+                "/test-ui/api/leave-requests",
+                {
+                    "employee_id": str(calisan.pk),
+                    "leave_type_id": str(lot["turler"]["annual_leave"].pk),
+                    "start_date": baslangic.isoformat(),
+                    "end_date": (baslangic + timedelta(days=1)).isoformat(),
+                    "reason": gerekce,
+                    "submit": True,
+                },
+            ).status_code
+            == 201
+        )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    panel = client.get("/test-ui/api/dashboard").json()["data"]
+    hepsi = panel["upcoming_requests"] + panel["decided_requests"] + panel["pending_requests"]
+    assert all(t["employee_no"] == "MUH-1" for t in hepsi), hepsi
+    havuz = client.get("/test-ui/api/leave-requests?scope=pending").json()["data"]
+    assert all(t["employee_no"] == "MUH-1" for t in havuz)
+
+
+def test_ui_departman_agaci_calisana_acik_ama_detaylar_degil(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Çalışan organizasyon şemasını görür; yetki listesi ve bakiye detayları kapalı."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    agac = client.get("/test-ui/api/departments").json()
+    assert len(agac["data"]) >= 4
+    assert agac["meta"]["can_manage"] is False
+    # Panel: kendi kaydı ve kendi bakiyesi görünür.
+    panel = client.get("/test-ui/api/dashboard").json()["data"]
+    assert panel["employee"]["employee_no"] == "MUH-1"
+    assert panel["annual"]["hakedis_var"] is True
+    # Şirket geneli dizin görünür (organizasyon şeması + diğer çalışanlar).
+    no_lar = {c["employee_no"] for c in client.get("/test-ui/api/employees").json()["data"]}
+    assert {"FIN-M1", "IK-1"} <= no_lar
+    # Rol kataloğu ve yetki ekranı kapalı (role.read yok).
+    assert client.get("/test-ui/api/roles").status_code == 403

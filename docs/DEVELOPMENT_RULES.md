@@ -181,10 +181,15 @@ Kiracı `slug`: `demo`.
     durum) — kapsamınız dışındaki çalışanlar listede görünmez.
 13. **Departmanlar → Düzenle**: birimin adını/kodunu değiştir (denetim kaydı yazılır);
     **Taşı** ayrı düğmedir.
-14. **Yetki Yönetimi**: rol tablosundan bir rolü seç → **Yetkileri düzenle** →
+14. **Yetki Yönetimi** (yalnız şirket yöneticisi; diğer roller/görüntüleme yetkisi
+    olmayanlar listeyi dahi görmez): rol tablosundan bir rolü seç →
+    **Yetkileri düzenle** →
     modül gruplarından izinleri işaretle ("Tümünü seç" üstte) → gerekçe yaz →
-    **Yetkileri kaydet**. Değişiklik anında geçerlidir; kendi rolünüz ve platform
+    izin ara / **Tümünü seç** / **Hiçbirini seçme** / **Değişiklikleri geri al** ile
+    düzenle → **Kaydet**. Kaydetmeden önce "N izin eklenecek, M izin kaldırılacak"
+    özetini görürsünüz. Değişiklik anında geçerlidir; kendi rolünüz ve platform
     izinleri düzenlenemez. Rol atamak için: **Çalışanlar → Detay → Rol ve Yetkiler**.
+    Yetkisi olmayan kullanıcıda ekran **salt okunur** görünür (kutular kapalı).
 15. **Departmanlar → Taşı**: açılan pencerede hedef üst birimi ağaçtan seç
     ("En üst seviyeye taşı (kök)" seçeneği de vardır); onay sorusundan sonra ağaç
     yenilenir ve Finans müdürünün gördüğü çalışanlar yeni ağaca göre değişir.

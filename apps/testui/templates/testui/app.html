@@ -358,18 +358,27 @@
     EMPLOYEES = data;
     document.getElementById("tab-employees").innerHTML = `
       <div class="card"><h1>Çalışanlar</h1>
-        <p class="muted">Yalnızca <strong>kapsamınızdaki</strong> çalışanlar listelenir
-          (tüm kiracı / birim + alt birimleri / yalnızca kendisi). Kişisel veri (K2/K3) gösterilmez.</p>
+        <p class="muted">${meta.directory_only
+          ? `Bu görünüm <strong>şirket dizini</strong>dir: çalışan numarası, unvan ve birim
+             görünür; ad/e-posta ve izin bakiyesi gibi detaylar <strong>gizlidir</strong>.
+             Kendi kaydınız tam görünür.`
+          : `Yalnızca <strong>kapsamınızdaki</strong> çalışanlar listelenir (tüm kiracı /
+             birim + alt birimleri). Kişisel veri (K2/K3) gösterilmez.`}</p>
         <table><thead><tr><th>No</th><th>Çalışan</th><th>Birim</th><th>Unvan</th>
           <th>Rol</th><th>Yıllık izin (hak / kullanılan / bekleyen / kalan)</th><th>Durum</th><th></th></tr></thead><tbody>
           ${data.map((c) => `<tr>
             <td>${esc(c.employee_no)}</td>
-            <td>${esc(c.user_name) || c.user_email ? esc(c.user_name || c.user_email) : "<span class='muted'>kullanıcı bağlı değil</span>"}
-              <div class="muted small">${esc(c.user_email || "")}</div></td>
+            <td>${c.dizin
+              ? `<span class="muted">dizin kaydı</span>
+                 <div class="muted small">${esc(c.public_id || "")}</div>`
+              : `${esc(c.user_name || c.user_email) || "<span class='muted'>kullanıcı bağlı değil</span>"}
+                 <div class="muted small">${esc(c.user_email || "")}${c.kendi_kaydim ? " · kendi kaydınız" : ""}</div>`}</td>
             <td>${esc(c.department) || yok}</td>
             <td>${esc(c.position) || yok}</td>
-            <td>${c.roles.length ? c.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") : yok}</td>
-            <td>${yillikSatir(c.annual)}</td>
+            <td>${(c.roles || []).length
+              ? c.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ")
+              : yok}</td>
+            <td>${c.annual ? yillikSatir(c.annual) : '<span class="muted">gizli</span>'}</td>
             <td>${esc(c.status_label || c.status)}</td>
             <td><button data-detay="${esc(c.id)}">Detay</button></td></tr>`).join("")}
         </tbody></table>
@@ -504,7 +513,9 @@
           <div><h3>Durum</h3>${esc(c.status_label || c.status)}</div>
           <div><h3>İşe giriş</h3>${esc(c.hire_date) || yok}</div>
         </div>
-        <h3>Yıllık izin</h3><p class="hakedis-buyuk">${yillikSatir(c.annual)}</p>
+        <h3>Yıllık izin</h3><p class="hakedis-buyuk">${c.annual
+          ? yillikSatir(c.annual)
+          : '<span class="muted">Bu kayıt dizin görünümünde: izin bakiyesi gizli.</span>'}</p>
         ${bakiyeler}
         ${yetkiBolumu}
       </div>`;
@@ -707,6 +718,9 @@
   }
 
   // --- Kapsam / yetki özeti ------------------------------------------------
+  // --- Yetki Yönetimi ------------------------------------------------------
+  // Tasarım hedefi: kalabalık bir izin listesi yerine aranabilir, modül modül
+  // açılır gruplar; kaydetmeden önce NE değişeceğini açıkça göster.
   async function yukleYetki() {
     const hedef = document.getElementById("tab-raw");
     let roller = null;
@@ -715,23 +729,31 @@
       roller = await PERSOPYRO_UI.cagir("/test-ui/api/roles");
     } catch (e) { hata = e.message; }
     const k = ME.data;
+    const yetkili = roller && roller.meta.can_manage;
     hedef.innerHTML = `
       <div class="card"><h1>Yetki Yönetimi</h1>
-        <p class="muted">Rol atamak için: <strong>Çalışanlar → Detay → Rol ve Yetkiler</strong>.
-          Bir rolün izin kümesini buradan düzenlersiniz (yalnızca <code>role.manage</code>
-          sahibi — kiracıda şirket yöneticisi). Değişiklik anında geçerlidir.</p>
-        ${hata ? `<p class="muted">Roller okunamadı: ${esc(hata)}</p>` : ""}
-        ${roller ? `<table><thead><tr><th>Rol</th><th>Kapsam tipi</th><th>İzin sayısı</th>
-          <th>Atama sayısı</th><th>Atanabilir</th><th></th></tr></thead><tbody>
+        <p class="muted">
+          <strong>Rol atama</strong> (kim hangi rolü taşır): <em>Çalışanlar → Detay →
+          Rol ve Yetkiler</em>.<br>
+          <strong>Yetki düzenleme</strong> (bir rol neleri yapabilir): aşağıdan rolü
+          seçin. Yalnızca şirket yöneticisi (<code>role.manage</code>) düzenleyebilir;
+          değişiklik <strong>anında</strong> geçerli olur ve denetim kaydına yazılır.
+        </p>
+        ${hata ? `<p class="muted"><strong>Rolleri gösteremiyorum:</strong> ${esc(hata)}</p>` : ""}
+        ${roller ? `<table><thead><tr><th>Rol</th><th>Kapsam</th><th>İzin</th>
+          <th>Atama</th><th></th></tr></thead><tbody>
           ${roller.data.map((r) => `<tr><td>${esc(r.name)}
               <div class="muted small"><code>${esc(r.code)}</code></div></td>
-            <td>${esc(r.scope_type_label)}</td><td>${esc(r.permission_count)}</td>
+            <td>${esc(r.scope_type_label)}</td>
+            <td>${esc(r.permission_count)}</td>
             <td>${esc(r.user_count)}</td>
-            <td>${r.atanabilir ? "Evet" : "Hayır"}${r.atanabilir ? "" : `<div class="muted small">${esc(r.gerekce)}</div>`}</td>
-            <td><button data-yetki="${esc(r.id)}">Yetkileri düzenle</button></td></tr>`).join("")}
-          </tbody></table>` : ""}
-        ${roller && !roller.meta.can_manage
-          ? `<p class="muted">Rol/izin düzenleme yetkiniz yok (<code>role.manage</code>).</p>` : ""}
+            <td>${yetkili
+              ? `<button class="primary" data-yetki="${esc(r.id)}">Yetkileri düzenle</button>`
+              : `<button data-yetki="${esc(r.id)}">Yetkileri görüntüle</button>`}</td>
+          </tr>`).join("")}</tbody></table>` : ""}
+        ${yetkili || !roller ? "" : `<p class="muted">Bu ekranda yalnızca
+          <strong>görüntüleme</strong> yapabilirsiniz; değişiklik için şirket yöneticisi
+          olmanız gerekir.</p>`}
       </div>
       <div id="yetki-editor"></div>
       <div class="card"><h1>Oturumum</h1>
@@ -752,64 +774,135 @@
 
   async function yetkiEditoru(roleId) {
     const hedef = document.getElementById("yetki-editor");
+    hedef.innerHTML = '<div class="card"><p class="muted">Yükleniyor…</p></div>';
     let veri;
     try {
       veri = await PERSOPYRO_UI.cagir(`/test-ui/api/roles/${roleId}/permissions`);
-    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); return; }
+    } catch (hata) {
+      hedef.innerHTML = `<div class="card"><h2>Yetkiler</h2>
+        <p class="muted">${esc(hata.message)}</p></div>`;
+      return;
+    }
     const r = veri.data.role;
-    const kutular = veri.data.modules.map((m) => `
-      <div class="modul">
-        <label class="modul-baslik">
-          <input type="checkbox" class="modul-tumu" data-modul="${esc(m.module)}">
+    const duzenlenebilir = veri.data.can_edit;
+    const TUMU = veri.data.modules.flatMap((m) => m.permissions);
+    const BASLANGIC = new Set(TUMU.filter((p) => p.secili).map((p) => p.code));
+
+    const satir = (p) => `
+      <label class="izin-kutu" data-arama="${esc((p.name + " " + p.code).toLowerCase())}">
+        <input type="checkbox" class="izin-secim" value="${esc(p.code)}"
+          data-modul="${esc(p.modul)}"${p.secili ? " checked" : ""}
+          ${duzenlenebilir && p.aktor_sahip ? "" : " disabled"}>
+        <span>${esc(p.name)}
+          <code class="small">${esc(p.code)}</code>
+          ${p.aktor_sahip ? "" : '<span class="muted small">(sizde yok)</span>'}
+        </span>
+      </label>`;
+
+    const gruplar = veri.data.modules.map((m) => {
+      const izinler = m.permissions.map((x) => ({ ...x, modul: m.module }));
+      const secili = izinler.filter((x) => x.secili).length;
+      return `
+      <details class="modul" open data-modul-kutu="${esc(m.module)}">
+        <summary class="modul-baslik">
           <strong>${esc(m.module_label)}</strong>
-          <span class="muted small">${esc(m.permissions.length)} izin</span>
-        </label>
-        <div class="modul-izinler">
-          ${m.permissions.map((p) => `<label class="izin-kutu">
-            <input type="checkbox" class="izin-secim" value="${esc(p.code)}"
-              data-modul="${esc(m.module)}"${p.secili ? " checked" : ""}
-              ${p.aktor_sahip ? "" : " disabled"}>
-            <span>${esc(p.name)} <code>${esc(p.code)}</code></span>
-            ${p.aktor_sahip ? "" : '<span class="muted small">(sizde yok — dağıtamazsınız)</span>'}
-          </label>`).join("")}
-        </div>
-      </div>`).join("");
+          <span class="muted small"><span class="modul-sayac">${secili}</span>/<span class="modul-toplam">${izinler.length}</span> seçili</span>
+        </summary>
+        <div class="modul-izinler">${izinler.map(satir).join("")}</div>
+      </details>`;
+    }).join("");
 
     hedef.innerHTML = `
       <div class="card">
-        <h2>${esc(r.name)} — yetkiler</h2>
+        <h2>${esc(r.name)} <span class="muted">yetkileri</span></h2>
         <p class="muted">${esc(r.name)} (<code>${esc(r.code)}</code>) · kapsam:
-          ${esc(r.scope_type_label)} · seçili ${esc(veri.data.selected_count)} /
-          ${esc(veri.data.total_count)} izin</p>
-        ${veri.data.can_edit ? "" : `<p class="muted">Bu rolü düzenleyemezsiniz
-          (yetkiniz yok ya da bu rol kendinizde etkin — self-elevation yasağı).</p>`}
-        <p>
-          <label class="small"><input type="checkbox" id="izin-tumu"> <strong>Tümünü seç</strong></label>
-        </p>
-        ${kutular}
-        ${veri.data.can_edit ? `
-        <div class="row" style="margin-top:12px">
-          <div><label>Gerekçe</label><input id="yetki-gerekce" placeholder="Örn. departman yöneticisi onay yetkisi alsın"></div>
-          <div><button class="primary" id="yetki-kaydet">Yetkileri kaydet</button></div>
-        </div>` : ""}
-        <p class="muted small">Platform izinleri bu ekranda yönetilmez (OD3); sahip
-          olmadığınız izinleri dağıtamazsınız; rol en az bir izin içermelidir.</p>
+          ${esc(r.scope_type_label)} · başlangıçta <strong>${esc(veri.data.selected_count)}</strong>
+          / ${esc(veri.data.total_count)} izin seçili</p>
+        ${duzenlenebilir ? `
+          <div class="yetki-arac">
+            <input id="izin-ara" placeholder="İzin ara (ad veya kod)">
+            <button type="button" id="izin-tumu">Tümünü seç</button>
+            <button type="button" id="izin-hicbiri">Hiçbirini seçme</button>
+            <button type="button" id="izin-geri">Değişiklikleri geri al</button>
+          </div>` : `
+          <p class="salt-okunur"><strong>Salt okunur:</strong> bu rolün yetkilerini
+            değiştirme yetkiniz yok (yalnızca şirket yöneticisi düzenleyebilir, kendi
+            rolünüzü ise kimse düzenleyemez).</p>`}
+        ${gruplar}
+        ${duzenlenebilir ? `
+        <div class="yetki-kaydet">
+          <div><label>Gerekçe</label>
+            <input id="yetki-gerekce" placeholder="Örn. departman yöneticisi onay yetkisi alsın"></div>
+          <div class="ozet" id="degisiklik-ozeti">Değişiklik yok</div>
+          <button class="primary" id="yetki-kaydet">Kaydet</button>
+        </div>
+        <p class="muted small">Platform izinleri (OD3) listelenmez; sahip olmadığınız
+          izinler işaretlenemez; rol en az bir izin içermelidir.</p>` : ""}
       </div>`;
 
-    const tumu = document.getElementById("izin-tumu");
-    const secimler = () => [...document.querySelectorAll(".izin-secim:not([disabled])")];
-    if (tumu) {
-      tumu.checked = secimler().length > 0 && secimler().every((c) => c.checked);
-      tumu.addEventListener("change", () => secimler().forEach((c) => { c.checked = tumu.checked; }));
+    const kutular = () => [...hedef.querySelectorAll(".izin-secim")];
+    const secilebilir = () => kutular().filter((c) => !c.disabled);
+    const seciliKodlar = () => new Set(kutular().filter((c) => c.checked).map((c) => c.value));
+
+    function ozetGuncelle() {
+      const simdi = seciliKodlar();
+      const eklenen = [...simdi].filter((k) => !BASLANGIC.has(k));
+      const cikarilan = [...BASLANGIC].filter((k) => !simdi.has(k));
+      const el = document.getElementById("degisiklik-ozeti");
+      if (el) {
+        el.textContent = (!eklenen.length && !cikarilan.length)
+          ? "Değişiklik yok"
+          : `${eklenen.length} izin eklenecek, ${cikarilan.length} izin kaldırılacak`;
+        el.classList.toggle("var", Boolean(eklenen.length || cikarilan.length));
+      }
     }
-    document.querySelectorAll(".modul-tumu").forEach((m) => {
-      const grup = () => [...document.querySelectorAll(`.izin-secim[data-modul="${m.dataset.modul}"]:not([disabled])`)];
-      m.checked = grup().length > 0 && grup().every((c) => c.checked);
-      m.addEventListener("change", () => grup().forEach((c) => { c.checked = m.checked; }));
+    function sayaclariGuncelle() {
+      hedef.querySelectorAll("details[data-modul-kutu]").forEach((g) => {
+        const hepsi = [...g.querySelectorAll(".izin-secim")];
+        const secili = hepsi.filter((c) => c.checked).length;
+        const el = g.querySelector(".modul-sayac");
+        if (el) el.textContent = String(secili);
+        g.classList.toggle("kismi", secili > 0 && secili < hepsi.length);
+      });
+      ozetGuncelle();
+    }
+    kutular().forEach((c) => c.addEventListener("change", sayaclariGuncelle));
+
+    const tumu = document.getElementById("izin-tumu");
+    if (tumu) tumu.addEventListener("click", () => {
+      secilebilir().forEach((c) => { c.checked = true; });
+      sayaclariGuncelle();
+    });
+    const hicbiri = document.getElementById("izin-hicbiri");
+    if (hicbiri) hicbiri.addEventListener("click", () => {
+      secilebilir().forEach((c) => { c.checked = false; });
+      sayaclariGuncelle();
+    });
+    const geri = document.getElementById("izin-geri");
+    if (geri) geri.addEventListener("click", () => {
+      kutular().forEach((c) => { c.checked = BASLANGIC.has(c.value); });
+      sayaclariGuncelle();
+    });
+    const ara = document.getElementById("izin-ara");
+    if (ara) ara.addEventListener("input", () => {
+      const q = ara.value.trim().toLowerCase();
+      let gorunen = 0;
+      hedef.querySelectorAll(".izin-kutu").forEach((l) => {
+        const uygun = !q || l.dataset.arama.includes(q);
+        l.hidden = !uygun;
+        if (uygun) gorunen += 1;
+      });
+      hedef.querySelectorAll("details[data-modul-kutu]").forEach((g) => {
+        const gorunurKutu = [...g.querySelectorAll(".izin-kutu")].some((l) => !l.hidden);
+        g.hidden = !gorunurKutu;
+        if (q && gorunurKutu) g.open = true;
+      });
+      const el = document.getElementById("degisiklik-ozeti");
+      if (el && q && !gorunen) el.textContent = "Aramaya uyan izin yok";
     });
     const kaydet = document.getElementById("yetki-kaydet");
     if (kaydet) kaydet.addEventListener("click", async () => {
-      const kodlar = [...document.querySelectorAll(".izin-secim:checked")].map((c) => c.value);
+      const kodlar = [...seciliKodlar()];
       if (!kodlar.length) { PERSOPYRO_UI.mesaj("error", "En az bir izin seçmelisiniz."); return; }
       try {
         await PERSOPYRO_UI.cagir(`/test-ui/api/roles/${roleId}/permissions`, {
@@ -820,11 +913,11 @@
           },
         });
         PERSOPYRO_UI.mesaj("ok", "Rol yetkileri güncellendi.");
-        // Kaydettikten sonra düzenleyici açık kalır ve güncel durumu gösterir.
         await Promise.all([yukleYetki(), yuklePanel()]);
         await yetkiEditoru(roleId);
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
+    sayaclariGuncelle();
   }
 
   function yukleOzet() {

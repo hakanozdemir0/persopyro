@@ -3,6 +3,58 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.28.0] — 2026-09-11 — Test arayüzü: yetki sınırları sıkılaştırıldı (çalışan yetki düzenleyemez), PII'siz şirket dizini, yetki ekranı sadeleştirildi
+
+**Baseline (son commit `60b4500`):** çalışma ağacı temiz, tam test suite **424 passed**.
+
+Kullanıcı bildirimi: *"çalışan statüsündeki bir kişi kendisi dahil herkesin yetkisini
+düzenleyebiliyor"*, *"çalışan diğer kişileri ve organizasyon şemasını görsün ama
+bakiye gibi detayları görmesin"*, *"yetki ekranı çok karışık"*.
+
+### Bulgu ve düzeltme (yetki sınırları)
+
+- **Backend zaten reddediyordu** (`update_role_permissions` guard'ları; çalışanın
+  POST'u **403**), ancak arayüz **rol kataloğunu ve izin kutularını herkese**
+  gösteriyordu → kullanıcı düzenleyebildiğini sanıyordu. İki katmanlı düzeltme:
+  1. **`role.read` kapısı:** `/test-ui/api/roles` ve `/api/roles/<id>/permissions`
+     artık `role.read` ister → `employee` (ve `dept_manager`) **403** alır; rol
+     listesini dahi göremez. `tenant_officer` listeyi görür, **düzenleyemez**.
+  2. **Arayüz:** yetkisi olmayanda düzenleyici **salt okunur** (tüm kutular ve
+     "Tümünü seç" kapalı, açık uyarı bandı), düğme etiketi "Yetkileri görüntüle".
+- Kapsam **SELF** olan kullanıcı için çalışan listesi artık **şirket dizini**: çalışan
+  no + genel kullanıcı kimliği + unvan + birim + durum; **ad/e-posta yok, izin/bakiye
+  yok** (docs/ORGANIZATION.md §5 "kişisel veri içermez" ilkesi). Kullanıcı **kendi**
+  kaydını ve bakiyesini tam görür. Kapsam dışı çalışanın detayı ve bakiye ucu **404**.
+- Onay kuyruğu, yaklaşan ve karara bağlanan izinler kapsam/yetki süzgecinden geçmeye
+  devam eder (çalışan yalnız kendi kayıtlarını görür — regresyon testiyle sabitlendi).
+
+### Yetki ekranı (kullanılabilirlik)
+
+- Rol tablosu: rol adı (kod altında), kapsam, izin sayısı, atama sayısı ve tek düğme
+  ("Yetkileri düzenle" / "Yetkileri görüntüle").
+- Düzenleyici: **modül modül katlanır gruplar** ("İzin 3/8 seçili" sayaçlarıyla),
+  **izin arama** kutusu, **Tümünü seç / Hiçbirini seçme / Değişiklikleri geri al**,
+  kaydetmeden önce **"N izin eklenecek, M izin kaldırılacak"** özeti, gerekçe alanı ve
+  **Kaydet**.
+
+### Ölçüm
+
+| Ölçüm | Önce | Sonrası |
+|---|---|---|
+| Test sayısı | 424 | **428** (+4: yetki sınırları, dizin, çalışan izin görünürlüğü) |
+| Yeni migration / bağımlılık | — | **0** |
+| Yinelenen doğrulama | — | `verify_fresh_install.sh` **6c-5**: çalışan → `/api/roles` 403, dizin PII'siz |
+| Güvenlik modeli | — | **değişmedi** (izin kataloğu/RLS aynı; yalnız test arayüzü kapıları sıkılaştı) |
+
+### Doğrulama
+
+- `tests/test_testui.py` **59 test**; tam suite **428 passed**.
+- Gerçek tarayıcı: çalışan → Yetki Yönetimi'nde rol **tablosu boş** (403), düzenleme
+  düğmesi yok; Çalışanlar sekmesinde **dizin** satırları (public_id ile, "gizli"
+  bakiye) + kendi kaydı tam; demo yöneticide düzenleyici katlanır gruplar, arama,
+  sayaçlar ve değişiklik özetiyle görünür.
+- `verify_fresh_install.sh` 6c-5 adımı ve `ruff`/`bandit`/`check`/`makemigrations --check`.
+
 ## [0.27.0] — 2026-09-11 — Test arayüzü: departman düzenleme, rol izin düzenleme (yetki yönetimi), yaklaşan izinler, sabit üst bar
 
 **Baseline (son commit `5b2e844`):** çalışma ağacı temiz, tam test suite **416 passed**.
