@@ -85,6 +85,29 @@ BEGIN
 END
 $$;
 
+-- 5) Django teknik yetki tabloları (OD19 / M22b) ------------------------------
+-- `auth_permission`, `auth_group`, `auth_group_permissions` ve `django_admin_log`
+-- Persopyro'nun yetki kaynağı DEĞİLDİR; Django Admin kaldırıldı ve uygulama bu
+-- tabloları çalışma anında okumaz/yazmaz. Uygulama rolünün TÜM yetkileri geri
+-- alınır (`REVOKE ALL`) — "ALL TABLES" satırından SONRA gelir, aksi halde geniş DML
+-- yetkisi bu daraltmayı sessizce geri alırdı.
+-- Aynı kural `apps/accounts/migrations/0004_od19_is_staff_ve_django_auth_yetkileri.py`
+-- içinde de vardır (iki yer bilinçli olarak hizalıdır).
+-- NOT: `django_admin_log` yeni kurulumlarda hiç OLUŞMAZ (admin uygulaması yok);
+-- bu yüzden her tablo `to_regclass` ile korunur.
+DO $$
+DECLARE tablo text;
+BEGIN
+    FOREACH tablo IN ARRAY ARRAY[
+        'auth_permission', 'auth_group', 'auth_group_permissions', 'django_admin_log'
+    ] LOOP
+        IF to_regclass('hr.' || tablo) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON hr.%I FROM persopyro_app', tablo);
+        END IF;
+    END LOOP;
+END
+$$;
+
 -- Kiracı dizini (slug/domain eşlemesi) yalnızca OKUNUR. Yazma yetkisi verilmez;
 -- dizini tetikleyici (SECURITY DEFINER) günceller. Aksi halde bir kiracı başka
 -- kiracının alan adı eşlemesini ele geçirebilirdi.

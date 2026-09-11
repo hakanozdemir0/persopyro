@@ -10,8 +10,9 @@ import os
 import subprocess
 import sys
 
+import pytest
 from django.conf import settings
-from django.urls import resolve
+from django.urls import Resolver404, resolve
 
 BASE_DIR = str(settings.BASE_DIR)
 
@@ -98,8 +99,20 @@ def test_uretim_cerezleri_guvenli() -> None:
     assert result.stdout.split() == ["True", "True", "True", "True", "DENY", "True"]
 
 
-def test_admin_urlleri_cozulur() -> None:
-    assert resolve("/admin/login/").func is not None
+def test_admin_yolu_yok() -> None:
+    """
+    OD19 (kapalı): Django Admin kaldırılmıştır; `/admin/` bir route DEĞİLDİR.
+
+    Beklenen davranış 404'tür. Bu test bilinçli olarak VERİTABANI KULLANMAZ
+    (`test_smoke.py` kuralı); gerçek HTTP 404 davranışı
+    `tests/test_od19_django_admin_kapali.py` içinde sınanır.
+    """
+    from django.urls import get_resolver
+
+    with pytest.raises(Resolver404):
+        resolve("/admin/")
+    assert not any("admin" in str(p.pattern) for p in get_resolver().url_patterns)
+    assert "django.contrib.admin" not in settings.INSTALLED_APPS
 
 
 def test_secret_key_yoksa_uygulama_baslamaz() -> None:

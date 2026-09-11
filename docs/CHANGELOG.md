@@ -3,6 +3,163 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.17.0] — 2026-09-11 — OD19 uygulandı: Django Admin ve `auth_*` paralel yetki yolu kapatıldı (M22–M22d)
+
+**Baseline (son commit `2e38952`):** `bash scripts/run_tests.sh` → **150 passed**
+(beklenen değerle uyumlu). Bu girişte yalnızca M22–M22d kapsamı uygulandı; platform
+şeması migrationlarına, organizasyon modülüne ve yeni RBAC tasarımına dokunulmadı.
+
+### M22 — Django Admin kaldırıldı ✅
+
+- `config/urls.py`: `from django.contrib import admin` ve `path("admin/", ...)`
+  **kaldırıldı**; yalnızca API yolları kaldı.
+- `config/settings.py`: `"django.contrib.admin"` **INSTALLED_APPS'ten çıkarıldı**
+  (gerekçe koda yorum olarak yazıldı: admin'in yetki kapısı `is_active and is_staff`
+  kendi RBAC'imizi atlar). `django.contrib.auth` **kaldı** — parola hash'leme, oturum
+  kimlik doğrulaması ve `AbstractBaseUser` altyapısı için gereklidir.
+- **Ölçüm:** `GET /admin/` ve `GET /admin/login/` → **404** (`resolve()` →
+  `Resolver404`); uygulama kayıtlarında `django.contrib.admin` yok; kodda
+  `admin.site.register` ya da `admin.py` **yok**; admin template/static bağımlılığı
+  yok (`TEMPLATES` içinde admin bağlam işlemcisi hiç eklenmemişti).
+- **Şema farkı (beklenen):** admin uygulaması çıktığı için **yeni kurulumda
+  `django_admin_log` tablosu hiç oluşmaz**; mevcut veritabanında tablo (boş) kalır —
+  silinmedi (geri dönüşü kolay, veri kaybı yok), yetkileri geri alındı.
+
+### M22b — `auth_*` / `django_admin_log` yetkileri kapatıldı ✅
+
+- **Önce ölçüm (körlemesine REVOKE yapılmadı):** `has_table_privilege` ile
+  `persopyro_app`'in bu dört tabloda **SELECT/INSERT/UPDATE/DELETE** yetkisi olduğu
+  görüldü (Django teknik tabloları `hr` şemasında; `public` şeması boştur).
+- **Uygulama:** yeni migration
+  `apps/accounts/migrations/0004_od19_is_staff_ve_django_auth_yetkileri.py` →
+  `REVOKE ALL` (dört tablo, `to_regclass` korumalı: yeni kurulumda
+  `django_admin_log` yoktur) + `scripts/02_grant_app_privileges.sql` içine **aynı**
+  daraltma bloğu.
+- **Neden iki yerde:** betik her migrate sonrası çalışır ve `ALTER DEFAULT
+  PRIVILEGES` + `GRANT ... ON ALL TABLES` ile geniş DML verir; daraltma blokları o
+  satırdan **sonra** gelmezse yetkiler sessizce geri açılırdı (bu turda ölçüldü ve
+  regresyon testine bağlandı).
+- **Yetki turu (owner/runtime ayrımı):** migration sahibi rol (`persopyro_owner`) ile
+  çalışır, daraltma **runtime uygulama rolüne** (`persopyro_app`) uygulanır; roller
+  birbirine karıştırılmaz (`SET ROLE` üyeliği yoktur — ölçüldü).
+- **Ölçüm (canlı DB ve sıfırdan kurulum):** dört tabloda
+  `SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER` → **hepsi `false`**
+  (`SELECT` dahil — uygulama bu tabloları çalışma anında okumuyor); tam test suite ve
+  gerçek HTTP bunu doğruladı. `api_tokens` (M30) ve `tenant_directory` daraltmaları
+  korunuyor; `django_session` DML'i **gerekli olduğu için** duruyor.
+
+### M22c — `create_superuser` ve `is_staff` ✅
+
+- **Veri ölçümü (önce):** `hr.tenant_directory` üzerinden tüm kiracılar dolaşılarak
+  ölçüldü → 2 kiracı, 2 aktif kullanıcı, **`is_staff=True` kayıt: 0**. Kayıt
+  olmadığı için bayrak **körlemesine değiştirilmedi**; migration yine de bir ön
+  kontrol adımı içerir: kayıt bulursa migration **açık hata ile durur** ve
+  hesapları listeler.
+- **`create_superuser` artık kullanıcı üretmez:** `DjangoAdminRemovedError`
+  yükseltir. Bu hata **iki atalıdır** (`NotImplementedError` + `ValidationError`) —
+  ölçüm: bizim `createsuperuser` komut override'ı gölgede kalır (komut araması
+  `INSTALLED_APPS` sırasına göre yapılır), Django'nun kendi komutu
+  `ValidationError`'ı temiz `CommandError`'a çevirdiği için hata tipi bilinçli
+  seçildi. Ölçüm: `manage.py createsuperuser --email ... --noinput` →
+  `CommandError: create_superuser desteklenmiyor (OD19 — kapalı) ...` (çıkış kodu 1).
+- **`is_staff` invariantı üç katmanlı:** (1) `User.save()` guard'ı — `is_staff=True`
+  görürse açık hata; (2) veritabanı kısıtı `users_is_staff_disabled CHECK
+  (NOT is_staff)` (ham SQL ile de açılamaz); (3) denetim komutu
+  **`manage.py audit_is_staff`** — kiracıları dolaşıp ihlali ve kısıtın yokluğunu
+  raporlar, ihlalde çıkış kodu 1 (cron için uygun). Ölçüm: canlı DB ve sıfırdan
+  kurulumda `is_staff_true=0`, `DB kısıtı: var`.
+- `is_superuser` alanı **eklenmedi**; kullanıcı modeli `PermissionsMixin`
+  kullanmadığı için `groups` / `user_permissions` **yoktur** → Django model izinleri
+  Persopyro izni üretemez (testle doğrulandı).
+
+### M22d — Sıfırdan kurulum ve gerçek doğrulama ✅
+
+- **A) Mevcut veritabanı (upgrade):** `bash scripts/migrate.sh` →
+  `accounts.0004_od19_is_staff_ve_django_auth_yetkileri` uygulandı, yetkiler
+  tazelendi; ölçüm ve testler yeşil.
+- **B) Temiz/geçici veritabanı (fresh install, gerçek üretim DB'sine dokunulmadı):**
+  geçici DB oluşturuldu → **migration'lar sıfırdan** uygulandı → `createcachetable` →
+  yetki scripti → ölçüm → demo verisi → **gerçek HTTP** (uygulama rolüyle) → tam test
+  suite → geçici DB'ler silindi (kalan: 0).
+  - Sıfırdan kurulumda: `django_admin_log` **hiç oluşmadı** (admin migration kaydı
+    **0**); `auth_permission`/`auth_group`/`auth_group_permissions` var ama app
+    rolünde **hiç yetki yok**; `users_is_staff_disabled` kısıtı **var**;
+    `api_tokens` SELECT/INSERT, `django_session` tam DML.
+  - HTTP (app rolü): `/admin/` **404**, `/admin/login/` **404**, `/api/health`
+    **200**, `/api/ready` **200**, `POST /auth/token` **201**, logout **204**,
+    logout sonrası aynı token **401**.
+  - Tam suite temiz DB üzerinden: **171 passed**.
+  - **Ölçüm uyarısı (betik yazımı):** `has_table_privilege(rol, 'tablo', ...)` metin
+    biçimi tablo yoksa **hata verir**, `false` dönmez → ölçüm `to_regclass` ile
+    korunmalı. Ayrıca `. ./.env` `POSTGRES_DB`'yi ihraç ettiği için komutlara hedef
+    veritabanı **açıkça** verilmelidir (aksi halde komut sessizce canlı DB'ye gider —
+    bu turda fark edildi ve düzeltildi; canlı DB'de yalnızca no-op `migrate` oldu).
+
+### Test
+
+- Yeni **`tests/test_od19_django_admin_kapali.py`** (21 test): `/admin/` + alt
+  yolları **404**/**Resolver404** · `django.contrib.admin` uygulama listesinde yok
+  (auth kalıyor) · `is_staff=True` uygulama guard'ı, sonradan açma denemesi ve **ham
+  SQL** (DB kısıtı) · kısıtın şemada varlığı (sıfırdan kurulumun sonucu) ·
+  `audit_is_staff` çıktısı · `create_superuser` açık hata · hata tipinin CLI hata
+  yoluna uygunluğu · `createsuperuser` komutu `CommandError` · tenant girişi + token
+  akışı bozulmadı (200/201/200/200) · RBAC izin akışı bozulmadı (403 → 200) · Django
+  yetki kavramları Persopyro izni üretmiyor · **dört teknik tabloda app rolü hiç
+  yetkisiz** (parametrik, 7 yetki türü) · **grant scripti daraltmayı geri açmıyor**.
+- **Güncellenen mevcut test:** `tests/test_smoke.py::test_admin_urlleri_cozulur` →
+  `test_admin_yolu_yok` (karar tersine çevrildi: route **yok**, 404 beklenir).
+- **Final:** `bash scripts/run_tests.sh` → **171 passed** (150 + 21).
+
+### Ölçüm / doğrulama
+
+- `manage.py check` temiz · `makemigrations --check` → "No changes detected" ·
+  `ruff check` → **All checks passed** · `bandit` → **0 bulgu**.
+- `bash scripts/migrate.sh` → `accounts.0004` uygulandı.
+- **HTTP duman testi (`bash scripts/smoke.sh`, canlı DB, gerçek `runserver`):**
+  `/api/health` 200 · `/api/ready` 200 · **`/admin/` 404 (beklenen — OD19)** ·
+  token 201 · logout 204 · logout sonrası aynı token 401 · geçersiz token 401 ·
+  askıdaki kiracı 403. Sunucu kapatıldı; açık process/port bırakılmadı.
+- **Doküman tutarlılığı:** `docs/SECURITY.md` (T18 kapandı, §3 admin/`is_staff`
+  maddeleri, §5 tek yetkilendirme yolu, G8), `docs/DATABASE.md` (A.1.2 tablosu, M22–
+  M22d durumu, `users` kartı, migration listesi, H3), `docs/AUTHORIZATION.md` (OD19
+  "TAMAMLANDI"), `docs/ARCHITECTURE.md` (K23).
+
+### SECURITY FINDING
+
+**Yeni bulgu yok.** Beklenmeyen yeni bir yetkilendirme yolu görülmedi: Django
+`auth_*` tabloları artık uygulama rolü için **okunamaz ve yazılamaz**; `is_staff`,
+Django grupları ve model izinleri Persopyro izni üretmiyor (testle doğrulandı).
+Kapatma sırasında ölçülen iki nokta bulgu değil, kayıtlı davranıştır: (a) mevcut
+veritabanında boş `django_admin_log` tablosu kalır (yetkisiz; yeni kurulumda hiç
+oluşmaz); (b) `django.contenttypes`/`django_session` gibi diğer teknik tablolar bu
+kararın kapsamı dışındadır (M22b dört tabloyu sayar).
+
+### Değişmeyenler (bilinçli)
+
+- Platform şeması migrationları (M1–M5/M17–M21), organizasyon modülü (OD5), yeni RBAC
+  tasarımı, `permissions` yazma yetkisinin geri alınması (M6), `SoftDeleteManager`
+  standardı (M25), F10 typosquatting (`docs/SECURITY.md`), Django Admin'i ileride
+  açma koşulları (OD19'daki ön koşullar).
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `config/urls.py` | `admin/` route'u ve admin import'u kaldırıldı |
+| `config/settings.py` | `django.contrib.admin` uygulama listesinden çıkarıldı (gerekçe yorumu) |
+| `apps/accounts/models.py` | `create_superuser` fail-closed (`DjangoAdminRemovedError`), `User.save` `is_staff` guard'ı, `users_is_staff_disabled` kısıtı, `is_staff` help_text |
+| `apps/accounts/migrations/0004_od19_is_staff_ve_django_auth_yetkileri.py` | **Yeni migration**: ölçümlü ön kontrol + CHECK kısıtı + `REVOKE ALL` (M22b/M22c) |
+| `apps/accounts/management/commands/audit_is_staff.py` | **Yeni**: `is_staff` denetim sorgusu (ihlalde çıkış kodu 1) |
+| `apps/accounts/management/{__init__.py,commands/__init__.py}` | **Yeni**: komut paketi |
+| `scripts/02_grant_app_privileges.sql` | Django teknik tablolarının yetkilerini geri alan blok (M22b) |
+| `scripts/smoke.sh` | `/admin/` → 404 adımı |
+| `tests/test_od19_django_admin_kapali.py` | **Yeni** (21 regresyon testi) |
+| `tests/test_smoke.py` | `/admin/` testi tersine çevrildi (404/beklenen) |
+| `docs/SECURITY.md`, `docs/DATABASE.md`, `docs/AUTHORIZATION.md`, `docs/ARCHITECTURE.md` | OD19/M22–M22d kapandı |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+---
+
 ## [0.16.0] — 2026-09-11 — F8 ve F11 kapatıldı (OD26 kodlandı: kapsamlı/iptal izli token + kiracı erişimi)
 
 **Baseline (son commit `cdeeb0e`):** `bash scripts/run_tests.sh` → **110 passed**.

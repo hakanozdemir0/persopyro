@@ -75,7 +75,12 @@ ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 # --- Uygulamalar -------------------------------------------------------------
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # NOT: `django.contrib.admin` BİLİNÇLİ OLARAK YOKTUR (OD19 — kapalı).
+    # Admin'in yetki kapısı (`is_active and is_staff`) kendi RBAC katmanımızı
+    # atlayan paralel bir yetkilendirme yolu açar; route ve uygulama birlikte
+    # kaldırılmıştır. Yeniden eklenmesi, OD19'daki yazılı ön koşullara bağlıdır.
+    # `django.contrib.auth` KALIR: parola hash'leme, oturum kimlik doğrulaması ve
+    # `AbstractBaseUser` altyapısı için gereklidir (yetki kaynağı değildir).
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",

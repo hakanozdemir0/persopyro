@@ -1053,7 +1053,7 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   toplu erişimde onay alınmalı, rutin destek işleri tıkanmamalıdır.
 - **Etki:** Onay akışı adım sayısı, bildirimler, kiracı denetim ekranı (OD15).
 
-### OD19 — Django admin / `auth_*` paralel yetki yolu — **KAPALI** ✅ (2026-09-11)
+### OD19 — Django admin / `auth_*` paralel yetki yolu — **KAPALI** ✅ (2026-09-11) — **UYGULANDI** ✅ (M22–M22d)
 
 - **KARAR (kabul edildi):**
   1. Üretimde **Django Admin kullanıcı yetkilendirmesi kullanılmaz**.
@@ -1076,14 +1076,18 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   (`is_staff` + `has_module_perms`) kendi RBAC'imizle hizalandırılamaz; kalan her
   yol kalıcı bakım, denetim ve yanlış yapılandırma riski üretir. İç ihtiyaçlar
   `platform.*` izinleriyle **kendi katmanımızdan** karşılanır.
-- **İmplementasyon kalemleri (bu turda kod yazılmadı):** `/admin/` route'u
-  kaldırılır; `django.contrib.admin` uygulama listesinden çıkarılır;
-  `create_superuser` artık `is_staff=True` atamaz; `auth_group`,
-  `auth_group_permissions`, `auth_permission`, `django_admin_log` tablolarında
-  uygulama rolünün **tüm yetkileri geri alınır**; `is_superuser` alanı
-  **eklenmez**; üretimde `is_staff = true` olan aktif kullanıcı bulunmaması
-  **denetim sorgusu + test** ile zorlanır; kaldırma sonrası **sıfırdan kurulum
-  testi** tekrarlanır.
+- **İmplementasyon kalemleri — TAMAMLANDI ✅ (M22–M22d, 2026-09-11):** `/admin/`
+  route'u kaldırıldı (`GET /admin/` → **404**); `django.contrib.admin` uygulama
+  listesinden çıkarıldı; `create_superuser` artık `is_staff=True` **atamaz** — açık
+  hata verir (`DjangoAdminRemovedError`) ve `manage.py createsuperuser` anlaşılır
+  hata basar; `auth_group`, `auth_group_permissions`, `auth_permission`,
+  `django_admin_log` tablolarında uygulama rolünün **tüm yetkileri geri alındı**
+  (`accounts/0004` + `scripts/02_grant_app_privileges.sql`; regresyon testi betiğin
+  daraltmayı geri açmadığını doğrular); `is_superuser` alanı **eklenmedi**; üretimde
+  `is_staff = true` olmaması **uygulama guard'ı + DB kısıtı + denetim komutu
+  (`audit_is_staff`) + test** ile zorlanır; kaldırma sonrası **sıfırdan kurulum
+  testi** yapıldı (geçici DB: `django_admin_log` hiç oluşmadı, yetkiler kapalı, tam
+  test suite yeşil).
 - **İleride admin kullanımı için ön koşullar:** ayrı alan adı ve ağ erişim
   sınırı; `platform_users` ile kimlik doğrulama (kiracı kullanıcısıyla değil);
   MFA zorunlu; yalnızca `platform.*` izinleriyle erişim; tüm işlemlerin platform

@@ -45,7 +45,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T15** | **Süresi geçmiş/iptal edilmiş onayla erişim (yetki kalıntısı)** | **Yüksek** | **Koşul kontrolü her istekte (GRANT_VALID), veritabanı politika kontrolü** 🔜 |
 | **T16** | **Kendi kendini yetkilendirme (self-elevation)** | **Yüksek** | **Ayrılık ilkesi: talep eden onaylayamaz, kendi kapsamını genişletemez** 🔜 |
 | **T17** | **Yedek/export üzerinden toplu veri sızması** | **Yüksek** | **Maskeli varsayılan export, kayıtlı/kısıtlı toplu indirme, şifreli yedek** 🔜 |
-| **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **Karar verildi (OD19 — kapalı): `/admin/` kaldırılır, `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez.** Uygulama bekliyor 🔜 |
+| **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **KAPATILDI (OD19, 2026-09-11):** `/admin/` yolu ve `django.contrib.admin` **kaldırıldı** (`GET /admin/` → 404), `auth_permission`/`auth_group`/`auth_group_permissions`/`django_admin_log` yetkileri uygulama rolünden **tamamen geri alındı**, `is_staff` üretimde `True` **olamaz** (uygulama guard'ı + DB kısıtı + denetim komutu), `is_superuser` alanı **yok** ✅ (M22–M22d) |
 | **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
 | **T20** | **Yetki çürümesi: soft-delete edilmiş rol, atama veya izin istisnası yetki vermeye devam ediyor** | **Yüksek** | **KAPATILDI (F7, 2026-09-11):** yetki çözümlemesi `deleted_at IS NULL` filtresini **açıkça** uygular (rol, atama, istisna); silinmiş `deny` aktif karar sayılmaz; pasif kullanıcı için izin kümesi boş; `create_default_roles` silinmiş rolü canlandırmaz (`SoftDeletedDefaultRoleError`) ✅ |
 | **T21** | **Kapsamsız/uzun ömürlü API token'ı: token kullanıcının tüm yetkilerini taşır, iptalin denetim izi kalmaz** | **Orta** | **KAPATILDI (F8, 2026-09-11):** zorunlu `purpose` + `scopes` (katalog doğrulamalı), **kesişim kuralı** (`current_user_permissions ∩ token_scopes`), `revoked_at`/`revoked_reason` (tek yönlü iptal), interactive ≤ 30 gün / service ≤ 90 gün, süresiz yasak, toplu iptal ✅ (M29/M30 + F10 — `accounts.0003_apitoken_od26`) |
@@ -79,19 +79,26 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 - Parola sıfırlama 🔜: tek kullanımlık, süreli, hash'li token; kullanıcı
   numaralandırmasına karşı her durumda aynı yanıt.
 - MFA zorunluluğu rollerle ilişkilendirilir ❓OD10.
-- **Django Admin kapısı kapalı (OD19 — kapalı):** üretimde `/admin/` yolu
-  yayınlanmaz ve `django.contrib.admin` uygulama listesinde tutulmaz. Belirleyici
-  ölçüm: Django'nun `AdminSite.has_permission` kapısı `is_active and is_staff`
-  (kurulu kaynak, `django/contrib/admin/sites.py:207`) — yani `is_staff=True` olan
-  **aktif** bir kullanıcı, ayrı bir admin girişi yapmadan mevcut oturumuyla admin
-  dizinini açabilir. Bugün etki boş dizinle sınırlıdır (hiçbir model kayıtlı
-  değil), ama kapı kapatılır.
-- **`is_staff` / `is_superuser` kuralı (OD19 — kapalı):** `is_superuser` alanı
-  **hiç eklenmez** (`PermissionsMixin` kullanılmaz); `is_staff` **tek başına hiçbir
-  Persopyro yetkisi vermez**, varsayılanı `False`'dur ve üretimde **hiçbir kiracı
-  kullanıcısında `True` olmamalıdır**; `create_superuser` akışı artık
-  `is_staff=True` atamaz (uygulama kalemi). Üretimde `is_staff = true` olan aktif
-  kullanıcı bulunması **denetim sorgusu** ile izlenir ve testle zorlanır.
+- **Django Admin kapısı KAPATILDI (OD19 — kapalı, uygulandı ✅):** üretimde `/admin/`
+  yolu **yoktur** ve `django.contrib.admin` uygulama listesinde **tutulmaz** (route +
+  uygulama birlikte kaldırıldı). Belirleyici ölçüm (karar gerekçesi): Django'nun
+  `AdminSite.has_permission` kapısı `is_active and is_staff`
+  (`django/contrib/admin/sites.py:207`) — yani `is_staff=True` olan **aktif** bir
+  kullanıcı, ayrı bir admin girişi yapmadan mevcut oturumuyla admin dizinini
+  açabilirdi. Ölçüm (uygulama sonrası): `GET /admin/` ve `GET /admin/login/` → **404**;
+  `django.contrib.admin` uygulama kayıtlarında yok; yeni kurulumda `django_admin_log`
+  tablosu **hiç oluşmaz**.
+- **`is_staff` / `is_superuser` kuralı (OD19 — kapalı, uygulandı ✅):** `is_superuser`
+  alanı **hiç eklenmez** (`PermissionsMixin` kullanılmaz); `is_staff` **tek başına
+  hiçbir Persopyro yetkisi vermez**, varsayılanı `False`'dur ve üretimde **hiçbir
+  kiracı kullanıcısında `True` olamaz**. Dayatma üç katmanlıdır: (1) uygulama
+  koruyucusu — `User.save()` `is_staff=True` görürse açık hata verir; (2) veritabanı
+  kısıtı — `users_is_staff_disabled CHECK (NOT is_staff)` (`accounts/0004`), ham SQL
+  ile de açılamaz; (3) denetim — `python manage.py audit_is_staff` ihlali ve kısıtın
+  yokluğunu raporlar (ihlalde çıkış kodu 1). `create_superuser` artık kullanıcı
+  **üretmez**: açık hata verir (`DjangoAdminRemovedError`) ve `manage.py
+  createsuperuser` komutu kullanıcıya anlaşılır bir hata mesajı basar. Ölçüm
+  (canlı DB, 2026-09-11): `is_staff=True` kayıt **0**.
 - **Admin giriş formu kiracısız çalışmaz (mevcut koruma):** kimlik doğrulama
   backend'imiz `tenant` olmadan `None` döner (fail-closed), dolayısıyla
   `/admin/login/` formu bir kiracı kullanıcısıyla giriş yapamaz. Riski yaratan şey
@@ -199,14 +206,18 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 - Kendi kendini yükseltme yasağı 🔜: kullanıcı kendi rolüne izin ekleyemez,
   kapsamını genişletemez, kendi talebini onaylayamaz (ayrılık ilkesi).
 - Son kiracı yöneticisi kaldırılamaz/pasifleştirilemez 🔜 (kilitlenme koruması).
-- **Tek yetkilendirme yolu — KARAR VERİLDİ (OD19 kapalı):** Yetki kararı
-  **yalnızca** bu modelde verilir. Django'nun kendi yetki sistemi
-  (`auth_permission`, `auth_group`, `/admin/`, `is_staff`, `is_superuser`) üretimde
-  **hiçbir yetki vermez**; `/admin/` kaldırılır; `auth_*` ve `django_admin_log`
-  tablolarında uygulama rolünün **tüm yetkileri geri alınır**. Bu tablolar teknik
-  olarak kalabilir (`django.contrib.auth`, `AbstractBaseUser`, parola hash'leme ve
-  oturum kimlik doğrulaması için gereklidir) ama **izin kaynağı değildir**.
-  İleride admin kullanımının ön koşulları OD19'da yazılıdır.
+- **Tek yetkilendirme yolu — UYGULANDI (OD19 kapalı ✅):** Yetki kararı **yalnızca**
+  bu modelde verilir. Django'nun kendi yetki sistemi (`auth_permission`, `auth_group`,
+  `/admin/`, `is_staff`, `is_superuser`) üretimde **hiçbir yetki vermez**; `/admin/`
+  kaldırıldı; `auth_*` ve `django_admin_log` tablolarında uygulama rolünün **tüm
+  yetkileri geri alındı** (ölçüm: SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/
+  TRIGGER → hepsi `false`; `scripts/02_grant_app_privileges.sql` bu daraltmayı geri
+  açmaz — regresyon testi vardır). Bu tablolar teknik olarak kalır
+  (`django.contrib.auth`, `AbstractBaseUser`, parola hash'leme ve oturum kimlik
+  doğrulaması için gereklidir) ama **izin kaynağı değildir**. Kullanıcı modeli
+  `PermissionsMixin` kullanmadığı için `groups` / `user_permissions` alanları da
+  **yoktur** — Django model izinleri Persopyro izni üretemez. İleride admin
+  kullanımının ön koşulları OD19'da yazılıdır.
 - **Tanım tabloları salt okunur:** `hr.permissions` (global katalog) ve yansı/dizin
   tabloları uygulama rolünde yalnızca **SELECT** olmalıdır; `ALTER DEFAULT
   PRIVILEGES` ile gelen geniş DML her yeni tabloda daraltılır 🔜
@@ -582,9 +593,10 @@ listelenmiştir (OD1–OD28).
 - **G1** — platform erişiminin teknik mekanizması (OD1/OD3 kapalı): **ayrı
   servis/authorization katmanı + ayrı veritabanı rolü, kiracı RLS politikaları
   değişmez, `BYPASSRLS` yasak** (bölüm 4.2).
-- **G8** — Django'nun paralel yetki yolu (OD19 kapalı): **`/admin/` kaldırılır,
-  `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek
-  başına yetki vermez** (bölüm 3 ve 5).
+- **G8** — Django'nun paralel yetki yolu (OD19 kapalı, **uygulandı ✅**): **`/admin/`
+  kaldırıldı (`GET /admin/` → 404), `django.contrib.admin` uygulama listesinden
+  çıkarıldı, `auth_*` tablolarının yetkileri geri alındı, `is_staff`/`is_superuser`
+  tek başına yetki vermez** (bölüm 3 ve 5; M22–M22d).
 - **G10** — kiracı yaşam döngüsü durumunun erişime yansıması (OD26 kapsamında
   karara bağlandı, bulgu **F11**): **`status NOT IN ('active','trial')` veya
   `tenants.deleted_at IS NOT NULL` → oturum ve token reddedilir**; askıya almada

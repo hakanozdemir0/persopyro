@@ -50,9 +50,12 @@ for _ in $(seq 1 30); do
     sleep 0.5
 done
 
-echo "== 3/6 Sağlık uçları =="
+echo "== 3/6 Sağlık uçları ve kapalı admin yolu =="
 echo "    /api/health : $(curl -fsS "http://127.0.0.1:$PORT/api/health")"
 echo "    /api/ready  : $(curl -fsS "http://127.0.0.1:$PORT/api/ready")"
+# OD19 (kapalı): Django Admin kaldırıldı; /admin/ bir route DEĞİLDİR → 404.
+KOD_ADMIN="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/admin/")"
+echo "    /admin/     : HTTP $KOD_ADMIN (404 beklenir — Django Admin kaldırıldı)"
 
 # OD26: kapsamsız token üretilemez; `purpose` ve `scopes` zorunludur.
 GOVDE="{\"tenant\":\"demo\",\"email\":\"demo@persopyro.test\",\"password\":\"$DEMO_PASSWORD\",\"purpose\":\"smoke testi icin token\",\"scopes\":[\"employee.read\"]}"

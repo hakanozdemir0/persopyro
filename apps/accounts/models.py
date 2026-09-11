@@ -19,6 +19,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -220,6 +221,30 @@ class ApiToken(UUIDModel):
         return hashlib.sha256(duz_metin.encode()).hexdigest()
 
 
+class DjangoAdminRemovedError(NotImplementedError, ValidationError):
+    """
+    OD19 (kapalı): Django Admin / superuser akışı ve `auth_*` tabanlı yetki yolu
+    kaldırılmıştır; bu akış açık hata ile reddedilir (fail-closed).
+
+    NEDEN İKİ ATALAR: `django.contrib.auth`'ın `createsuperuser` komutu etkin
+    kalır (komut araması `INSTALLED_APPS` sırasına göre yapılır ve `django.contrib.
+    auth` daha önce geldiği için bir override gölgede kalırdı — ölçüldü). Django'nun
+    komutu `ValidationError`'ı yakalayıp temiz bir `CommandError` mesajına çevirir
+    (`createsuperuser.py`); diğer istisnalar yığın iziyle düşer. Bu yüzden hata hem
+    `NotImplementedError` (programatik çağrılar için: "desteklenmiyor") hem
+    `ValidationError` (CLI için: anlaşılır mesaj) olacak şekilde tanımlandı.
+
+    DİKKAT (`ölçüldü`): çoklu kalıtımda `ValidationError.__init__` kendiliğinden
+    çalışmaz (MRO'da `NotImplementedError` önce gelir ve alanlar — `error_list`,
+    `messages` — boş kalır; Django'nun komutu `e.messages`'ı okurken `AttributeError`
+    verir). Bu yüzden iki başlatıcı da AÇIKÇA çağrılır.
+    """
+
+    def __init__(self, message: str) -> None:
+        NotImplementedError.__init__(self, message)
+        ValidationError.__init__(self, message)
+
+
 class UserManager(BaseUserManager):
     """E-posta + kiracı zorunlu kullanıcı oluşturucu."""
 
@@ -240,10 +265,29 @@ class UserManager(BaseUserManager):
         extra.setdefault("status", UserStatus.ACTIVE)
         return self._create_user(email, password, tenant, **extra)
 
-    def create_superuser(self, email: str, password: str | None = None, tenant=None, **extra):
-        extra.setdefault("status", UserStatus.ACTIVE)
-        extra.setdefault("is_staff", True)
-        return self._create_user(email, password, tenant, **extra)
+    def create_superuser(
+        self, email: str | None = None, password: str | None = None, tenant=None, **extra
+    ):
+        """
+        Persopyro'da Django Admin **superuser** kavramı YOKTUR (OD19 — kapalı).
+
+        Sessizce Django superuser semantiği üretmek yerine **açık hata** verilir:
+
+          * `/admin/` yolu ve `django.contrib.admin` kaldırılmıştır,
+          * `is_superuser` alanı hiç eklenmemiştir (`PermissionsMixin` kullanılmaz),
+          * `is_staff` hiçbir Persopyro yetkisi **vermez** ve veritabanı kısıtıyla
+            `False`'a zorlanır (`users_is_staff_disabled`).
+
+        Kiracı yöneticisi oluşturmanın doğru yolu: normal kullanıcı üretmek ve
+        `create_default_roles(<tenant>)` + `UserRole` ile rol atamak
+        (çalışan örnek: `scripts/_demo_data.py`).
+        """
+        raise DjangoAdminRemovedError(
+            "create_superuser desteklenmiyor (OD19 — kapalı): Persopyro'da Django Admin "
+            "superuser kavramı yoktur ve is_staff hiçbir yetki vermez. Kiracı yöneticisi "
+            "için User.objects.create_user(...) + create_default_roles(tenant) + UserRole "
+            "kullanın."
+        )
 
 
 class User(UUIDModel, AbstractBaseUser):
@@ -261,8 +305,13 @@ class User(UUIDModel, AbstractBaseUser):
         "durum", max_length=20, choices=UserStatus.choices, default=UserStatus.ACTIVE
     )
     is_staff = models.BooleanField(
-        "yönetim paneline erişebilir", default=False,
-        help_text="Django yönetim paneline giriş izni (yetki değil, yalnızca kapı).",
+        "yönetim paneline erişebilir (KULLANILMIYOR)",
+        default=False,
+        help_text=(
+            "OD19 (kapalı): Django Admin kaldırılmıştır. Bu bayrak hiçbir Persopyro "
+            "yetkisi VERMEZ ve üretimde True olamaz (uygulama guard'ı + DB kısıtı). "
+            "Alan, Django uyumluluğu için şemada tutulur."
+        ),
     )
 
     # Güvenlik alanları (docs/SECURITY.md bölüm 3)
@@ -299,6 +348,13 @@ class User(UUIDModel, AbstractBaseUser):
         constraints = [
             models.UniqueConstraint(
                 fields=["tenant", "email"], name="users_tenant_email_uniq"
+            ),
+            # OD19 (kapalı): Django Admin yolu kaldırıldı; `is_staff` hiçbir
+            # Persopyro yetkisi vermez ve üretimde True olamaz. Kural hem uygulama
+            # katmanında (`User.save`) hem veritabanında (son savunma hattı)
+            # dayatılır — ham SQL ile de bu bayrak açılamaz.
+            models.CheckConstraint(
+                condition=models.Q(is_staff=False), name="users_is_staff_disabled"
             ),
         ]
         indexes = [
@@ -341,6 +397,15 @@ class User(UUIDModel, AbstractBaseUser):
     def save(self, *args, **kwargs):
         if self.email:
             self.email = self.email.lower()
+        # OD19 (kapalı): admin kaldırıldıktan sonra `is_staff` yalnızca yanlış
+        # yapılandırma riski taşır. Sessizce kabul etmek yerine açık hata verilir
+        # (fail-closed); aynı kural DB'de CHECK ile de dayatılır.
+        if self.is_staff:
+            raise ValueError(
+                "is_staff=True geçersizdir (OD19 — kapalı): Django Admin kaldırıldı ve "
+                "bu bayrak hiçbir Persopyro yetkisi vermez. Yetki yalnızca UserRole / "
+                "RolePermission / UserPermissionOverride üzerinden verilir."
+            )
         if self.pk is None and self.password_changed_at is None:
             self.password_changed_at = timezone.now()
         super().save(*args, **kwargs)
