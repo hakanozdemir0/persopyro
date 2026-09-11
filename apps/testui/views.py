@@ -9,6 +9,17 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 
 
+def _demo_hesabi(metin: str) -> dict:
+    """
+    `"eposta@ornek.test (rol)"` biçimini `{"email": ..., "rol": ...}` yapar.
+
+    Arayüzde e-posta rol metninden ayrı gösterilir; kullanıcı tüm satırı kopyalayıp
+    girişte hata almaz.
+    """
+    eposta, _, kalan = str(metin).partition("(")
+    return {"email": eposta.strip(), "rol": kalan.rstrip(")").strip()}
+
+
 def _kapali_mi() -> None:
     """
     Arayüz kapalıysa **404** döner (yol yok sayılır).
@@ -31,7 +42,7 @@ def login_page(request):  # noqa: ANN001, ANN201
         request,
         "testui/login.html",
         {
-            "demo_users": getattr(settings, "TEST_UI_DEMO_USERS", []),
+            "demo_users": [_demo_hesabi(k) for k in getattr(settings, "TEST_UI_DEMO_USERS", [])],
             "tanitim": "Bu arayüz yalnızca elle (manuel) test içindir.",
         },
     )

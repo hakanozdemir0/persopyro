@@ -25,8 +25,13 @@
       <p><button class="primary" type="submit">Giriş yap</button></p>
     </form>
     <h3>Demo hesaplar (yalnızca e-posta)</h3>
+    {# E-posta ve rol AYRI gösterilir: "eposta (rol)" metnini kopyalayan kullanıcı
+       girişte 401 alıyordu. E-postaya tıklamak alanı doldurur. #}
     <ul class="muted">
-      {% for k in demo_users %}<li><code>{{ k }}</code></li>{% endfor %}
+      {% for k in demo_users %}
+        <li><a href="#" class="demo-eposta" data-eposta="{{ k.email }}"><code>{{ k.email }}</code></a>
+          <span class="small">{{ k.rol }}</span></li>
+      {% endfor %}
     </ul>
     <p class="muted">
       Parola repoda tutulmaz; demo parolası <code>scripts/_demo_data.py</code> /
@@ -39,6 +44,11 @@
 {% block script %}
 <script>
   const form = document.getElementById("login-form");
+  document.querySelectorAll(".demo-eposta").forEach((a) =>
+    a.addEventListener("click", (olay) => {
+      olay.preventDefault();
+      document.getElementById("email").value = a.dataset.eposta;
+    }));
   form.addEventListener("submit", async (olay) => {
     olay.preventDefault();
     const govde = {
