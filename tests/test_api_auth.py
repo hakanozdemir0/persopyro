@@ -45,6 +45,32 @@ def giris_yap(api_client, tenant, user, sifre="Guclu-Parola-123"):  # noqa: ANN0
     )
 
 
+def token_govdesi(  # noqa: ANN001
+    tenant,
+    user,
+    *,
+    scopes=("employee.read",),
+    sifre="Guclu-Parola-123",
+    **ek,
+) -> dict:
+    """
+    OD26 sonrası token gövdesi.
+
+    `purpose` ve `scopes` ZORUNLUDUR (kapsamsız token üretilemez); kapsam
+    sahibinin izinlerinin alt kümesi olmalıdır → testler kullanıcıya
+    `izinli_kullanici` ile izin verir.
+    """
+    govde = {
+        "tenant": tenant.slug,
+        "email": user.email,
+        "password": sifre,
+        "purpose": "test icin token amaci",
+        "scopes": list(scopes),
+    }
+    govde.update(ek)
+    return govde
+
+
 # --- Kiracı bağlamı ve istek hattı -----------------------------------------
 
 
@@ -53,7 +79,7 @@ def test_request_id_yanit_basliginda_doner(api_client, tenant_a) -> None:  # noq
     assert yanit.headers.get("X-Request-ID")
 
 
-def test_oturum_kurulunca_baglam_istek_boyunca_aktif(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_oturum_kurulunca_baglam_istek_boyunca_aktif(api_client, tenant_a, user_a) -> None:
     assert giris_yap(api_client, tenant_a, user_a).status_code == 200
     veri = api_client.get(BAGLAM).json()
     assert veri["tenant"] == str(tenant_a.id)
@@ -75,7 +101,7 @@ def test_alan_adi_ile_kiracı_cozulur(api_client, tenant_a) -> None:  # noqa: AN
     assert veri["tenant"] == str(tenant_a.id)
 
 
-def test_oturum_ve_alan_adi_uyusmazsa_reddedilir(api_client, tenant_a, tenant_b, user_a) -> None:  # noqa: ANN001
+def test_oturum_ve_alan_adi_uyusmazsa_reddedilir(api_client, tenant_a, tenant_b, user_a) -> None:
     """Bir kiracının oturumuyla başka kiracının alan adına istek yapılamaz."""
     with tenant_context(tenant_b.id):
         tenant_b.domain = "ik.kiraci-b.test"
@@ -141,7 +167,7 @@ def test_pasif_kullanici_giris_yapamaz(api_client, tenant_a, user_a) -> None:  #
     assert giris_yap(api_client, tenant_a, user_a).status_code == 401
 
 
-def test_kilitli_kullanici_dogru_parolayla_da_giremez(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_kilitli_kullanici_dogru_parolayla_da_giremez(api_client, tenant_a, user_a) -> None:
     for _ in range(5):
         giris_yap(api_client, tenant_a, user_a, sifre="yanlis-parola")
     assert giris_yap(api_client, tenant_a, user_a).status_code == 401
@@ -175,21 +201,17 @@ def test_cikis_kimlik_dogrulama_gerektirir(api_client, tenant_a) -> None:  # noq
 # --- Token girişi -----------------------------------------------------------
 
 
-def test_token_girisi_token_uretir(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
-    yanit = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
-    )
+def test_token_girisi_token_uretir(api_client, tenant_a, user_a, izinli_kullanici) -> None:
+    izinli_kullanici(user_a, tenant_a, "employee.read")
+    yanit = api_client.post(TOKEN_URL, token_govdesi(tenant_a, user_a), format="json")
     assert yanit.status_code == 201
     assert yanit.json()["data"]["token"]
 
 
-def test_token_korumali_uc_noktaya_erisir(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_token_korumali_uc_noktaya_erisir(api_client, tenant_a, user_a, izinli_kullanici) -> None:
+    izinli_kullanici(user_a, tenant_a, "employee.read")
     token = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
+        TOKEN_URL, token_govdesi(tenant_a, user_a), format="json"
     ).json()["data"]["token"]
 
     api_client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
@@ -199,16 +221,15 @@ def test_token_korumali_uc_noktaya_erisir(api_client, tenant_a, user_a) -> None:
     assert yanit.json()["tenant"] == str(tenant_a.id)
 
 
-def test_token_cikisi_yalnizca_o_tokeni_iptal_eder(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_token_cikisi_yalnizca_o_tokeni_iptal_eder(
+    api_client, tenant_a, user_a, izinli_kullanici
+) -> None:
+    izinli_kullanici(user_a, tenant_a, "employee.read")
     ilk = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
+        TOKEN_URL, token_govdesi(tenant_a, user_a), format="json"
     ).json()["data"]["token"]
     ikinci = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
+        TOKEN_URL, token_govdesi(tenant_a, user_a), format="json"
     ).json()["data"]["token"]
 
     api_client.credentials(HTTP_AUTHORIZATION=f"Token {ilk}")
@@ -223,14 +244,13 @@ def test_tokensiz_korumali_uc_nokta_401(api_client, tenant_a) -> None:  # noqa: 
     assert api_client.get(KORUMALI).status_code == 401
 
 
-def test_token_duz_metin_saklanmaz(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_token_duz_metin_saklanmaz(api_client, tenant_a, user_a, izinli_kullanici) -> None:
     """Veritabanında düz metin token bulunmamalı; yalnızca özeti saklanır."""
     from apps.accounts.models import ApiToken
 
+    izinli_kullanici(user_a, tenant_a, "employee.read")
     token = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
+        TOKEN_URL, token_govdesi(tenant_a, user_a), format="json"
     ).json()["data"]["token"]
 
     with tenant_context(tenant_a.id):
@@ -238,27 +258,38 @@ def test_token_duz_metin_saklanmaz(api_client, tenant_a, user_a) -> None:  # noq
     assert kayit.token_hash != token
     assert kayit.token_hash == ApiToken.hash_token(token)
     assert len(kayit.token_hash) == 64  # SHA-256
+    # OD26: zorunlu alanlar kaydedilir; sır (düz metin) hiçbir kolonda yoktur.
+    assert kayit.purpose == "test icin token amaci"
+    assert list(kayit.scopes) == ["employee.read"]
+    assert kayit.revoked_at is None
 
 
-def test_suresi_gecmis_token_reddedilir(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_suresi_gecmis_token_reddedilir(api_client, tenant_a, user_a, izinli_kullanici) -> None:
+    """
+    Süresi geçmiş token reddedilir.
+
+    DİKKAT: `expires_at` değişmezdir (veritabanı tetikleyicisi UPDATE'i engeller),
+    bu yüzden süresi geçmiş token doğrudan üretilir — UPDATE ile geriye alınmaz.
+    """
     from datetime import timedelta
 
     from django.utils import timezone
 
     from apps.accounts.models import ApiToken
 
-    token = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
-    ).json()["data"]["token"]
-
+    izinli_kullanici(user_a, tenant_a, "employee.read")
+    duz_metin = "suresi-gecmis-token-degeri"
     with tenant_context(tenant_a.id):
-        ApiToken.objects.filter(user=user_a).update(
-            expires_at=timezone.now() - timedelta(minutes=1)
+        ApiToken.objects.create(
+            tenant_id=tenant_a.id,
+            user=user_a,
+            token_hash=ApiToken.hash_token(duz_metin),
+            purpose="test icin token amaci",
+            scopes=["employee.read"],
+            expires_at=timezone.now() - timedelta(minutes=1),
         )
 
-    api_client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+    api_client.credentials(HTTP_AUTHORIZATION=f"Token {duz_metin}")
     assert api_client.get(KORUMALI).status_code == 401
 
 
@@ -267,19 +298,24 @@ def test_gecersiz_token_reddedilir(api_client, tenant_a) -> None:  # noqa: ANN00
     assert api_client.get(KORUMALI).status_code == 401
 
 
-def test_token_cikisi_tek_cihazi_etkiler_ve_kayit_silinir(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_token_cikisi_kaydi_korur_ve_iptal_izi_birakir(
+    api_client, tenant_a, user_a, izinli_kullanici
+) -> None:
+    """Logout satırı SİLMEZ (OD26): iptal işaretlenir, denetim izi kalır."""
     from apps.accounts.models import ApiToken
 
+    izinli_kullanici(user_a, tenant_a, "employee.read")
     token = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
+        TOKEN_URL, token_govdesi(tenant_a, user_a), format="json"
     ).json()["data"]["token"]
     api_client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
     assert api_client.post(TOKEN_LOGOUT_URL, format="json").status_code == 204
 
     with tenant_context(tenant_a.id):
-        assert not ApiToken.objects.filter(user=user_a).exists()
+        kayit = ApiToken.objects.filter(user=user_a).first()
+    assert kayit is not None, "logout satırı silmemelidir (iptal izi kaybolur)"
+    assert kayit.revoked_at is not None
+    assert kayit.revoked_reason == "logout"
 
 
 # --- MFA --------------------------------------------------------------------
@@ -314,7 +350,7 @@ def test_mfa_acikken_yanlis_kod_reddedilir(api_client, tenant_a, user_a) -> None
     assert yanit.json()["error"]["code"] == "mfa_invalid"
 
 
-def test_mfa_acikken_dogru_kodla_giris_yapilir(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_mfa_acikken_dogru_kodla_giris_yapilir(api_client, tenant_a, user_a) -> None:
     sir = _mfa_ac(tenant_a, user_a)
     yanit = api_client.post(
         LOGIN_URL,
@@ -325,14 +361,13 @@ def test_mfa_acikken_dogru_kodla_giris_yapilir(api_client, tenant_a, user_a) -> 
     assert yanit.status_code == 200
 
 
-def test_mfa_acikken_token_girisi_de_kod_ister(api_client, tenant_a, user_a) -> None:  # noqa: ANN001
+def test_mfa_acikken_token_girisi_de_kod_ister(
+    api_client, tenant_a, user_a, izinli_kullanici
+) -> None:
     """MFA, token yolunda da uygulanır: hiçbir giriş yolu atlamaz."""
+    izinli_kullanici(user_a, tenant_a, "employee.read")
     _mfa_ac(tenant_a, user_a)
-    yanit = api_client.post(
-        TOKEN_URL,
-        {"tenant": tenant_a.slug, "email": user_a.email, "password": "Guclu-Parola-123"},
-        format="json",
-    )
+    yanit = api_client.post(TOKEN_URL, token_govdesi(tenant_a, user_a), format="json")
     assert yanit.status_code == 401
     assert yanit.json()["error"]["code"] == "mfa_required"
 
@@ -344,7 +379,7 @@ def test_mfa_kapaliyken_kod_istenmez(api_client, tenant_a, user_a) -> None:  # n
 # --- Yetki sınıfı -----------------------------------------------------------
 
 
-def test_izni_olan_kullanici_gecer(api_client, tenant_a, user_a, izinli_kullanici) -> None:  # noqa: ANN001, ARG001
+def test_izni_olan_kullanici_gecer(api_client, tenant_a, user_a, izinli_kullanici) -> None:
     izinli_kullanici(user_a, tenant_a, "employee.read")
     giris_yap(api_client, tenant_a, user_a)
     assert api_client.get(IZINLI).status_code == 200

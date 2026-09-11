@@ -7,6 +7,7 @@ from apps.accounts.views import (
     SessionLogoutView,
     TokenLoginView,
     TokenLogoutView,
+    TokenRevokeAllView,
 )
 
 urlpatterns = [
@@ -14,4 +15,5 @@ urlpatterns = [
     path("logout", SessionLogoutView.as_view(), name="auth-logout"),
     path("token", TokenLoginView.as_view(), name="auth-token"),
     path("token/logout", TokenLogoutView.as_view(), name="auth-token-logout"),
+    path("token/revoke-all", TokenRevokeAllView.as_view(), name="auth-token-revoke-all"),
 ]

@@ -1384,10 +1384,12 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   (B) kimlik kayması nedeniyle reddedildi; (C) insan tarafından okunabilirliği
   kaybettirdiği için reddedildi.
 
-### OD26 — Tenant API token modelinin hizalanması — **KAPALI** ✅ (2026-09-11)
+### OD26 — Tenant API token modelinin hizalanması — **KAPALI** ✅ (2026-09-11) — **UYGULANDI** ✅ (kod + migration + test)
 
-**1) Durum:** **KAPALI.** Bulgu **F8**'in çözüm tasarımı kesinleşti; uygulama işleri
-madde 7'de listelendi (**bu turda kod yazılmadı**).
+**1) Durum:** **KAPALI ✅ ve UYGULANDI (2026-09-11).** Bulgu **F8**'in çözüm tasarımı
+kesinleşti; madde 7'deki uygulama işlerinin **tamamı kodlandı** (`accounts/0003_apitoken_od26`
+migration'ı, `apps/accounts/services.py`, `apps/rbac/services/permissions.py`,
+`apps/tenancy/access.py`; ölçüm ve test sonuçları için `docs/CHANGELOG.md` 0.16.0).
 
 **2) Kesin tenant token modeli** — `hr.api_tokens` genişletilir; **yeni/ikinci bir
 token sistemi kurulmaz** (OD22 ile aynı alan anlamları):
@@ -1479,7 +1481,7 @@ Korunur: `id`, `tenant_id`, `user_id`, `token_hash` (UNIQUE, SHA-256), `label`,
 - Bugünkü ölçüm: `hr.api_tokens` **0 satır** → geçiş bugün risksizdir; plan yine de
   üretim için yazılmıştır.
 
-**7) F8'in kapanması için gereken işler** (implementasyon; bu turda yapılmadı):
+**7) F8'in kapanması için gereken işler** (implementasyon — **TAMAMLANDI ✅**):
 
 1. **Şema:** **M29** (kolonlar + CHECK'ler + kapsam doğrulama tetikleyicisi +
    değişmezlik/tek yönlü iptal tetikleyicisi), **M30** (yetki turu: `api_tokens`
@@ -1502,7 +1504,7 @@ Korunur: `id`, `tenant_id`, `user_id`, `token_hash` (UNIQUE, SHA-256), `label`,
 8. **Denetim:** `token.issue`, `token.revoke`, `token.revoke_all` eylemleri; kapsam
    kümesi + `purpose` + `kind` kaydedilir (**token'ın kendisi asla**).
 
-**8) Mevcut kodla çakışmalar (ölçüm):**
+**8) Uygulama öncesi kodla çakışmalar (ölçüm) — TAMAMI GİDERİLDİ ✅:**
 
 - `apps/accounts/views.py` → `TokenLogoutView` **fiziksel silme** yapıyor
   (`ApiToken.objects.filter(pk=…).delete()`) → iptal izi kaybolur; **değişecek**.
@@ -1531,7 +1533,9 @@ kalmadığı için olay müdahalesi kanıtsız kalır.
 
 **Güvenlik etkisi:** F8 kapanır (kapsam + iptal izi); token ile yetki yükseltme yolu
 kapanır; sızıntıda etki alanı kapsamla sınırlanır ve toplu iptal kanıtlanabilir olur.
-Kiracı durumu kuralı eklenmediği sürece **F11 açık kalır**.
+Kiracı durumu kuralı da uygulandı (**F11 kapandı** ✅): giriş, istek hattı/oturum, token
+doğrulaması ve istek düzeyinde yetki kararı olmak üzere dört yol `active`/`trial`
+dışındaki kiracıyı fail-closed reddeder.
 
 **Şema/migration etkisi:** Yeni sistem yok; `hr.api_tokens` genişletilir (5 yeni
 kolon, 2 tetikleyici, CHECK'ler) + veri göçü F10. Kiracı RLS politikaları ve mevcut

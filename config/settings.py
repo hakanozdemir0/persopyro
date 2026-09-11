@@ -81,6 +81,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # PostgreSQL'e özel alan/tip desteği (ör. `ArrayField`: token kapsamları).
+    "django.contrib.postgres",
     # Üçüncü parti
     "rest_framework",
     "django_q",
@@ -170,8 +172,14 @@ AUTHENTICATION_BACKENDS = ["apps.accounts.backends.TenantScopedModelBackend"]
 LOGIN_MAX_FAILED_ATTEMPTS = int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
 
-# API token ömrü (saat). Token süresi zorunludur.
-API_TOKEN_TTL_HOURS = int(os.environ.get("API_TOKEN_TTL_HOURS", "720"))  # 30 gün
+# API token ömrü (saat). Süresiz token YOKTUR (OD26): `expires_at` zorunludur ve
+# tür başına üst sınır sunucu tarafında dayatılır. Tavanı aşan istek sessizce
+# kırpılmaz; açık doğrulama hatası döner.
+API_TOKEN_TTL_HOURS = int(os.environ.get("API_TOKEN_TTL_HOURS", "720"))  # varsayılan: 30 gün
+API_TOKEN_TTL_MAX_HOURS = {
+    "interactive": int(os.environ.get("API_TOKEN_TTL_MAX_INTERACTIVE", "720")),  # 30 gün
+    "service": int(os.environ.get("API_TOKEN_TTL_MAX_SERVICE", "2160")),  # 90 gün
+}
 
 # Oturum ömrü: kısa tutulur; kullanıcı yeniden giriş yapar.
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", "43200"))  # 12 saat

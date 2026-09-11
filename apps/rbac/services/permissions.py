@@ -34,6 +34,7 @@ from apps.rbac.models import (
     UserPermissionOverride,
     UserRole,
 )
+from apps.tenancy.access import tenant_access_allowed
 
 
 def _active_role_ids(user) -> list:
@@ -97,3 +98,42 @@ def user_has_permission(user, code: str) -> bool:
 def user_has_any_permission(user) -> bool:
     """Kullanıcının en az bir izni var mı (yönetim paneli kapısı için)."""
     return bool(effective_permission_codes(user))
+
+
+def authorized_permission_codes(request) -> set[str]:
+    """
+    İstek düzeyinde **TEK MERKEZİ** yetki kararı (F8 + F11).
+
+        etkin izinler = kullanıcının izinleri ∩ token kapsamı
+
+    * Token ile doğrulanmış istekte (`request.auth` bir API token'ı) kesişim
+      uygulanır. Böylece token:
+        - sahibinin sahip olmadığı bir yetkiyi **taşıyamaz**,
+        - sonradan verilen izni **kazanmaz**,
+        - kullanıcıdan izin geri alınırsa o izni **kullanamaz**.
+    * Oturum (session) ile doğrulanmış istekte `request.auth` `None`'dır ve
+      kullanıcının izinleri aynen geçerlidir (mevcut davranış korunur).
+    * Fail-closed ek kontroller: kullanıcı aktif mi, kiracı erişilebilir mi
+      (`active`/`trial`; aksi halde hiçbir izin yoktur).
+
+    Silinmiş RBAC kayıtları `effective_permission_codes` içinde zaten elenir (F7).
+    """
+    kullanici = getattr(request, "user", None)
+    if kullanici is None or not kullanici.is_authenticated or not kullanici.is_active:
+        return set()
+
+    if not tenant_access_allowed(getattr(kullanici, "tenant_id", None)):
+        return set()
+
+    # RBAC tabloları RLS ile korunur: yetki çözümlemesi kiracı bağlamında yapılır.
+    # Bağlam istek hattında zaten kuruluysa iç içe kullanım zararsızdır (önceki
+    # değer çıkışta geri yüklenir); token ile gelen isteklerde ise zorunludur.
+    from apps.tenancy.context import tenant_context
+
+    with tenant_context(getattr(kullanici, "tenant_id", None)):
+        kodlar = effective_permission_codes(kullanici)
+
+        kapsam = getattr(getattr(request, "auth", None), "scopes", None)
+        if isinstance(kapsam, (list, tuple, set)):
+            return kodlar & {str(kod).strip() for kod in kapsam}
+        return kodlar

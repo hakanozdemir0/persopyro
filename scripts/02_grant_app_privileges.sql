@@ -59,13 +59,28 @@ BEGIN
 END
 $$;
 
--- 4) Denetim kaydı ve dizin koruması ----------------------------------------
+-- 4) Denetim kaydı, dizin ve token koruması ---------------------------------
 -- Denetim kaydı yalnızca eklenip okunabilir; UPDATE/DELETE/TRUNCATE verilmez.
 DO $$
 BEGIN
     IF to_regclass('hr.audit_logs') IS NOT NULL THEN
         REVOKE UPDATE, DELETE, TRUNCATE ON hr.audit_logs FROM persopyro_app;
         GRANT INSERT, SELECT ON hr.audit_logs TO persopyro_app;
+    END IF;
+END
+$$;
+
+-- API token'ları (M30): satır SİLİNMEZ (iptal = `revoked_at` işareti; iptalin izi
+-- kalır) ve yalnızca `last_used_at`/`revoked_at`/`revoked_reason` güncellenebilir.
+-- Bu blok, yukarıdaki "ALL TABLES" satırından SONRA gelir; aksi halde geniş DML
+-- yetkisi bu daraltmayı sessizce geri alırdı (ölçüldü).
+DO $$
+BEGIN
+    IF to_regclass('hr.api_tokens') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE, TRUNCATE ON hr.api_tokens FROM persopyro_app;
+        GRANT SELECT, INSERT ON hr.api_tokens TO persopyro_app;
+        GRANT UPDATE (last_used_at, revoked_at, revoked_reason)
+            ON hr.api_tokens TO persopyro_app;
     END IF;
 END
 $$;

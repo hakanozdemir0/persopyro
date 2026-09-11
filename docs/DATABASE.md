@@ -181,9 +181,9 @@ olduğu için etki boş dizinle sınırlıdır).
 - **PRIMARY KEY:** `id` · **UNIQUE:** `token_hash`
 - **FOREIGN KEYS:** `user_id → users.id`, `tenant_id → tenants.id`
 - **TENANT ISOLATION:** RLS yok; bağlam token satırından öğrenilir (gerekçe A.5) — token **yalnızca kendi `tenant_id`'si** için bağlam kurar, kiracı sınırını aşamaz · **PERSONAL DATA LEVEL:** K1
-- **RLS:** yok (bilinçli) · **Yetkiler:** SELECT/INSERT/DELETE/UPDATE (uygulama ihtiyacı) ⚠️ hedef: UPDATE `last_used_at`/`revoked_at`/`revoked_reason` ile sınırlı (M30)
-- **Kolonlar (mevcut, 9):** `id, tenant_id, user_id, token_hash, label, expires_at, last_used_at, created_at, updated_at`
-- **Hedef eklentiler 🔜 (OD26 — kapalı):** `token_kind` (`interactive`/`service`), `purpose` (NOT NULL, ≥10 karakter), `scopes text[]` (NOT NULL; boş yalnızca iptal edilmiş satırda; wildcard yasak; değerler `hr.permissions.code`'dan ve `platform.*` **yasak**), `revoked_at`, `revoked_reason` (kapalı küme). **Değişmezlik:** scope/purpose/expires_at/token_kind/token_hash/tenant_id/user_id değişmez; iptal **tek yönlü**. Ham token ve özeti **loglanmaz**.
+- **RLS:** yok (bilinçli) · **Yetkiler (M30 — uygulandı ✅):** `SELECT`, `INSERT` + **kolon düzeyi** `UPDATE (last_used_at, revoked_at, revoked_reason)`; tablo düzeyinde UPDATE ve `DELETE` **geri alınmıştır** (iptal = işaretleme; satır silinemez)
+- **Kolonlar (mevcut, 14):** `id, tenant_id, user_id, token_hash, label, token_kind, purpose, scopes, expires_at, revoked_at, revoked_reason, last_used_at, created_at, updated_at`
+- **OD26 — uygulandı ✅ (M29/M30/F10):** `token_kind` (`interactive`/`service`), `purpose` (NOT NULL, ≥10 karakter), `scopes text[]` (NOT NULL; boş yalnızca iptal edilmiş satırda; wildcard yasak; değerler `hr.permissions.code`'dan ve `platform.*` **yasak**), `revoked_at`, `revoked_reason` (kapalı küme). **Değişmezlik:** scope/purpose/expires_at/token_kind/token_hash/tenant_id/user_id değişmez; iptal **tek yönlü** (veritabanı tetikleyicisi). Ham token ve özeti **loglanmaz**.
 
 ### `tenant_directory`
 - **PURPOSE:** Giriş öncesi slug/domain → kiracı eşlemesi.
@@ -258,7 +258,8 @@ Tablo yetkileri (`persopyro_app`, ölçüldü):
 | `audit_logs` | INSERT, SELECT | ✅ doğru (append-only) |
 | `tenant_directory` | SELECT | ✅ doğru (yazma tetikleyicide) |
 | `permissions` | DELETE, INSERT, SELECT, UPDATE | ⚠️ **fazla** → yazma geri alınmalı (M6) |
-| `tenants`, `users`, `roles`, `role_permissions`, `user_roles`, `user_permission_overrides`, `api_tokens` | DELETE, INSERT, SELECT, UPDATE | ✅ beklenen |
+| `tenants`, `users`, `roles`, `role_permissions`, `user_roles`, `user_permission_overrides` | DELETE, INSERT, SELECT, UPDATE | ✅ beklenen |
+| `api_tokens` | INSERT, SELECT + kolon düzeyi UPDATE (`last_used_at`, `revoked_at`, `revoked_reason`) | ✅ beklenen (M30 — uygulandı; tablo UPDATE ve DELETE **geri alındı**) |
 
 Ayrıca `scripts/02_grant_app_privileges.sql` ile yeni nesneler için
 `ALTER DEFAULT PRIVILEGES` tanımlı: `hr` şemasında oluşturulacak **her yeni tabloya**
@@ -287,7 +288,7 @@ Not: Benzersiz indeksler **soft-delete'i dikkate almaz** (bkz. H.4 / OD21).
 | App | Migration'lar | İçerik |
 |---|---|---|
 | `tenancy` | 0001 → 0007 | `hr` şeması + `tenants`/`current_tenant_id`; RLS etkinleştirme; aynı-kiracı guard'ları; `role_permissions` RLS; slug/domain; (düşürülen) arama fonksiyonları; `tenant_directory` |
-| `accounts` | 0001 → 0002 | `users`; `api_tokens` (+ knox tablosu düşürüldü) |
+| `accounts` | 0001 → **0003** | `users`; `api_tokens` (+ knox tablosu düşürüldü); **0003: OD26 token modeli** — `token_kind`/`purpose`/`scopes`/`revoked_at`/`revoked_reason` + CHECK'ler + tetikleyici + yetki turu (M29/M30) ve F10 veri göçü |
 | `rbac` | 0001 → 0003 | `roles`, `permissions`, `role_permissions`, `user_roles`, `user_permission_overrides`; `role_permissions.tenant_id`; izin kataloğu seed (29) |
 | `audit` | 0001 → **0002** | `audit_logs`; **0002: `AuditLog.user` → `PROTECT`** (F9 kapandı; SQL düzeyinde no-op, FK zaten `NO ACTION`) |
 
@@ -420,7 +421,7 @@ erişim yalnızca `persopyro_platform` rolüyle.
 | `audit_logs` | `actor_kind` (`tenant_user`/`platform_user`/`service`/`system`, NOT NULL), `platform_actor_id` (FK'sız), `actor_label` (snapshot), `access_grant_ref` (FK'sız), `purpose`, `prev_hash`/`entry_hash` (zincirleme) 🔜. **`user` FK → `PROTECT`** ✅ **uygulandı** (`audit/0002`, F9 kapandı) | OD23 (kapalı), K22, OD4; zincirleme (OD13) |
 | `permissions` | `platform.*` kodları eklenecek (modül `platform`); **yazma yetkisi geri alınacak** | Katalog genişletmesi + en az yetki |
 | `tenants` | **`public_id_prefix varchar(20) NOT NULL UNIQUE`** (immutable; değişmezlik tetikleyicisi) — RLS politikası aynı kalır | OD25 (kapalı): public ID ön eki sabit |
-| `api_tokens` | **Genişletilir (OD26 — kapalı):** `token_kind`, `purpose` NOT NULL, `scopes text[]` (katalog doğrulamalı, `platform.*` yasak), `revoked_at` + `revoked_reason`; değişmezlik ve tek yönlü iptal tetikleyicileri. **Yeni token sistemi kurulmaz** | OD26 / bulgu F8 |
+| `api_tokens` | **Genişletildi ✅ (OD26 — kapalı, uygulandı):** `token_kind`, `purpose` NOT NULL, `scopes text[]` (katalog doğrulamalı, `platform.*` yasak), `revoked_at` + `revoked_reason`; değişmezlik ve tek yönlü iptal tetikleyicileri. **Yeni token sistemi kurulmaz** (`accounts/0003`) | OD26 / bulgu F8 |
 
 ## B.4 Kiracı iş tabloları (yeni, `hr` şemasında, RLS zorunlu) 🔜
 
@@ -569,8 +570,8 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M26** | **Yetki çözümlemesinde `deleted_at IS NULL`** (`UserRole`, `Role`, `UserPermissionOverride`) ✅ **UYGULANDI (2026-09-11) — F7 KAPANDI**; kalan: `*.restore` izni + silme/geri alma denetim kaydı (silme özelliği yazıldığında). NOT: `RolePermission` bağ tablosudur, `deleted_at` kolonu **yoktur** (ölçüm düzeltmesi) | Kod + test | — (M25'e bağımlı değil) | Kod geri alınır (bulgu yeniden açılır) |
 | **M27** | `users` e-posta benzersizliğinin **kısmi** hale getirilmesi (`users_tenant_email_uniq` tam indeksi düşürülür, `WHERE deleted_at IS NULL` kısmi kurulur); `tenants` slug/domain **kalıcı rezerve** istisnası olarak korunur | Şema | M5 | Tam indeks geri kurulur |
 | **M28** | Kodlayan: `create_default_roles` içindeki `get_or_create` davranışının silinmiş rolü **canlandırmaması** ✅ **UYGULANDI (2026-09-11):** açık sorgu + ön kontrol; silinmiş rol/izin bağı bulunursa `SoftDeletedDefaultRoleError` (kopya üretilmez, otomatik restore yok) | Kod + test | — | — |
-| **M29** | **Tenant API token modeli (OD26 — kapalı):** `hr.api_tokens`'a `token_kind` (CHECK `interactive`/`service`), `purpose` NOT NULL (`length(btrim())>=10`), `scopes text[]` NOT NULL (boş kapsam yalnızca iptal edilmiş satırda; wildcard yasak), `revoked_at` + `revoked_reason` (kapalı küme, ikisi birlikte NULL/NOT NULL). **İki tetikleyici:** (a) kapsam doğrulama — her değer `hr.permissions.code` içinde olmalı, `platform.*` yasak, tekrar yok; (b) değişmezlik — `scopes`/`purpose`/`expires_at`/`token_kind`/`token_hash`/`tenant_id`/`user_id` değişemez, `revoked_at` NULL'a dönemez (tek yönlü iptal) | Şema | — | Kolon/CHECK/tetikleyici DROP |
-| **M30** | **`api_tokens` yetki turu ve erişim yolu:** uygulama rolü `api_tokens` üzerinde UPDATE **yalnızca** `last_used_at` (ve iptal akışı için `revoked_at`/`revoked_reason`); `delete()` yolu kaldırılır (`TokenLogoutView` → iptal). RLS dışı kalma gerekçesi A.5'te sabit | Yetki + kod | M29 | Yetki/kod geri alınır |
+| **M29** | **Tenant API token modeli (OD26 — kapalı):** `hr.api_tokens`'a `token_kind` (CHECK `interactive`/`service`), `purpose` NOT NULL (`length(btrim())>=10`), `scopes text[]` NOT NULL (boş kapsam yalnızca iptal edilmiş satırda; wildcard yasak), `revoked_at` + `revoked_reason` (kapalı küme, ikisi birlikte NULL/NOT NULL). **İki tetikleyici:** (a) kapsam doğrulama — her değer `hr.permissions.code` içinde olmalı, `platform.*` yasak, tekrar yok; (b) değişmezlik — `scopes`/`purpose`/`expires_at`/`token_kind`/`token_hash`/`tenant_id`/`user_id` değişemez, `revoked_at` NULL'a dönemez (tek yönlü iptal) — **✅ UYGULANDI** (`apps/accounts/migrations/0003_apitoken_od26.py`; canlı DB'de doğrulandı) | Şema | — | Kolon/CHECK/tetikleyici DROP |
+| **M30** | **`api_tokens` yetki turu ve erişim yolu:** uygulama rolü `api_tokens` üzerinde UPDATE **yalnızca** `last_used_at` (ve iptal akışı için `revoked_at`/`revoked_reason`); `delete()` yolu kaldırılır (`TokenLogoutView` → iptal). RLS dışı kalma gerekçesi A.5'te sabit — **✅ UYGULANDI** (migration + `scripts/02_grant_app_privileges.sql`; ölçüm: tablo UPDATE/DELETE `false`, kolon UPDATE üç alan için `true`) | Yetki + kod | M29 | Yetki/kod geri alınır |
 
 **Uygulama sırası önerisi (3 parti):**
 1. **Parti 1 (platform temeli):** M1–M5, M22 — kiracı verisine dokunmayan, geri
@@ -640,7 +641,7 @@ tanımlanır.
 |---|---|---|
 | `permissions` | Global tanım (kiracı verisi yok) | SELECT (yazma geri alınacak — M6) |
 | `tenant_directory` | Giriş öncesi eşleme | SELECT |
-| `api_tokens` | Token bağlamı taşır; doğrulama bağlamdan önce | SELECT/INSERT/DELETE |
+| `api_tokens` | Token bağlamı taşır; doğrulama bağlamdan önce | INSERT, SELECT + kolon düzeyi UPDATE (`last_used_at`/`revoked_at`/`revoked_reason`) |
 | `platform.*` | Platform şeması; erişim şema yetkisiyle | yalnızca `persopyro_platform` |
 | Django teknik tabloları | Altyapı | mevcut hâliyle (OD19 ile sadeleşecek) |
 
@@ -709,7 +710,7 @@ indeksler `tenant_id` ile başlar; (2) dışa aktarma/sıralama indeksleri
 | **F7** | Kiracı dizini tutarlılığı | `tenant_directory` ile `hr.tenants` karşılaştırması; eksik/fazla satır raporu (şu an: 1 satır, tutarlı) | — |
 | **F8** | Denetim kaydı yeni kolonları | `actor_kind` mevcut kayıtlar için `tenant_user` (user_id doluysa) / `system` olarak doldurulur | Kolon DROP |
 | **F9** | İlk platform yöneticisi (SUPERADMIN) | Migration **değil**: CLI/betik ile elle oluşturulur (parola ekrana yazılır, kayda geçmez). İkinci yönetici ataması OD17 kararına bağlı | Hesap pasifleştirilir |
-| **F10** | **Mevcut tenant token'larının iptali (OD26 — kapalı):** `UPDATE hr.api_tokens SET revoked_at=now(), revoked_reason='policy_migration', scopes='{}', purpose='policy_migration (kapsamsız dönem)'` → ardından `NOT NULL`/CHECK/tetikleyiciler uygulanır. Kapsamsız token **hiçbir koşulda "tüm izinler" sayılmaz**; kullanıcı yeniden giriş yapıp kapsamlı token üretir. Ölçüm: bugün **0 satır** | Geri alma gerekmez (iptal bilinçli; yeni kapsamlı token üretilir) |
+| **F10** | **Mevcut tenant token'larının iptali (OD26 — kapalı):** `UPDATE hr.api_tokens SET revoked_at=now(), revoked_reason='policy_migration', scopes='{}', purpose='policy_migration (kapsamsız dönem)'` → ardından `NOT NULL`/CHECK/tetikleyiciler uygulanır. Kapsamsız token **hiçbir koşulda "tüm izinler" sayılmaz**; kullanıcı yeniden giriş yapıp kapsamlı token üretir. Ölçüm: bugün **0 satır** — **✅ UYGULANDI** (0003 migration'ının veri adımı; 0 satır iptal edildi) | Geri alma gerekmez (iptal bilinçli; yeni kapsamlı token üretilir) |
 
 **Backfill kuralları:** (1) Her geri doldurma **idempotent** yazılır
 (`WHERE ... IS NULL`); (2) büyük tablolarda partili (`LIMIT`/`ctid`) çalışır;

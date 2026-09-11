@@ -3,6 +3,155 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.16.0] — 2026-09-11 — F8 ve F11 kapatıldı (OD26 kodlandı: kapsamlı/iptal izli token + kiracı erişimi)
+
+**Baseline (son commit `cdeeb0e`):** `bash scripts/run_tests.sh` → **110 passed**.
+Bu girişte OD26'nın (kapalı karar) uygulaması ve **F11** kodlandı; organizasyon
+modülüne, Django Admin M22 işlerine ve başka migration paketlerine dokunulmadı.
+
+### F8 — Tenant API token'ı: kapsam + iptal izi (KAPATILDI ✅)
+
+- **Şema (`M29`/`M30`/`F10` — `apps/accounts/migrations/0003_apitoken_od26.py`):**
+  5 kolon (`token_kind`, `purpose`, `scopes`, `revoked_at`, `revoked_reason`),
+  6 CHECK, **1 tetikleyici** (`api_tokens_guard_ins`: kapsam doğrulama + değişmezlik
+  + tek yönlü iptal), **1 veri adımı** (F10) ve **yetki turu**. Uygulanmış
+  migration'lar **değiştirilmedi**.
+- **Doğrulama (canlı PostgreSQL ölçümü):** katalogda olmayan kapsam, `platform.*`,
+  joker, boş kapsam (aktif satır) ve tekrarlı kapsam **reddediliyor**; `scopes`,
+  `purpose`, `expires_at`, `token_kind`, `token_hash` UPDATE'i **reddediliyor**;
+  `last_used_at` iptal alanları yazılabiliyor; iptal **geri alınamıyor**.
+- **Yetki turu (M30):** uygulama rolü `api_tokens` üzerinde tablo düzeyinde UPDATE
+  **edemiyor**, **silemiyor**; yalnızca `last_used_at`/`revoked_at`/`revoked_reason`
+  kolonlarını yazabiliyor. Aynı daraltma `scripts/02_grant_app_privileges.sql`
+  içine de eklendi — aksi halde migrate sonrası çalışan bu betik "ALL TABLES"
+  yetkisiyle daraltmayı **sessizce geri alırdı** (ölçüldü).
+- **Veri göçü (F10):** kapsamsız mevcut token'lar `revoked_reason='policy_migration'`
+  + `scopes='{}'` + sentinel `purpose` ile **iptal** edilir (asla "tüm izinler"
+  sayılmaz). Bugünkü ölçüm: tablo **0 satır** → 0 satır iptal edildi.
+- **Kesişim kuralı (yetki):** tek merkez
+  `apps/rbac/services/permissions.py::authorized_permission_codes(request)`:
+  `etkin izinler = kullanıcının izinleri ∩ token kapsamı`. Token sahibinin sahip
+  olmadığı yetkiyi **taşıyamaz**, sonradan verilen izni **kazanmaz**, izin geri
+  alınırsa o izni **kullanamaz**. Oturum (session) ile gelen istekte davranış
+  değişmez (kapsam yok → kullanıcının izinleri). DRF yetki sınıfları
+  (`HasPermissionCodes`, `AnyPermissionCode`) bu tek noktayı kullanır.
+- **Üretim servisi:** `apps/accounts/services.py` — `issue_api_token`,
+  `revoke_token`, `revoke_tokens`, `revoke_tenant_tokens`,
+  `revoke_tokens_for_inactive_user`. `purpose` ≥ 10 karakter, `scopes` boş olamaz,
+  joker/`platform.*`/katalogda olmayan kod reddedilir, kapsam **sahibin izinlerinin
+  alt kümesi** olmalıdır, TTL tavanı (interactive ≤ 720 sa, `service` ≤ 2160 sa)
+  aşılırsa **açık hata** (`400`) döner — sessiz kırpma yok.
+- **Uçlar:** `POST /api/v1/auth/token` → **201** (gövde artık `purpose` + `scopes`
+  zorunlu; `kind?`, `ttl_hours?`, `label?`); `POST /api/v1/auth/token/logout` →
+  **204** ve satır **silinmez** (`revoked_at` + `revoked_reason='logout'` + denetim
+  kaydı); yeni `POST /api/v1/auth/token/revoke-all` → sahibinin tüm token'ları
+  (`200` + iptal sayısı). İptal edilmiş token her istekte **401**.
+- **Revoke nedenleri (kapalı küme):** `logout`, `owner_disabled`, `tenant_disabled`,
+  `admin_revoke`, `security_incident`, `policy_migration` — doküman (OD26) esas
+  alındı (istenen `manual`/`owner_inactive`/`tenant_inactive` adları kümeye karşılık
+  gelir: `admin_revoke` / `owner_disabled` / `tenant_disabled`).
+
+### F11 — Kiracı durumu erişimi kesiyor (KAPATILDI ✅)
+
+- **Tek kaynak:** `apps/tenancy/access.py::tenant_access_allowed()` — izin verilen
+  durumlar `active`/`trial`; `suspended`, `canceled` ve `deleted_at IS NOT NULL`
+  **fail-closed** reddedilir (kiracı satırı okunamıyorsa erişim kapalıdır).
+- **Uygulandığı dört yol:** (1) **giriş** — parola denenmeden `403 tenant_unavailable`
+  (hem oturum hem token ucu; deneme denetim kaydına yazılır); (2) **istek hattı /
+  oturum** — `403` + oturum anahtarı temizlenir; (3) **API token doğrulaması** —
+  iptal edilmemiş token bile `401`; (4) **istek düzeyinde yetki kararı** — kiracı
+  erişilemezse izin kümesi boş döner.
+- **İstek hattı düzeltmesi (ölçümle zorunlu çıktı):** token ile gelen isteklerde
+  kiracı bağlamı kurulmuyordu (yalnızca oturum ve alan adı çözümleniyordu). Bağlam
+  olmadan RLS'li RBAC tabloları boş döndüğü için **kesişim kuralı işlevsiz** kalırdı.
+  `TenantContextMiddleware` artık `Authorization: Token ...` başlığındaki token'ın
+  kiracısını da çözer (öncelik: oturum → token → alan adı) ve kaynaklar farklı kiracı
+  gösteriyorsa `400 tenant_mismatch` döner. Token kaydı `request._api_token`
+  üzerinde paylaşılır (kimlik doğrulama ikinci sorgu yapmaz).
+- **Toplu iptal (defense in depth):** `revoke_tenant_tokens(tenant_id, reason=
+  'tenant_disabled')` — ancak güvenlik buna **bağlı değildir**: token iptal edilmemiş
+  olsa bile kiracı durumu istek sırasında kontrol edilir.
+- **Kullanıcı durumu:** token doğrulaması pasif (`inactive`/`archived`) ve
+  soft-delete edilmiş kullanıcıyı reddeder; yeni `is_active` kolonu **eklenmedi**
+  (mevcut türetilmiş property korunur).
+- **RLS gevşetilmedi, `BYPASSRLS` kullanılmadı.**
+
+### Test
+
+- Yeni **`tests/test_token_scope_and_tenant.py`** (24 test): alt küme · sahip
+  olunmayan/bilinmeyen/`platform.*`/joker/boş kapsam `400` · kısa `purpose` · TTL
+  tavanı · `service` tavanı · kapsam dışı izin **403** · kapsam içi izin **200** ·
+  izin geri alınınca token kaybeder · sonradan verilen izni eski token kazanmaz ·
+  iptal/süre bitimi **401** · logout satırı silmez + `revoked_at`/`revoked_reason` ·
+  logout diğer token'ları etkilemez · `revoke-all` · tek yönlü iptal · askıda/iptal/
+  silinmiş kiracıda yeni giriş **403** ve mevcut token/oturum reddi · token doğrulama
+  katmanı **401** · `active`/`trial` bozulmaz · pasif/silinmiş kullanıcı **401** ·
+  `/api/health` + `/api/ready` **200** · token girişi **201**.
+- Yeni **`tests/test_api_tokens_db_guards.py`** (5 test, **ham SQL**): tetikleyici
+  kapsam kuralları · iptal edilmiş satırda boş kapsamın meşruluğu (sentinel) ·
+  değişmezlik · iptalin geri alınamaması · uygulama rolü yetkilerinin daraltılmış
+  olması (M30).
+- **Güncellenen mevcut testler (`tests/test_api_auth.py`):** token sözleşmesi
+  değiştiği için gövdeye `purpose`/`scopes` eklendi, kullanıcıya izin verildi;
+  "logout kaydı siler" testi **"logout satırı korur ve iptal izi bırakır"** olarak
+  düzeltildi; süresi geçmiş token testi artık `expires_at`'i UPDATE etmiyor
+  (değişmezlik tetikleyicisi) — token doğrudan üretiliyor.
+- **Final:** `bash scripts/run_tests.sh` → **150 passed** (110 + 40).
+
+### Ölçüm / doğrulama
+
+- **HTTP duman testi (`bash scripts/smoke.sh`, gerçek `runserver` + gerçek DB):**
+  `/api/health` **200**, `/api/ready` **200**, token girişi (**purpose+scopes**) →
+  token alındı (**201**), geçerli token ile çıkış **204**, **çıkış sonrası aynı token
+  401**, geçersiz token **401**, **askıdaki kiracı** ile giriş **403**. Sunucu
+  kapatıldı; açık process/port bırakılmadı.
+- `manage.py check` temiz · `makemigrations --check` → "No changes detected" ·
+  `ruff check` → **All checks passed** · `bandit` → **0 bulgu**.
+- `bash scripts/migrate.sh` → `accounts.0003_apitoken_od26` **uygulandı**; uygulama
+  rolü yetkileri tazelendi.
+- **Doküman tutarlılığı:** `docs/SECURITY.md` F8/F11 **kapalı**, T21 kapandı, §3.5
+  "uygulandı"; `docs/API.md` token/logout/revoke-all ve **201** sözleşmesi; `docs/
+  DATABASE.md` `api_tokens` kartı + M29/M30/F10 durumu + yetki tabloları;
+  `docs/AUTHORIZATION.md` OD26 "UYGULANDI"; `docs/ARCHITECTURE.md` K32.
+
+### SECURITY FINDING
+
+**Yeni bulgu yok.** Kapatma çalışması sırasında ölçülen iki nokta bulgu değil,
+kayıtlı tasarım kararıdır: (a) token isteklerinde kiracı bağlamının istek hattında
+kurulması (OD26 §3'ün gereği, yukarıda açıklandı); (b) `revoked_reason` için doküman
+kümesinin esas alınması (isim farkları eşlendi).
+
+### Değişmeyenler (bilinçli)
+
+- Organizasyon modülü (OD5), Django Admin kaldırma (M22b–22d), `permissions` yazma
+  yetkisinin geri alınması (M6), `SoftDeleteManager` standardı (M25),
+  `*.restore` izni (M26'nın kalanı), F10 (typosquatting, `docs/SECURITY.md`).
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `apps/accounts/migrations/0003_apitoken_od26.py` | **Yeni migration** (M29/M30/F10; ham SQL + tetikleyici) |
+| `apps/accounts/services.py` | **Yeni**: token üretim/iptal servisi (tek yol) |
+| `apps/tenancy/access.py` | **Yeni**: `tenant_access_allowed` (F11 tek kaynak) |
+| `apps/accounts/models.py` | `ApiToken`: `token_kind`/`purpose`/`scopes`/`revoked_at`/`revoked_reason`, `revoke()`, `is_usable` |
+| `apps/accounts/authentication.py` | İptal/süre/kiracı/kullanıcı reddi sırası |
+| `apps/accounts/serializers.py` | `TokenIstekSerializer` (`purpose`, `scopes`, `kind`, `ttl_hours`) |
+| `apps/accounts/views.py` | Giriş kiracı kontrolü, token üretimi (201), iptal (204), `revoke-all` |
+| `apps/accounts/urls.py` | `token/revoke-all` rotası |
+| `apps/rbac/services/permissions.py` | `authorized_permission_codes` (kesişim + fail-closed) |
+| `apps/rbac/services/__init__.py` | Yeni servis dışa aktarımı |
+| `apps/rbac/permissions.py` | DRF sınıfları tek merkezi kararı kullanır |
+| `apps/tenancy/middleware.py` | Token'dan kiracı çözümü + `tenant_unavailable` reddi |
+| `config/settings.py` | `django.contrib.postgres`, `API_TOKEN_TTL_MAX_HOURS` |
+| `scripts/02_grant_app_privileges.sql` | `api_tokens` yetki daraltması (M30) |
+| `scripts/_demo_data.py`, `scripts/smoke.sh` | Askıdaki demo kiracı + token/iptal/403 adımları |
+| `tests/test_token_scope_and_tenant.py`, `tests/test_api_tokens_db_guards.py` | **Yeni testler** |
+| `tests/test_api_auth.py`, `tests/urls.py`, `tests/views.py` | Sözleşme güncellemesi + sonda |
+| `docs/SECURITY.md`, `docs/API.md`, `docs/DATABASE.md`, `docs/AUTHORIZATION.md`, `docs/ARCHITECTURE.md` | F8/F11 kapandı, OD26 uygulandı |
+
+---
+
 ## [0.15.0] — 2026-09-11 — F7 ve F9 kapatıldı (kod + migration + test)
 
 **Baseline (değişiklikten önce):** `bash scripts/run_tests.sh` → **97 passed**.

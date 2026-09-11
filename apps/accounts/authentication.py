@@ -5,6 +5,22 @@ Neden kendi modelimiz (bkz. `ApiToken` belgesi): token doğrulaması kiracı ba�
 KURULMADAN yapılır ve bağlamı token satırının kendisinden öğreniriz. Bu yüzden
 token tablosu RLS dışıdır (kiracı verisi içermez, yalnızca özet + kiracı kimliği
 tutar) ve kiracı bağlamı okunduktan hemen sonra kurulur.
+
+OD26 (kapalı) sonrası reddetme sırası:
+  1. token bulunamadı            → 401
+  2. **iptal edilmiş** (`revoked_at`)
+  3. süresi geçmiş (`expires_at`)
+  4. **kiracı erişime kapalı** (askıda/iptal/silinmiş — F11)
+  5. kullanıcı pasif/silinmiş (`is_active`)
+Token'ın **kapsamı** burada değil, istek yetkilendirmesinde uygulanır
+(`apps/rbac/services/permissions.py::authorized_permission_codes`):
+`etkin izinler = kullanıcı izinleri ∩ token kapsamı`.
+
+NOT (savunma katmanı — F11): normal istek akışında kiracı durumu **daha önce**,
+istek hattında kontrol edilir ve kiracı erişime kapalıysa bağlam hiç kurulmaz
+(`403 tenant_unavailable`, bkz. `apps/tenancy/middleware.py`). Buradaki kontrol
+bu yüzden ikinci hattır ve istek hattı atlanırsa (ör. doğrudan çağrı, ileride yeni
+bir taşıma katmanı) erişimi yine keser: `401`.
 """
 
 from django.utils import timezone
@@ -12,6 +28,7 @@ from rest_framework.authentication import BaseAuthentication, get_authorization_
 from rest_framework.exceptions import AuthenticationFailed
 
 from apps.accounts.models import ApiToken
+from apps.tenancy.access import tenant_access_allowed
 from apps.tenancy.context import tenant_context
 
 KEYWORD = "Token"
@@ -19,11 +36,11 @@ KEYWORD = "Token"
 
 def token_from_header(header_value: str):
     """
-    `Authorization: Token <değer>` başlığından token kaydını çözer.
+    `Authorization: Token <token>` başlığından token kaydını çözer.
 
     Kiracı bağlamı GEREKTİRMEZ (token tablosu RLS dışıdır) ve kullanıcı satırını
-    yüklemez. İstek hattı bu fonksiyonla kiracıyı öğrenir; asıl doğrulama
-    (süre, kullanıcı durumu) `ApiTokenAuthentication` içinde yapılır.
+    yüklemez. İptal edilmiş veya süresi geçmiş token `None` döner (bağlam
+    kurulmaz; erişim reddedilir).
     """
     parcalar = header_value.split()
     if len(parcalar) != 2 or parcalar[0].lower() != KEYWORD.lower():
@@ -35,15 +52,15 @@ def token_from_header(header_value: str):
         kayit = ApiToken.objects.get(token_hash=ApiToken.hash_token(parcalar[1]))
     except ApiToken.DoesNotExist:
         return None
-    return None if kayit.is_expired else kayit
+    return kayit if kayit.is_usable else None
 
 
 class ApiTokenAuthentication(BaseAuthentication):
     """
-    `Authorization: Token <değer>` başlığını doğrular.
+    `Authorization: Token <token>` başlığını doğrular.
 
-    Süresi geçmiş, silinmiş (iptal edilmiş) veya pasif kullanıcıya ait token
-    reddedilir. Başlık yoksa `None` döner (diğer kimlik doğrulama yolları denenir).
+    İptal edilmiş, süresi geçmiş, kiracısı erişime kapalı veya pasif kullanıcıya
+    ait token reddedilir. Başlık yoksa `None` döner (diğer yollar denenir).
     """
 
     def authenticate(self, request):
@@ -82,8 +99,14 @@ class ApiTokenAuthentication(BaseAuthentication):
             except ApiToken.DoesNotExist as exc:
                 raise AuthenticationFailed("Geçersiz veya iptal edilmiş token.") from exc
 
+        if kayit.is_revoked:
+            raise AuthenticationFailed("Geçersiz veya iptal edilmiş token.")
         if kayit.is_expired:
             raise AuthenticationFailed("Token süresi dolmuş.")
+
+        # F11: kiracı askıda/iptal/silinmişse token çalışmaz (iptal edilmemiş olsa bile).
+        if not tenant_access_allowed(kayit.tenant_id):
+            raise AuthenticationFailed("Kiracının erişimi kapalı.")
 
         # Bundan sonrası kiracıya bağlı veri: bağlam kurulur ve kullanıcı satırı
         # artık görünür olur (RLS).

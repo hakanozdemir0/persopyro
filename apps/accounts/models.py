@@ -18,6 +18,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.utils import timezone
 
@@ -28,6 +29,29 @@ class UserStatus(models.TextChoices):
     ACTIVE = "active", "Aktif"
     INACTIVE = "inactive", "Pasif"
     ARCHIVED = "archived", "Arşiv"
+
+
+class TokenKind(models.TextChoices):
+    """Token türü (OD26): yalnızca üst ömür sınırını ve denetim etiketini değiştirir."""
+
+    INTERACTIVE = "interactive", "Etkileşimli (insan)"
+    SERVICE = "service", "Servis/entegrasyon"
+
+
+class TokenRevokeReason(models.TextChoices):
+    """
+    İptal nedeni — KAPALI küme (OD26; docs/AUTHORIZATION.md).
+
+    Tabloda ayrıca `CHECK` kısıtı vardır; yeni bir neden eklenirse hem bu liste
+    hem kısıt yeni bir migration ile güncellenir.
+    """
+
+    LOGOUT = "logout", "Çıkış"
+    OWNER_DISABLED = "owner_disabled", "Sahibi pasif/silinmiş"
+    TENANT_DISABLED = "tenant_disabled", "Kiracı askıda/iptal/silinmiş"
+    ADMIN_REVOKE = "admin_revoke", "Yönetici iptali"
+    SECURITY_INCIDENT = "security_incident", "Güvenlik olayı"
+    POLICY_MIGRATION = "policy_migration", "Politika göçü (kapsamsız dönem)"
 
 
 class ApiToken(UUIDModel):
@@ -63,7 +87,28 @@ class ApiToken(UUIDModel):
     )
     token_hash = models.CharField("token özeti (SHA-256)", max_length=64, unique=True)
     label = models.CharField("cihaz/etiket", max_length=80, blank=True)
+    token_kind = models.CharField(
+        "token türü", max_length=16, choices=TokenKind.choices, default=TokenKind.INTERACTIVE
+    )
+    purpose = models.TextField("amaç/gerekçe")
+    scopes = ArrayField(
+        models.CharField(max_length=120),
+        verbose_name="izin kapsamı",
+        default=list,
+        help_text="Sahibinin izinlerinin ALT KÜMESİ; boş olamaz (iptal edilmiş satır hariç).",
+    )
     expires_at = models.DateTimeField("bitiş")
+    revoked_at = models.DateTimeField("iptal zamanı", null=True, blank=True)
+    revoked_reason = models.CharField(  # noqa: DJ001 - NULL anlamlıdır: "iptal edilmedi"
+        # NULL bilinçli: `CHECK ((revoked_at IS NULL) = (revoked_reason IS NULL))` ve
+        # iptal nedeni kapalı kümedir; boş string geçerli bir "iptal edilmedi"
+        # temsili olmaz (OD26).
+        "iptal nedeni",
+        max_length=32,
+        choices=TokenRevokeReason.choices,
+        null=True,
+        blank=True,
+    )
     last_used_at = models.DateTimeField("son kullanım", null=True, blank=True)
     created_at = models.DateTimeField("oluşturma", auto_now_add=True)
 
@@ -74,6 +119,25 @@ class ApiToken(UUIDModel):
         indexes = [
             models.Index(fields=["tenant", "user"], name="api_tokens_tenant_user_idx"),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(token_kind__in=list(TokenKind.values)),
+                name="api_tokens_kind_valid",
+            ),
+            # İptal izi ya tamamen boş ya tamamen dolu olur.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(revoked_at__isnull=True, revoked_reason__isnull=True)
+                    | models.Q(revoked_at__isnull=False, revoked_reason__isnull=False)
+                ),
+                name="api_tokens_revoked_pair",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(revoked_reason__isnull=True)
+                | models.Q(revoked_reason__in=list(TokenRevokeReason.values)),
+                name="api_tokens_revoked_reason_valid",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.label or 'token'} ({self.user_id})"
@@ -82,16 +146,59 @@ class ApiToken(UUIDModel):
     def is_expired(self) -> bool:
         return self.expires_at <= timezone.now()
 
-    @classmethod
-    def issue(cls, user, label: str = "") -> tuple["ApiToken", str]:
-        """
-        Yeni token üretir.
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
 
-        Döner: (kayıt, düz_metin_token). Düz metin yalnızca bu anda gösterilir;
-        bir daha elde edilemez.
+    @property
+    def is_usable(self) -> bool:
+        """Kullanılabilir mi: iptal edilmemiş VE süresi geçmemiş."""
+        return not self.is_revoked and not self.is_expired
+
+    def revoke(self, reason: str, *, save: bool = True) -> bool:
+        """
+        Token'ı iptal eder (satır SİLİNMEZ — denetim izi korunur).
+
+        İptal **tek yönlüdür**: zaten iptal edilmiş bir token yeniden
+        etkinleştirilemez (veritabanı tetikleyicisi de bunu engeller).
+        """
+        if self.revoked_at is not None:
+            return False
+        self.revoked_at = timezone.now()
+        self.revoked_reason = reason
+        if save:
+            self.save(update_fields=["revoked_at", "revoked_reason"])
+        return True
+
+    @classmethod
+    def issue(
+        cls,
+        user,
+        *,
+        purpose: str,
+        scopes,
+        token_kind: str = TokenKind.INTERACTIVE,
+        label: str = "",
+        ttl_hours: int | None = None,
+    ) -> tuple["ApiToken", str]:
+        """
+        Yeni token üretir. Döner: (kayıt, düz_metin_token).
+
+        Düz metin yalnızca bu anda gösterilir; bir daha elde edilemez.
+        Doğrulama (kapsam katalogu, alt küme kuralı, amaç kalitesi) servis
+        katmanında yapılır: `apps.accounts.services.issue_api_token`. Bu metot
+        yalnızca TTL tavanını dayatır ve kaydı yazar.
         """
         import hashlib
         import secrets
+
+        tavan = settings.API_TOKEN_TTL_MAX_HOURS.get(token_kind)
+        if tavan is None:
+            raise ValueError(f"Bilinmeyen token türü: {token_kind}")
+
+        saat = settings.API_TOKEN_TTL_HOURS if ttl_hours is None else int(ttl_hours)
+        if saat <= 0 or saat > tavan:
+            raise ValueError(f"Token ömrü 1..{tavan} saat aralığında olmalıdır (istenen: {saat}).")
 
         duz_metin = secrets.token_urlsafe(32)
         kayit = cls.objects.create(
@@ -99,7 +206,10 @@ class ApiToken(UUIDModel):
             user=user,
             token_hash=hashlib.sha256(duz_metin.encode()).hexdigest(),
             label=label,
-            expires_at=timezone.now() + timedelta(hours=settings.API_TOKEN_TTL_HOURS),
+            token_kind=token_kind,
+            purpose=purpose,
+            scopes=list(scopes),
+            expires_at=timezone.now() + timedelta(hours=saat),
         )
         return kayit, duz_metin
 

@@ -48,6 +48,21 @@ class IzinliSonda(APIView):
         return Response({"ok": True, "user": request.user.email})
 
 
+class IzinliIzinsizSonda(APIView):
+    """
+    Farklı bir izin isteyen sonda (`leave.request.approve`).
+
+    Token kapsamı (`scopes`) kesişiminin sınanması için kullanılır: kullanıcı bu
+    izne sahip olsa bile token'ın kapsamı dışındaysa istek `403` dönmelidir.
+    """
+
+    permission_classes = [IsAuthenticated, HasPermissionCodes]
+    required_permissions = ["leave.request.approve"]
+
+    def get(self, request):
+        return Response({"ok": True, "user": request.user.email})
+
+
 class IzinsizTanimsizSonda(APIView):
     """İzni belirtilmemiş görünüm: varsayılan reddet kuralı gereği 403 dönmeli."""
 
