@@ -1,0 +1,32 @@
+# Sanal ortam
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Django
+staticfiles/
+*.sqlite3
+
+# Sırlar — ASLA commit edilmez
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Nesne depolama / yerel belge kopyaları
+media/
+
+# Editör / işletim sistemi
+.idea/
+.vscode/
+*.swp
+.DS_Store

@@ -1,0 +1,66 @@
+[project]
+name = "persopyro"
+version = "0.1.0"
+description = "Persopyro — çok kiracılı (multi-tenant) İK SaaS platformu"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # Çekirdek çatı (LTS: en az 3 yıl güvenlik desteği)
+    "django~=5.2.0",
+    # API katmanı
+    "djangorestframework>=3.16",
+    # PostgreSQL sürücüsü (psycopg 3)
+    "psycopg[binary]>=3.2",
+    # API kimlik doğrulama: opak, DB'de hash'li, süreli, iptal edilebilir token
+    "django-rest-knox>=5.1",
+    # Arka plan görevleri: Django ORM broker (Redis/Celery gerekmez)
+    "django-q2>=1.10",
+    # Nesne depolama (S3 uyumlu) erişimi
+    "boto3>=1.35",
+    # Argon2id parola hash'leme
+    "argon2-cffi>=23.1",
+    # TOTP ile çok faktörlü doğrulama
+    "pyotp>=2.9",
+    # WSGI sunucusu (üretim)
+    "gunicorn>=23.0",
+    # OpenAPI şeması (API sözleşmesi)
+    "drf-spectacular>=0.28",
+    # Hata izleme (opsiyonel; anahtarsız çalışır)
+    "sentry-sdk>=2.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "factory-boy>=3.3",
+    "coverage>=7.6",
+    "ruff>=0.9",
+    "bandit>=1.8",
+    "pip-audit>=2.8",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["apps", "config"]
+omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+exclude = [".venv", "migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "S", "DJ"]
+ignore = [
+    # S101: testlerde assert kullanımı serbest
+    "S101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test dosyalarında güvenlik kuralları gevşetilir (sabit parola vb.)
+"tests/**" = ["S105", "S106", "S107"]

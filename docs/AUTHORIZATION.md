@@ -1,0 +1,112 @@
+# Yetkilendirme — Persopyro
+
+Kimlik doğrulama ("sen kimsin") ve yetkilendirme ("ne yapabilirsin") modeli.
+Mevcut veritabanı tasarımındaki RBAC tabloları esas alınır.
+
+## 1. Kimlik doğrulama (authentication)
+
+- Kullanıcı e-posta + parola ile giriş yapar; parola bcrypt ile doğrulanır
+  (`hr.hash_password`, `hr.verify_password`, `hr.authenticate_user`).
+- Giriş sırasında kiracı bağlamı belirlenir; aynı e-posta farklı kiracılarda
+  bulunabilir, bu nedenle kimlik sorgusu tenant bağlamında yapılır.
+- Hatalı parola denemeleri `failed_login_count` ile sayılır, sınır aşılırsa
+  `lockout_until` ile hesap kilitlenir.
+- Oturumlar kısa ömürlü token ile yönetilir; token yenileme ayrı uç noktadır.
+- `multi_factor_enabled` alanı desteklenir; kritik roller için zorunlu kılınması
+  önerilir.
+- Parola sıfırlama: `password_reset_tokens` üzerinden tek kullanımlık, süreli token.
+- Her giriş/çıkış/başarısız deneme `login_audit` tablosuna yazılır.
+
+## 2. Yetki modeli (RBAC)
+
+Veritabanı nesneleri:
+
+| Tablo | Rolü |
+|---|---|
+| `users` | Kiracıya bağlı kullanıcılar |
+| `roles` | Roller; `tenant_id` NULL ise sistem geneli rol |
+| `permissions` | Yetki tanımları (kod bazlı) |
+| `user_roles` | Kullanıcı–rol eşleşmesi |
+| `role_permissions` | Rol–yetki eşleşmesi |
+| `user_permission_overrides` | Kullanıcı bazlı ekleme/çıkarma istisnası |
+
+`hr.role_type` enum'u: `system`, `custom`, `default`.
+
+Çözümleme kuralı:
+
+```
+etkin_yetkiler(kullanıcı) =
+    (rollerinin izinleri)
+    + (kullanıcıya eklenen override'lar)
+    - (kullanıcıdan çıkarılan override'lar)
+```
+
+Mevcut tasarımda `hr.user_permissions(p_user_id)` fonksiyonu bu birleşimi üretir.
+
+## 3. Değişmez yetkilendirme kuralları
+
+1. **Varsayılan reddet**: bir işlem için açık izin yoksa işlem reddedilir.
+2. **Kiracı sınırı aşılamaz**: sistem geneli rolü olan kullanıcı bile, bir
+   kiracı bağlamında yalnızca o kiracının verisini görür.
+3. **Yetki kontrolü servis katmanında yapılır**; arayüzde buton gizlemek yetki
+   kontrolü sayılmaz.
+4. **Her uç nokta gerektirdiği izni belgeler** (`API.md` içine yazılır).
+5. **Rol değişikliği audit log'a yazılır.**
+6. **Kendi kendini yükseltme yasak**: kullanıcı kendi rolünü/izinlerini
+   değiştiremez; bu işlem ayrı bir izin gerektirir.
+7. **Son yönetici korunur**: bir kiracıda son `tenant_admin` kaldırılamaz/silinemez.
+
+## 4. Yetki kodlama biçimi
+
+İzin kodları `<kaynak>.<işlem>` biçiminde yazılır:
+
+```
+employee.read          employee.create        employee.update        employee.delete
+leave.request.read     leave.request.approve  leave.type.manage
+shift.read             shift.assign           shift.schedule.manage
+document.read          document.upload        document.delete        document.confidential.read
+org.department.manage  org.position.manage
+role.manage            user.manage            audit.read             billing.manage
+```
+
+Kurallar:
+
+- Yeni izin eklerken mevcut kodlama biçimi kullanılır; yeni bir kalıp icat edilmez.
+- İzin kodları veritabanında tutulur, koda gömülmez.
+- İzinler rol aracılığıyla verilir; doğrudan kullanıcıya izin vermek istisnadır ve
+  gerekçesi audit kaydında görünür.
+
+## 5. Rollerin önerilen başlangıç seti
+
+| Rol | Kapsam | Örnek izinler |
+|---|---|---|
+| `super_admin` | Platform (sistem geneli) | Kiracı yönetimi, destek amaçlı erişim (kayıtlı) |
+| `tenant_admin` | Kiracı | Tüm İK modülleri, rol/kullanıcı yönetimi, faturalama |
+| `hr_manager` | Kiracı | Çalışan, izin, vardiya, evrak, performans |
+| `manager` | Departman | Ekibinin izin/onay ve devam kayıtları |
+| `employee` | Kendisi | Kendi profil, izin talebi, kendi evrakları |
+
+Kural: `super_admin` dahil hiçbir erişim, audit kaydı olmadan kiracı verisine
+dokunamaz.
+
+## 6. Nesne seviyesi yetki (IDOR koruması)
+
+Her kayıt erişiminde iki soru sorulur:
+
+1. Bu kayıt, oturumun kiracısına mı ait? (`tenant_id` eşleşmesi)
+2. Bu kullanıcının bu kaydı bu işlem için görme/değiştirme izni var mı?
+
+Örnek: `manager` rolündeki kullanıcı yalnızca kendi ekibindeki çalışanların izin
+talebini onaylayabilir; başka departmanın kaydı erişim denemesinde 403 değil,
+kaydın kapsam dışında olduğu bilgisini sızdırmamak için 404 döndürülmesi tercih
+edilir.
+
+## 7. Yetki kontrolünün uygulandığı yerler
+
+| Katman | Ne yapar |
+|---|---|
+| API katmanı | Token geçerliliği, uç nokta için gereken iznin varlığı |
+| Servis katmanı | Gerçek iş kuralı kontrolü, nesne seviyesi kapsam kontrolü |
+| Veri katmanı | Tenant filtresi + RLS (son savunma hattı) |
+
+Üç katmandan birinin atlanması yasaktır.
