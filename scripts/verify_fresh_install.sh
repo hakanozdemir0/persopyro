@@ -615,6 +615,21 @@ kontrol_metni "taşıma hedeflerinde İK var" "$HEDEF_LISTE" "nsan Kaynaklar"
 kontrol_yok "taşıma hedeflerinde kendisi yok" "$HEDEF_LISTE" '"code":"FIN"'
 kontrol_yok "taşıma hedeflerinde alt birim yok" "$HEDEF_LISTE" '"code":"MUH"'
 
+# Unvan (pozisyon) ve izin türü ekleme — gerçek servis + denetim.
+bekle "POST /test-ui/api/positions (201)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -b "$CEREZ" -c "$CEREZ" \
+        -X POST "$TABAN2/test-ui/api/positions" -H 'Content-Type: application/json' \
+        -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"code":"VERIFY-UZ","name":"Dogrulama Uzmani"}')" "201"
+kontrol_metni "lookups'ta yeni unvan" \
+    "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/lookups")" "Dogrulama Uzmani"
+TUR_YANIT="$(curl -s -b "$CEREZ" -c "$CEREZ" -X POST "$TABAN2/test-ui/api/leave-types" \
+    -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+    -d '{"code":"verify_izni","name":"Dogrulama Izni","category":"other"}')"
+kontrol_metni "izin türü eklendi" "$TUR_YANIT" "verify_izni"
+kontrol_metni "talep formunda görünüyor" \
+    "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/lookups")" "verify_izni"
+
 # Rol atama / kaldırma (mock değil, gerçek servis + denetim).
 CALISAN2_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["employee_no"]=="DEMO-002"))' "$CALISAN_JSON")"
 HR_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x["code"]=="hr_manager"))' "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/roles")")"

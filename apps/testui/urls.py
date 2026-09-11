@@ -43,6 +43,13 @@ urlpatterns = [
         name="test-ui-employee-role-assign",
     ),
     path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
+    path("api/positions", api.PositionCreateView.as_view(), name="test-ui-positions"),
+    path("api/leave-types", api.LeaveTypeListView.as_view(), name="test-ui-leave-types"),
+    path(
+        "api/leave-types/<str:leave_type_id>/deactivate",
+        api.LeaveTypeDeactivateView.as_view(),
+        name="test-ui-leave-type-deactivate",
+    ),
     path(
         "api/role-assignments/<str:assignment_id>/revoke",
         api.RoleAssignmentRevokeView.as_view(),

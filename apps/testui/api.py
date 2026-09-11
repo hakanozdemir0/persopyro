@@ -28,6 +28,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.models import UserStatus
+from apps.leave.leave_type_catalog import LeaveCategory
 from apps.leave.models import (
     ApprovalStep,
     ApprovalStepStatus,
@@ -50,7 +52,9 @@ from apps.leave.services import (
     can_view_leave_request,
     cancel_leave_request,
     create_leave_request,
+    create_leave_type,
     current_step,
+    deactivate_leave_type,
     decide_approval_step,
     user_employee,
 )
@@ -62,6 +66,7 @@ from apps.organization.services import (
     OrganizationTreeError,
     create_department,
     create_employee,
+    create_position,
     move_department,
     move_employee,
     soft_delete_department,
@@ -541,11 +546,34 @@ class DashboardView(TestUiView):
             if can_view_leave_request(user, t)
         ]
 
+        # Karara bağlanmış talepler (onay/red): kapsam süzgeci aynı kuraldan geçer.
+        karara_baglananlar = [
+            _talep_ozeti(t, user)
+            for t in (
+                LeaveRequest.objects.filter(
+                    deleted_at__isnull=True,
+                    status__in=[LeaveRequestStatus.APPROVED, LeaveRequestStatus.REJECTED],
+                )
+                .select_related("employee__department", "leave_type", "employee")
+                .order_by("-decided_at")[:20]
+            )
+            if can_view_leave_request(user, t)
+        ][:10]
+
+        durum_sayilari = {"pending": 0, "approved": 0, "rejected": 0, "canceled": 0}
+        for talep in LeaveRequest.objects.filter(deleted_at__isnull=True).only(
+            "status", "employee__department_id"
+        ):
+            if can_view_leave_request(user, talep):
+                durum_sayilari[talep.status] = durum_sayilari.get(talep.status, 0) + 1
+
         return Response(
             {
                 "data": {
                     "employee": _calisan_ozeti(calisan) if calisan is not None else None,
                     "period_year": yil,
+                    "decided_requests": karara_baglananlar,
+                    "status_counts": durum_sayilari,
                     "balances": bakiyeler,
                     "annual": _yillik_ozet(calisan, yil),
                     "my_requests": kendi_talepleri,
@@ -702,12 +730,25 @@ class EmployeeListView(TestUiView):
                     pk=_uuid(veri["position_id"], "position_id"), deleted_at__isnull=True
                 ).first()
             user = None
-            if veri.get("user_email"):
+            if veri.get("user_id"):
                 from django.contrib.auth import get_user_model  # noqa: PLC0415
 
-                user = get_user_model().objects.filter(email=veri["user_email"]).first()
+                user = get_user_model().objects.filter(pk=_uuid(veri["user_id"], "user_id")).first()
+                if user is None or str(user.tenant_id) != str(request.user.tenant_id):
+                    raise LeaveError(
+                        "Seçilen kullanıcı hesabı bulunamadı (veya bu kiracıya ait değil)."
+                    )
+            elif veri.get("user_email"):
+                from django.contrib.auth import get_user_model  # noqa: PLC0415
+
+                user = get_user_model().objects.filter(
+                    email=str(veri["user_email"]).strip(), tenant=request.user.tenant_id
+                ).first()
                 if user is None:
-                    raise LeaveError("Bağlanacak kullanıcı bulunamadı.")
+                    raise LeaveError(
+                        "Bu e-posta ile kayıtlı kullanıcı yok. Listeden seçin "
+                        "(hesap oluşturma kapsam dışıdır)."
+                    )
             calisan = create_employee(
                 actor=request.user,
                 tenant=request.user.tenant,
@@ -830,6 +871,128 @@ class RoleListView(TestUiView):
         )
 
 
+def _kullanici_secenekleri(actor) -> list[dict]:  # noqa: ANN001
+    """Çalışana bağlanabilecek kullanıcılar (aynı kiracı) + mevcut bağ bilgisi."""
+    from django.contrib.auth import get_user_model  # noqa: PLC0415
+
+    baglantilar: dict[str, str] = {}
+    for calisan in Employee.objects.filter(
+        deleted_at__isnull=True, user__isnull=False
+    ).select_related("user"):
+        baglantilar[str(calisan.user_id)] = calisan.employee_no
+    # `User` modelinde `is_active` yoktur (proje standardı: `status`).
+    kullanicilar = get_user_model().objects.filter(
+        tenant=actor.tenant_id, status=UserStatus.ACTIVE
+    ).order_by("email")
+    return [
+        {
+            "id": str(k.pk),
+            "email": k.email,
+            "name": f"{k.first_name} {k.last_name}".strip(),
+            "bagli_employee_no": baglantilar.get(str(k.pk)),
+        }
+        for k in kullanicilar
+    ]
+
+
+def _izin_turu_ozeti(tur) -> dict:  # noqa: ANN001
+    """İzin türü özeti (yönetim kartı + talep formu için)."""
+    return {
+        "id": str(tur.pk),
+        "code": tur.code,
+        "name": tur.name,
+        "category": tur.category,
+        "category_label": tur.get_category_display(),
+        "is_paid": tur.is_paid,
+        "uses_balance": tur.uses_balance,
+        "requires_approval": tur.requires_approval,
+        "requires_document": tur.requires_document,
+        "is_system": tur.is_system,
+        "status": tur.status,
+        "status_label": tur.get_status_display(),
+        "aktif": tur.status == RecordStatus.ACTIVE and tur.deleted_at is None,
+        "min_advance_notice_days": tur.min_advance_notice_days,
+        "max_consecutive_days": (
+            str(tur.max_consecutive_days) if tur.max_consecutive_days is not None else None
+        ),
+    }
+
+
+class PositionCreateView(TestUiView):
+    """Unvan (pozisyon) tanımı oluşturur (`org.position.manage`)."""
+
+    def post(self, request):  # noqa: ANN001
+        try:
+            pozisyon = create_position(
+                actor=request.user,
+                tenant=request.user.tenant,
+                code=str(request.data.get("code", "")).strip(),
+                name=str(request.data.get("name", "")).strip(),
+                level=str(request.data.get("level", "")).strip(),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {"data": {"id": str(pozisyon.pk), "code": pozisyon.code, "name": pozisyon.name}},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class LeaveTypeListView(TestUiView):
+    """İzin türleri: listeleme ve kiracıya özel tür oluşturma (`leave.type.manage`)."""
+
+    def get(self, request):  # noqa: ANN001
+        turler = LeaveType.objects.filter(deleted_at__isnull=True).order_by("code")
+        return Response(
+            {
+                "data": [_izin_turu_ozeti(t) for t in turler],
+                "meta": {
+                    "can_manage": can_manage_leave_types(request.user),
+                    "categories": [
+                        {"value": k, "label": e} for k, e in LeaveCategory.choices
+                    ],
+                },
+            }
+        )
+
+    def post(self, request):  # noqa: ANN001
+        veri = request.data
+        try:
+            tur = create_leave_type(
+                actor=request.user,
+                tenant=request.user.tenant,
+                code=str(veri.get("code", "")),
+                name=str(veri.get("name", "")),
+                category=str(veri.get("category") or LeaveCategory.OTHER),
+                is_paid=bool(veri.get("is_paid", True)),
+                uses_balance=bool(veri.get("uses_balance", False)),
+                requires_approval=bool(veri.get("requires_approval", True)),
+                requires_document=bool(veri.get("requires_document", False)),
+                min_advance_notice_days=int(veri.get("min_advance_notice_days") or 0),
+            )
+        except (LeaveError, LeaveAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _izin_turu_ozeti(tur)}, status=status.HTTP_201_CREATED)
+
+
+class LeaveTypeDeactivateView(TestUiView):
+    """İzin türünü devre dışı bırakır (silmez; mevcut talepler korunur)."""
+
+    def post(self, request, leave_type_id: str):  # noqa: ANN001
+        tur = LeaveType.objects.filter(
+            pk=_uuid(leave_type_id, "leave_type_id"), deleted_at__isnull=True
+        ).first()
+        if tur is None:
+            raise Http404("izin_turu_yok")
+        try:
+            deactivate_leave_type(
+                actor=request.user, leave_type=tur, reason=str(request.data.get("reason") or "")
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _izin_turu_ozeti(tur)})
+
+
 class LookupView(TestUiView):
     """Form seçenekleri: birimler, pozisyonlar, izin türleri."""
 
@@ -857,8 +1020,16 @@ class LookupView(TestUiView):
                             deleted_at__isnull=True, status=RecordStatus.ACTIVE
                         ).order_by("code")
                     ],
+                    "users": _kullanici_secenekleri(request.user),
+                    "categories": [{"value": k, "label": e} for k, e in LeaveCategory.choices],
                     "recent_days": 90,
-                }
+                },
+                "meta": {
+                    "can_manage_positions": user_has_permission(
+                        request.user, "org.position.manage"
+                    ),
+                    "can_manage_leave_types": can_manage_leave_types(request.user),
+                },
             }
         )
 

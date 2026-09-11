@@ -3,6 +3,61 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.26.0] — 2026-09-11 — Test arayüzü: çalışan/unvan, izin türü yönetimi, panel karar görünümü
+
+**Baseline (son commit `71399fe`):** çalışma ağacı temiz, tam test suite **408 passed**.
+
+Kullanıcının bildirdiği üç eksik. Kapsam dışı (bu turda **dokunulmadı**):
+RBAC/RLS/izin kataloğu, üretim API sözleşmesi (`/api/v1/*`), kimlik doğrulama,
+kullanıcı **hesabı oluşturma** (test arayüzünden hesap açılmaz; mevcut hesap seçilir).
+
+### 1) "Bağlanacak kullanıcı bulunamadı" + unvan tanımlanamıyor
+
+- **Kök neden:** çalışan formunda kullanıcı **serbest metin** olarak isteniyordu;
+  yazılan e-posta kayıtlı değilse istek 400 dönüyordu (liste satırını kopyalamak da
+  bu hatayı üretiyordu).
+- Artık kullanıcı **listeden seçilir** (`lookups.users`): her hesabın bağlı çalışanı
+  (varsa) etikette gösterilir; seçim yapılmazsa hesap bağlanmaz. Yabancı kiracıya ait
+  veya kayıtsız hesap **400** ile ve anlaşılır mesajla reddedilir.
+- **Unvan (pozisyon) tanımlama eklendi:** `org.position.manage` sahibi çalışan
+  formundan yeni unvan ekler; eklendikten sonra liste yenilenir ve yeni unvan formda
+  seçili gelir (`POST /test-ui/api/positions`).
+
+### 2) Panelde onaylı izinler görünmüyordu
+
+- Panelde **"Karara bağlanan izinler"** kartı: durum sayıları (onay bekleyen /
+  onaylanan / reddedilen / iptal) ve son karara bağlanan talepler (çalışan, birim,
+  tür, tarih, gün, durum, karar tarihi).
+- Kapsam süzgeci aynı kuraldan geçer: çalışan yalnız kendi kayıtlarını, yönetici alt
+  ağacındakileri görür; kapsam dışı çalışanın kararı listede çıkmaz.
+
+### 3) İzin türü ekleme yoktu
+
+- **İzin türleri** kartı: tüm türler (pasifler dahil) kod/kategori/ücretli/bakiye/
+  belge/onay/durum kolonlarıyla; şirket yöneticisi (`leave.type.manage`)
+  **yeni tür** ekler (sistem kodları rezerve → 400) ve mevcut türü **pasifleştirir**
+  (silinmez; OD21 gereği mevcut talepler korunur). Eklenen tür anında talep
+  formundaki listede görünür.
+- Yeni uçlar: `POST /test-ui/api/positions`, `GET|POST /test-ui/api/leave-types`,
+  `POST /test-ui/api/leave-types/<uuid>/deactivate`.
+
+### Ölçüm
+
+| Ölçüm | Önce | Sonrası |
+|---|---|---|
+| Test sayısı | 408 | **416** (+8: kullanıcı seçimi/unvan, izin türü CRUD, panel karar listesi) |
+| Yeni migration | — | **0** |
+| Yeni bağımlılık | — | **0** |
+| Yeni uç (yalnız `/test-ui/api/*`) | 17 | **20** |
+| Güvenlik modeli | — | **değişmedi** (kapsam/RLS/servis yetkisi aynı) |
+
+### Doğrulama
+
+- `tests/test_testui.py` **47 test**; tam suite **416 passed**.
+- Gerçek tarayıcı (Chrome, CDP) ile: kullanıcı seçimi ve "— bağlı: DEMO-001"
+  etiketi, unvan ekleme formu, izin türü ekleme (gerçek istek → "İzin türü eklendi."
+  → listede ve talep formunda görünür), panelde karar kartı ve durum sayıları.
+
 ## [0.25.0] — 2026-09-11 — Test arayüzü: 4 kritik eksik düzeltmesi (çıkış, bakiye, rol/yetki, birim taşıma)
 
 **Baseline (son commit `7c8ad0e`):** çalışma ağacı temiz, tam test suite **388 passed**.

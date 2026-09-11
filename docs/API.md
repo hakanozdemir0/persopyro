@@ -104,7 +104,7 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 |---|---|---|
 | `/test-ui/api/me` | GET | Oturumdaki kullanıcı, kiracı, roller, etkin izinler, organizasyon kapsamı |
 | `/test-ui/api/dashboard` | GET | Panel: çalışan kaydı, dönem bakiyeleri, kendi talepleri, onay kuyruğu |
-| `/test-ui/api/lookups` | GET | Form seçenekleri (birimler, unvanlar, aktif izin türleri) |
+| `/test-ui/api/lookups` | GET | Form seçenekleri: birimler, unvanlar, aktif izin türleri, **kullanıcı hesapları** (bağlı çalışan bilgisiyle) + yönetim bayrakları |
 | `/test-ui/api/departments` | GET / POST | Birim ağacı / yeni birim (`org.department.manage` ∧ kapsam); `?moves_for=<id>` ile **taşıma hedefleri** (kendisi ve alt ağacı hariç) |
 | `/test-ui/api/departments/<uuid>/move` | POST | Üst birim değiştir (OD24 ağaç guard'ları) |
 | `/test-ui/api/departments/<uuid>/delete` | POST | Soft delete (OD21) |
@@ -119,6 +119,9 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/roles` | GET | Kiracının atanabilir rolleri (atanabilirlik gerekçesiyle); platform rolleri hariç |
 | `/test-ui/api/role-assignments/<uuid>/revoke` | POST | Rol atamasını kaldırır (soft delete, OD21) |
 | `/test-ui/api/role-assignments/<uuid>/restore` | POST | Kaldırılmış atamayı açıkça geri alır (OD21) |
+| `/test-ui/api/positions` | POST | Unvan (pozisyon) tanımı oluşturur (`org.position.manage`) |
+| `/test-ui/api/leave-types` | GET / POST | İzin türleri (tümü, pasifler dahil) / kiracıya özel tür ekleme (`leave.type.manage`; sistem kodları rezerve) |
+| `/test-ui/api/leave-types/<uuid>/deactivate` | POST | İzin türünü pasifleştirir (silmez; mevcut talepler korunur) |
 
 Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama (ör. `UNIT` rolde
 eksik birim kapsamı), `401/403` kimlik ve yetki/kapsam, `404` kapsam dışı veya yok,

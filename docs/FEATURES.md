@@ -232,6 +232,14 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
 - **Self-elevation yasakları arayüzden bağımsız korunur:** kullanıcı kendi rolünü
   atayamaz/yükseltemez, sahip olmadığı yetkiyi dağıtamaz, `role.manage` yoksa
   rol yönetimi kapanır; platform rolleri kiracı arayüzünden yönetilemez.
+- **Panel karar görünümü:** panelde onay bekleyen / onaylanan / reddedilen / iptal
+  sayıları ve son karara bağlanan izinler listelenir (kapsam süzgeciyle: çalışan
+  kendi kayıtlarını, yönetici alt ağacındakileri görür).
+- **Unvan ve izin türü tanımlama:** yetkili kullanıcı (`org.position.manage`)
+  çalışan formundan yeni unvan ekleyebilir; şirket yöneticisi (`leave.type.manage`)
+  kiracıya özel izin türü tanımlayabilir (ücretli/bakiye/belge/onay bayraklarıyla)
+  ve mevcut türü pasifleştirebilir (silinmez; mevcut talepler korunur, sistem kodları
+  rezervedir). Çalışana hesap **listeden seçilerek** bağlanır (serbest metin yok).
 - **Birim taşıma görsel seçimle:** taşıma hedefi ağaçtan seçilir; hedef listesi
   (kendisi ve alt ağacı hariç) sunucudan gelir, taşıma öncesi onay sorulur ve
   sonrasında ağaç yenilenir. Döngü/derinlik/kiracı garantileri veritabanında

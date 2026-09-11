@@ -129,6 +129,23 @@
         <p class="muted">Kalan gün <strong>backend'de üretilen</strong> kolondan gelir; arayüz hesap yapmaz.</p>
         ${bakiyeler}
       </div>
+      <div class="card"><h2>Karara bağlanan izinler</h2>
+        <p class="muted">Durum sayıları (kapsamınız içinde): onay bekleyen
+          <strong>${esc(data.status_counts.pending)}</strong> ·
+          onaylanan <strong>${esc(data.status_counts.approved)}</strong> ·
+          reddedilen <strong>${esc(data.status_counts.rejected)}</strong> ·
+          iptal <strong>${esc(data.status_counts.canceled)}</strong></p>
+        ${data.decided_requests.length
+          ? `<table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
+             <th>Gün</th><th>Durum</th><th>Karar</th></tr></thead><tbody>
+             ${data.decided_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
+               <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
+               <td>${esc(t.start_date)} → ${esc(t.end_date)}</td><td>${esc(t.days_requested)}</td>
+               <td>${durumPill(t.status, t.status_label)}</td>
+               <td>${esc(t.decided_at ? t.decided_at.slice(0, 10) : "")}</td></tr>`).join("")}
+             </tbody></table>`
+          : `<p class="muted">Henüz karara bağlanmış izin talebi yok.</p>`}
+      </div>
       <div class="card"><h2>İzin taleplerim</h2>${talepler}</div>
       <div class="card"><h2>Onayımı bekleyen talepler (${esc(data.pending_count)})</h2>
         ${data.pending_requests.length ? data.pending_requests.map((t) => `
@@ -322,9 +339,19 @@
           <div><label>Birim</label><select id="emp-dep">${lookupSecenekler(LOOKUPS.data.departments)}</select></div>
           <div><label>Unvan</label><select id="emp-pos">${lookupSecenekler(LOOKUPS.data.positions)}</select></div>
           <div><label>İşe giriş</label><input id="emp-hire" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
-          <div><label>Bağlanacak kullanıcı e-postası (opsiyonel)</label><input id="emp-user" placeholder="kullanici@ornek.test"></div>
+          <div><label>Bağlanacak kullanıcı (opsiyonel)</label>
+            <select id="emp-user"><option value="">(hesap bağlama)</option>
+              ${LOOKUPS.data.users.map((u) => `<option value="${esc(u.id)}">${esc(u.email)}${u.bagli_employee_no ? " — bağlı: " + esc(u.bagli_employee_no) : ""}</option>`).join("")}
+            </select></div>
           <div><button class="primary" id="emp-create">Oluştur</button></div>
-        </div>` : `<p class="muted">Yetkiniz yok: <code>employee.create</code> izni ve kapsam gerekir.</p>`}
+        </div>
+        ${LOOKUPS.meta.can_manage_positions ? `
+        <h4>Yeni unvan (pozisyon) ekle</h4>
+        <div class="row">
+          <div><label>Kod</label><input id="pos-code" placeholder="MUH-UZ"></div>
+          <div><label>Unvan adı</label><input id="pos-name" placeholder="Muhasebe Uzmanı"></div>
+          <div><button id="pos-create">Unvan ekle</button></div>
+        </div>` : ""}` : `<p class="muted">Yetkiniz yok: <code>employee.create</code> izni ve kapsam gerekir.</p>`}
       </div>`;
 
     const olustur = document.getElementById("emp-create");
@@ -335,7 +362,7 @@
           department_id: document.getElementById("emp-dep").value,
           position_id: document.getElementById("emp-pos").value || null,
           hire_date: document.getElementById("emp-hire").value,
-          user_email: document.getElementById("emp-user").value.trim() || null,
+          user_id: document.getElementById("emp-user").value || null,
         }});
         PERSOPYRO_UI.mesaj("ok", "Çalışan oluşturuldu.");
         await yukleCalisanlar();
@@ -343,6 +370,24 @@
     });
     document.querySelectorAll("[data-detay]").forEach((d) =>
       d.addEventListener("click", () => calisanDetay(d.dataset.detay)));
+
+    const unvanEkle = document.getElementById("pos-create");
+    if (unvanEkle) unvanEkle.addEventListener("click", async () => {
+      try {
+        const { data: yeniUnvan } = await PERSOPYRO_UI.cagir("/test-ui/api/positions", {
+          method: "POST",
+          body: {
+            code: document.getElementById("pos-code").value.trim(),
+            name: document.getElementById("pos-name").value.trim(),
+          },
+        });
+        PERSOPYRO_UI.mesaj("ok", `Unvan eklendi: ${yeniUnvan.name}`);
+        await yukleLookups();
+        await yukleCalisanlar();
+        const secim = document.getElementById("emp-pos");
+        if (secim) secim.value = yeniUnvan.id;  // yeni unvan seçili gelsin
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
   }
 
   async function calisanDetay(calisanId) {
@@ -492,7 +537,8 @@
         </div>
         <div id="lr-out"></div>
       </div>
-      <div class="card"><h2>Taleplerim</h2><div id="lr-mine"></div></div>`;
+      <div class="card"><h2>Taleplerim</h2><div id="lr-mine"></div></div>
+      <div class="card"><h2>İzin türleri</h2><div id="lr-types"></div></div>`;
     document.getElementById("lr-create").addEventListener("click", async () => {
       try {
         const { data: t } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests", {
@@ -511,7 +557,76 @@
         await Promise.all([yukleIzinTaleplerim(), yuklePanel(), yukleOnaylar(), yukleCalisanlar()]);
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
-    await yukleIzinTaleplerim();
+    await Promise.all([yukleIzinTaleplerim(), yukleIzinTurleri()]);
+  }
+
+  async function yukleIzinTurleri() {
+    const hedef = document.getElementById("lr-types");
+    if (!hedef) return;
+    const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-types");
+    hedef.innerHTML = `
+      <table><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th>
+        <th>Belge</th><th>Onay</th><th>Durum</th><th></th></tr></thead><tbody>
+        ${data.map((t) => `<tr><td><code>${esc(t.code)}</code></td><td>${esc(t.name)}</td>
+          <td>${esc(t.category_label)}</td><td>${t.is_paid ? "Evet" : "Hayır"}</td>
+          <td>${t.uses_balance ? "Evet" : "Hayır"}</td><td>${t.requires_document ? "Evet" : "Hayır"}</td>
+          <td>${t.requires_approval ? "Evet" : "Hayır"}</td>
+          <td>${esc(t.status_label)}${t.is_system ? " <span class='muted small'>sistem</span>" : ""}</td>
+          <td>${meta.can_manage && t.aktif
+            ? `<button class="danger" data-tur-kapat="${esc(t.id)}">Devre dışı bırak</button>` : ""}</td>
+        </tr>`).join("")}
+      </tbody></table>
+      ${meta.can_manage ? `
+        <h4>Yeni izin türü</h4>
+        <div class="row">
+          <div><label>Kod (sistem kodları rezerve)</label><input id="lt-code" placeholder="dogum_izni"></div>
+          <div><label>Ad</label><input id="lt-name" placeholder="Doğum İzni"></div>
+          <div><label>Kategori</label><select id="lt-cat">
+            ${meta.categories.map((c) => `<option value="${esc(c.value)}">${esc(c.label)}</option>`).join("")}
+          </select></div>
+          <div><label>Bayraklar</label>
+            <span class="bayraklar small">
+              <label><input type="checkbox" id="lt-paid" checked> Ücretli</label>
+              <label><input type="checkbox" id="lt-balance"> Bakiye kullanır</label>
+              <label><input type="checkbox" id="lt-approval" checked> Onay gerekir</label>
+              <label><input type="checkbox" id="lt-doc"> Belge gerekir</label>
+            </span></div>
+          <div><button class="primary" id="lt-create">Tür ekle</button></div>
+        </div>` : `<p class="muted">Yetkiniz yok: <code>leave.type.manage</code> (şirket yöneticisi) gerekir.</p>`}`;
+
+    const ekle = document.getElementById("lt-create");
+    if (ekle) ekle.addEventListener("click", async () => {
+      try {
+        await PERSOPYRO_UI.cagir("/test-ui/api/leave-types", { method: "POST", body: {
+          code: document.getElementById("lt-code").value.trim(),
+          name: document.getElementById("lt-name").value.trim(),
+          category: document.getElementById("lt-cat").value,
+          is_paid: document.getElementById("lt-paid").checked,
+          uses_balance: document.getElementById("lt-balance").checked,
+          requires_approval: document.getElementById("lt-approval").checked,
+          requires_document: document.getElementById("lt-doc").checked,
+        }});
+        PERSOPYRO_UI.mesaj("ok", "İzin türü eklendi.");
+        await Promise.all([yukleLookups(), yukleIzinTurleri()]);
+        await yukleIzin();  // talep formundaki tür listesi güncellensin
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    document.querySelectorAll("[data-tur-kapat]").forEach((d) =>
+      d.addEventListener("click", async () => {
+        const onay = await onayModali("İzin türünü devre dışı bırak",
+          `<p>Bu tür devre dışı bırakılsın mı? Mevcut talepler korunur; yeni talep açılamaz.</p>
+           <label>Gerekçe</label><input id="tur-kapat-gerekce" placeholder="Örn. artık kullanılmıyor">`,
+          "Devre dışı bırak");
+        if (!onay) return;
+        try {
+          await PERSOPYRO_UI.cagir(`/test-ui/api/leave-types/${d.dataset.turKapat}/deactivate`, {
+            method: "POST",
+            body: { reason: document.getElementById("tur-kapat-gerekce").value.trim() },
+          });
+          PERSOPYRO_UI.mesaj("ok", "İzin türü devre dışı bırakıldı.");
+          await Promise.all([yukleLookups(), yukleIzinTurleri()]);
+        } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+      }));
   }
 
   async function yukleIzinTaleplerim() {

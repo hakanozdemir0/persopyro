@@ -169,7 +169,17 @@ Kiracı `slug`: `demo`.
    sonra **Rolü kaldır** ile kaldır ve istersen **Geri al** ile geri getir
    (OD21: kaldırılan atama sessizce canlanmaz). Kullanıcı **kendi** rolünü
    atayamaz (self-elevation yasağı).
-10. **Departmanlar → Taşı**: açılan pencerede hedef üst birimi ağaçtan seç
+10. **Çalışanlar → Yeni çalışan**: "Bağlanacak kullanıcı" listesinden hesap seç
+    (boş bırakılırsa hesap bağlanmaz); yetkiniz varsa **Yeni unvan ekle** ile
+    pozisyon tanımlayıp aynı formda seçebilirsin.
+11. **İzin Talebi → İzin türleri**: tüm türleri (pasifler dahil) bayraklarıyla gör;
+    şirket yöneticisi **Yeni izin türü** ekleyebilir (sistem kodları rezerve) ve
+    mevcut türü **Devre dışı bırak** ile pasifleştirebilir. Eklenen tür anında talep
+    formundaki listede görünür.
+12. **Panel → Karara bağlanan izinler**: onay bekleyen/onaylanan/reddedilen/iptal
+    sayıları ve son karara bağlanan talepler (çalışan adı, birim, tür, tarih, gün,
+    durum) — kapsamınız dışındaki çalışanlar listede görünmez.
+13. **Departmanlar → Taşı**: açılan pencerede hedef üst birimi ağaçtan seç
     ("En üst seviyeye taşı (kök)" seçeneği de vardır); onay sorusundan sonra ağaç
     yenilenir ve Finans müdürünün gördüğü çalışanlar yeni ağaca göre değişir.
     Taşınan birimin kendisi ve alt birimleri listede **çıkmaz** (sunucu üretir).

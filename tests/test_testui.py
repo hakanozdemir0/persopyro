@@ -942,3 +942,247 @@ def test_ui_testleri_admin_yolu_ve_izolasyonu_bozmaz(client, tenant_a, user_a) -
     assert client.get("/test-ui/api/roles").status_code == 200
     assert client.get(f"/test-ui/api/employees/{uuid4()}").status_code == 404
     assert client.get("/api/v1/auth/token/revoke-all").status_code in (401, 403, 405)
+
+# =============================================================================
+# Kullanıcı bildirimi (3 eksik): kullanıcı seçimi/unvan, izin türü yönetimi,
+# panelde karara bağlanan izinler
+# =============================================================================
+
+
+def test_ui_calisan_kullanicisiz_ve_kullanicili_olusturulur(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Çalışan kaydı kullanıcı seçmeden de açılır; seçilirse hesap bağlanır."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    musait = client.get("/test-ui/api/lookups").json()["data"]["users"]
+    kullanici = next(u for u in musait if u["email"] == lot["kardes_user"].email)
+    assert kullanici["bagli_employee_no"] == "IK-1"  # bilgi amaçlı görünür
+
+    hesapsiz = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "YENI-9",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": timezone.localdate().isoformat(),
+        },
+    )
+    assert hesapsiz.status_code == 201
+    assert hesapsiz.json()["data"]["user_email"] is None
+
+    bagli = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "YENI-10",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": timezone.localdate().isoformat(),
+            "user_id": kullanici["id"],
+        },
+    )
+    assert bagli.status_code == 201
+    assert bagli.json()["data"]["user_email"] == lot["kardes_user"].email
+    assert [r["code"] for r in bagli.json()["data"]["roles"]] == ["employee"]
+
+
+def test_ui_calisana_yabanci_veya_gecersiz_kullanici_reddedilir(client, tenant_a, tenant_b, user_a, user_b) -> None:  # noqa: ANN001, E501
+    """Bildirilen hata: e-posta serbest metindi. Artık kullanıcı listesi + anlaşılır 400."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    govde = {
+        "employee_no": "YENI-11",
+        "department_id": str(lot["birimler"]["muhasebe"].pk),
+        "hire_date": timezone.localdate().isoformat(),
+    }
+    yabanci = _post(client, "/test-ui/api/employees", {**govde, "user_id": str(user_b.pk)})
+    assert yabanci.status_code == 400
+    assert "kullanıcı" in yabanci.json()["error"]["message"].lower()
+
+    bilinmeyen = _post(
+        client, "/test-ui/api/employees", {**govde, "user_email": "olmayan@ornek.test"}
+    )
+    assert bilinmeyen.status_code == 400
+    assert "listeden seçin" in bilinmeyen.json()["error"]["message"].lower()
+
+
+def test_ui_unvan_ekleme_ve_calisanda_gorunmesi(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yetkili kullanıcı yeni unvan tanımlar; form seçeneklerine ve kayda yansır."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/lookups").json()["meta"]["can_manage_positions"] is True
+
+    yeni = _post(
+        client, "/test-ui/api/positions", {"code": "MUH-UZ", "name": "Muhasebe Uzmanı"}
+    )
+    assert yeni.status_code == 201
+    unvan_id = yeni.json()["data"]["id"]
+
+    bakiyeler = client.get("/test-ui/api/lookups").json()["data"]["positions"]
+    assert "Muhasebe Uzmanı" in [p["name"] for p in bakiyeler]
+
+    calisan = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "MUH-9",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "position_id": unvan_id,
+            "hire_date": timezone.localdate().isoformat(),
+        },
+    )
+    assert calisan.status_code == 201
+    assert calisan.json()["data"]["position"] == "Muhasebe Uzmanı"
+
+
+def test_ui_unvan_ekleme_yetkisiz_reddedilir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """`org.position.manage` olmayan kullanıcı unvan tanımlayamaz."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    yanit = _post(client, "/test-ui/api/positions", {"code": "X", "name": "Olmamalı"})
+    assert yanit.status_code == 403
+
+
+def test_ui_izin_turu_eklenir_ve_talep_formunda_gorunur(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Şirket yöneticisi kiracıya özel izin türü ekler; talep açılabilir."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+
+    yeni = _post(
+        client,
+        "/test-ui/api/leave-types",
+        {
+            "code": "dogum_izni",
+            "name": "Doğum İzni",
+            "category": "maternity",
+            "is_paid": True,
+            "uses_balance": False,
+            "requires_approval": True,
+            "requires_document": False,
+        },
+    )
+    assert yeni.status_code == 201
+    assert yeni.json()["data"]["aktif"] is True
+    assert yeni.json()["data"]["category_label"] == "Doğum"
+
+    liste = client.get("/test-ui/api/leave-types").json()
+    kodlar = [t["code"] for t in liste["data"]]
+    assert "dogum_izni" in kodlar and "annual_leave" in kodlar
+    assert liste["meta"]["can_manage"] is True
+
+    aktif_turler = client.get("/test-ui/api/lookups").json()["data"]["leave_types"]
+    assert "dogum_izni" in [t["code"] for t in aktif_turler]
+
+    baslangic = timezone.localdate() + timedelta(days=20)
+    talep = _post(
+        client,
+        "/test-ui/api/leave-requests",
+        {
+            "employee_id": str(lot["personel"].pk),
+            "leave_type_id": yeni.json()["data"]["id"],
+            "start_date": baslangic.isoformat(),
+            "end_date": (baslangic + timedelta(days=4)).isoformat(),
+            "reason": "Yeni türle talep",
+            "submit": True,
+        },
+    )
+    assert talep.status_code == 201
+    assert Decimal(talep.json()["data"]["days_requested"]) == Decimal("5.0")
+    with tenant_context(tenant_a.id):
+        assert AuditLog.objects.filter(action="leave.type.create").exists()
+
+
+def test_ui_izin_turu_sistem_kodu_ve_yetki_reddi(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Sistem kodları rezervedir; yetkisiz kullanıcı tür ekleyemez."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    sistem = _post(
+        client,
+        "/test-ui/api/leave-types",
+        {"code": "annual_leave", "name": "Kopya", "category": "annual"},
+    )
+    assert sistem.status_code == 400
+    assert "rezerve" in sistem.json()["error"]["message"]
+
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/leave-types").json()["meta"]["can_manage"] is False
+    assert (
+        _post(
+            client, "/test-ui/api/leave-types", {"code": "kopya", "name": "Olmamalı"}
+        ).status_code
+        == 403
+    )
+
+
+def test_ui_izin_turu_devre_disi_birakilir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Devre dışı bırakılan tür yeni taleplerde görünmez; kayıt silinmez."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    tur_id = next(
+        t["id"]
+        for t in client.get("/test-ui/api/leave-types").json()["data"]
+        if t["code"] == "sick_leave"
+    )
+    kapat = _post(
+        client, f"/test-ui/api/leave-types/{tur_id}/deactivate", {"reason": "deneme"}
+    )
+    assert kapat.status_code == 200
+    assert kapat.json()["data"]["aktif"] is False
+
+    liste = client.get("/test-ui/api/leave-types").json()["data"]
+    assert next(t for t in liste if t["code"] == "sick_leave")["aktif"] is False
+    aktif = [t["code"] for t in client.get("/test-ui/api/lookups").json()["data"]["leave_types"]]
+    assert "sick_leave" not in aktif
+    with tenant_context(tenant_a.id):
+        assert AuditLog.objects.filter(action="leave.type.deactivate").exists()
+
+
+def test_ui_panel_karara_baglanan_izinleri_gosterir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Panelde onaylanan/reddedilen talepler ve durum sayıları görünür (kapsam süzgeçli)."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    baslangic = timezone.localdate() + timedelta(days=30)
+    talep_id = _post(
+        client,
+        "/test-ui/api/leave-requests",
+        {
+            "employee_id": str(lot["personel"].pk),
+            "leave_type_id": str(lot["turler"]["annual_leave"].pk),
+            "start_date": baslangic.isoformat(),
+            "end_date": (baslangic + timedelta(days=2)).isoformat(),
+            "reason": "Panel karar testi",
+            "submit": True,
+        },
+    ).json()["data"]["id"]
+
+    panel_once = client.get("/test-ui/api/dashboard").json()["data"]
+    assert panel_once["status_counts"]["pending"] == 1
+    assert panel_once["status_counts"]["approved"] == 0
+    assert panel_once["decided_requests"] == []
+
+    # İki adımlı onay: birincil yönetici + nihai (kiracı geneli).
+    assert (
+        _post(client, f"/test-ui/api/leave-requests/{talep_id}/decision", {"decision": "approved"})
+        .status_code
+        == 200
+    )
+    # admin'in tek kararı yeterli (override) — kalan adım varsa da karar verilir.
+    kalan = client.get("/test-ui/api/leave-requests?scope=pending").json()["data"]
+    for kayit in kalan:
+        if kayit["id"] == talep_id:
+            _post(
+                client,
+                f"/test-ui/api/leave-requests/{talep_id}/decision",
+                {"decision": "approved"},
+            )
+
+    panel = client.get("/test-ui/api/dashboard").json()["data"]
+    onaylananlar = [t for t in panel["decided_requests"] if t["employee_no"] == "MUH-1"]
+    assert onaylananlar, panel["decided_requests"]
+    assert onaylananlar[0]["status"] in {"approved", "pending"}
+    assert panel["status_counts"]["pending"] + panel["status_counts"]["approved"] == 1
+
+    # Kapsam süzgeci: İK (sibling) çalışanı için karara bağlanan kayıt müdüre görünmez.
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
+    kardes_panel = client.get("/test-ui/api/dashboard").json()["data"]
+    assert all(t["employee_no"] != "IK-1" for t in kardes_panel["decided_requests"])
