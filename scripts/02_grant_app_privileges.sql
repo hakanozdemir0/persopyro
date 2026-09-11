@@ -163,6 +163,31 @@ BEGIN
 END
 $$;
 
+-- 8) İzin modülü tabloları (M14) ---------------------------------------------
+-- OD21: izin türü/politika/talep kayıtlarında silme **soft-delete**tir; runtime
+-- yolunda fiziksel silme yoktur → `DELETE`/`TRUNCATE` geri alınır.
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['leave_types','leave_policies','leave_policy_rules',
+                             'leave_balances','leave_requests','approval_steps']
+    LOOP
+        IF to_regclass('hr.' || t) IS NOT NULL THEN
+            EXECUTE format('REVOKE DELETE, TRUNCATE ON hr.%I FROM persopyro_app', t);
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE ON hr.%I TO persopyro_app', t);
+        END IF;
+    END LOOP;
+END $$;
+
+-- Bakiye olay defteri **append-only**dır (denetim izi): UPDATE de verilmez.
+DO $$
+BEGIN
+    IF to_regclass('hr.leave_balance_entries') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE, TRUNCATE ON hr.leave_balance_entries FROM persopyro_app;
+        GRANT SELECT, INSERT ON hr.leave_balance_entries TO persopyro_app;
+    END IF;
+END $$;
+
 -- 6) Platform şeması (OD3/M1–M5) --------------------------------------------
 -- AYRICALIKLI SINIR: `persopyro_app` (kiracı runtime yolu) platform şemasını
 -- GÖREMEZ ve oradaki hiçbir tabloda yetkiye sahip olamaz. Bu bölüm bilinçli

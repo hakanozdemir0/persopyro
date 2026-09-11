@@ -194,7 +194,7 @@ parçası eklenir; tüm uygulama SPA'ya çevrilmez.
 - Tetikleyici, fonksiyon ve RLS politikaları Django modelinde ifade
   edilemediğinden migration içinde ham SQL (`RunSQL`) ile yazılır.
 - Port yöntemi: modül modül ilerlenir (kiracı → kullanıcı/RBAC → **organizasyon/çalışan
-  (M10–M13 ✅ uygulandı)** →
+  (M10–M13 ✅ uygulandı)** → **izin (M14 ✅ uygulandı)** →
   izin → vardiya/devam → evrak → diğer). Her modül için ilk migration, mevcut
   DDL ile karşılaştırılarak doğrulanır.
 - **Kritik önkoşul:** özel kullanıcı modeli (`AUTH_USER_MODEL`) ve şema /
@@ -612,6 +612,7 @@ tekrar değerlendirilir.
 | K30 | **v1'de tek tüzel kişilik**: `1 tenant = 1 tüzel şirket`; `companies`/`legal_entities` **yok**, hiçbir tabloda `company_id` yok; RBAC kapsamı **tek boyutlu** (tenant) kalır; gelecekte ayrı katman eklenebilir ama **tenant izolasyon sınırı korunur** | **Kabul edildi (2026-09-11) — OD27 kapalı; UYGULANDI ✅ (M10–M13):** `hr.departments`/`positions`/`employees`/`employee_personal_data`/`employee_manager` doğrudan `tenant_id`'ye bağlı; `company_id`/`legal_entity_id` **hiçbir tabloda yok** (fresh-install adım 6d bunu ölçer) | ≥ %10 veya ≥ 3 kiracı talebi; sözleşmesel bordro/izin ayrımı; ardışık ≥ 2 bloke anlaşma; ≥ 2 işveren sicili |
 | K31 | **`public_id_prefix` v1'de immutable**: rebrand/slug değişimi prefix'i ve mevcut `public_id`'leri değiştirmez; **değiştirme uç noktası yok**; istisna mekanizması **kodlanmaz** (ileride yalnızca platform operasyonu + denetim + `public_id` sabit + eski prefix rezerve) | **Kabul edildi (2026-09-11) — OD28 kapalı**, uygulanacak | Yasal birleşme zorunluluğu; ≥ 3 tekrarlı değişim talebi; ≥ 5 destek karışıklığı |
 | K32 | **Tenant API token'ı kapsamlı ve iptal izli**: `hr.api_tokens` genişletilir (ikinci token sistemi yok) — zorunlu `purpose` + `scopes` (katalog doğrulamalı, `platform.*` ve wildcard yasak), `token_kind` (interactive ≤ 30 gün / service ≤ 90 gün, süresiz yasak), `revoked_at`/`revoked_reason` (tek yönlü iptal); **yetki = `current_user_permissions ∩ token_scopes`** (fail-closed, tek kilit nokta) | **Kabul edildi (2026-09-11) — OD26 kapalı; uygulandı ✅** (`accounts/0003_apitoken_od26` + servis/uç/test; F8 kapandı) | Daha uzun `service` TTL'i gerekirse yeni karar; kiracı durumu kuralı F11 ile birlikte uygulandı |
+| K33 | **İzin bakiyesi: güncel durum + append-only olay defteri** (event sourcing'in tamamı değil): `leave_balances` güncel durumdur (türetilen `available_days` **DB'de üretilir**), her değişiklik `leave_balance_entries`'e aynı işlemde yazılır; hakediş **idempotenttir** (dönem başına tek `accrual` kaydı); onay adımları **genel** tablodur (`subject_kind`/`subject_id`, ileriki modüllerle paylaşılır) | **Kabul edildi (2026-09-11) — M14 ✅ UYGULANDI:** çift tüketim `(leave_request_id, entry_kind)` kısıtıyla, negatif bakiye politika guard'ıyla, sıra atlama DB tetikleyicisiyle engellenir; manuel düzeltme gerekçeli + denetimli | Ledger sorguları yavaşlarsa veya uzlaştırma (reconciliation) ihtiyacı doğarsa özet/denetim sorguları eklenir |
 
 K11 gerekçesi: Django 5.2.8+ Python 3.14'ü de destekliyor, ancak üçüncü parti
 paketlerin (psycopg, django-q2, argon2-cffi vb.) 3.13 üzerindeki uyumluluğu daha

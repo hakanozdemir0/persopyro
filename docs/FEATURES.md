@@ -64,19 +64,46 @@ Detay: `ORGANIZATION.md`
 
 ## 4. İzin (leave) yönetimi
 
-Durum: Tasarlandı (veri modeli mevcut)
+Durum: **Uygulandı (M14 ✅ 2026-09-11)** — tür/politika/hakediş/bakiye/talep/onay
+zinciri servis + veritabanı seviyesinde çalışıyor; arayüz (frontend/API uçları)
+bu turda **kapsam dışıdır**.
 
-- İzin türleri (`leave_types`): yıllık, mazeret, doğum, hastalık vb.
-- İzin bakiyeleri (`leave_balances`) ve tahakkuk
-- İzin talebi oluşturma (`leave_requests`)
-- Onay akışı ve onay kayıtları (`leave_approvals`)
-- Onayda bakiye yansıtma (`hr.sync_leave_balance_on_approval()`)
-- Takvim görünümü, ekip çakışma kontrolü
-- İptal ve geri alma akışı
-- Sağlık/mazeret gerekçesi gibi alanların maskelenmesi
+- İzin türleri (`leave_types`): kiracı bazlı; sistem kodları rezerve
+  (`annual_leave`, `annual_leave_block`, `work_from_home`, `flex_time`,
+  `sick_leave`, `administrative_leave`, `paternity_leave`); belge/onay/bakiye
+  bayrakları kiracı tarafından yönetilir.
+- İzin politikası (`leave_policies` + `leave_policy_rules`): `fixed` (yılda sabit gün)
+  ve `tenure_based` (kıdeme göre **[min, max)** aralıkları); tür başına **tek**
+  yaşayan politika; çakışan aralıklar reddedilir.
+- İzin bakiyeleri ve tahakkuk (`leave_balances`): `entitled/carried_forward/
+  adjustment/used/reserved` + **üretilen** `available_days`; hakediş idempotent
+  (`manage.py accrue_leave_entitlements`), manuel düzeltme **gerekçeli** ve denetimli;
+  negatif bakiye yalnız politika açıkça izin veriyorsa.
+- İzin talebi (`leave_requests`): sunucu tarafı gün hesabı (takvim günü; hafta
+  sonu/tatil hesabı **takvim modülü (M15) gelene kadar yok**), yarım gün, ön bildirim
+  ve azami süre kuralları, kapalı durum kümesi (`draft/pending/approved/rejected/
+  canceled/taken`).
+- Onay akışı (`approval_steps`, genel tablo): sıra → birincil yönetici, ardından
+  yetkili rol (`hr_manager` + kapsam); **adım sırası atlanamaz**; onaylayan kendi
+  talebini onaylayamaz (`SEPARATE_ACTOR`); yetkili override kayıtlı gerekçe ister.
+- Bakiye yansıtma: onaya sunumda **rezervasyon**, nihai onayda **tek** kullanım
+  kaydı; red/iptal rezervasyonu çözer; onaylı iptalde iade politika izin veriyorsa
+  açık `refund` kaydı + denetimle yapılır (`hr.sync_leave_balance_on_approval()`
+  işlevinin servis karşılığı: `apps/leave/services/requests.py`).
+- Belge zorunlu türler (ör. `sick_leave`): belge referansı olmadan **onaylanamaz**
+  (fail-closed); gerçek `hr.documents` FK'si M16 ile bağlanacak.
+- İptal/geri alma: iptal gerekçesi zorunlu; taslak/onay bekleyen/onaylı için ayrı
+  bakiye davranışı; sessiz bakiye değişimi **yok** (her hareket olay defterinde).
+- Kapsam: çalışan kendi talebi (`SELF`), `dept_manager` **UNIT alt ağacı**,
+  `tenant_officer`/`tenant_admin` kiracı geneli — karar `izin ∧ kapsam`.
 
 Kabul ölçütü: bakiye, onaylanan taleplerle tutarlıdır; aynı tarih aralığı için
-çift bakiye düşümü olmaz.
+çift bakiye düşümü olmaz. **Ölçüldü:** onayda tek kullanım kaydı; ikinci onay
+durum hatası; aynı talep için ikinci `usage` kaydı veritabanı kısıtıyla reddedilir.
+
+Kalan (kapsam dışı): takvim görünümü ve ekip çakışma kontrolü, çalışma takvimi /
+resmî tatil hesabı (M15), izin gerekçesi maskeleme, işten çıkışta bakiye kapatma,
+devir (carryover) işi ve API uç noktaları.
 
 ---
 

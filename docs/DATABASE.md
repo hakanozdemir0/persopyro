@@ -223,8 +223,16 @@ olduğu için etki boş dizinle sınırlıdır).
 | `employees` ✅ (M12) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
 | `employee_personal_data` ✅ (M12) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
 | `employee_manager` ✅ (M13) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `leave_types` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `leave_policies` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `leave_policy_rules` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `leave_balances` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `leave_balance_entries` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `leave_requests` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
+| `approval_steps` ✅ (M14) | `tenant_isolation` | ALL | `tenant_id = hr.current_tenant_id()` |
 
-**12/12 tabloda** `rls=true` **ve** `force_rls=true` (ölçüldü: M10–M13 sonrası 7 → **12**).
+**19/19 tabloda** `rls=true` **ve** `force_rls=true` (ölçüldü: M10–M13 sonrası 7 → **12**;
+M14 sonrası → **19**).
 Politikalarda platform istisnası **yoktur** (bu, OD3 kararının veritabanı
 karşılığıdır: politika gevşetilmez).
 
@@ -523,11 +531,53 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 - **TENANT ISOLATION:** `tenant_id` RLS + guard (`owner_employee_id`, `uploaded_by_id`, `document_id`, `grantee_id` kiracı içi doğrulanır)
 - **PERSONAL DATA LEVEL:** **K4** (içerik) · **RLS:** ✅ + FORCE · **AUDIT:** **çok yüksek** (yükleme, görüntüleme, indirme, paylaşım, silme, sınıflandırma)
 
-### `hr.leave_requests`, `hr.leave_types`, `hr.leave_balances`, `hr.approval_steps`
-- **PURPOSE:** İzin süreci + onay adımları (`ASSIGNED` ve `SEPARATE_ACTOR` koşullarının veri kaynağı).
-- **`approval_steps`:** `id, tenant_id, subject_kind, subject_id, step_no, approver_user_id (nullable), approver_role_code (nullable), status, decided_at, decision_reason, delegated_from_id`
-- **TENANT ISOLATION:** `tenant_id` RLS + guard · **PERSONAL DATA LEVEL:** K2 (izin gerekçesi) · **RLS:** ✅ + FORCE
-- **AUDIT:** **yüksek** (talep, onay, red, devir, iptal)
+### `hr.leave_types`, `hr.leave_policies`, `hr.leave_policy_rules`, `hr.leave_balances`, `hr.leave_balance_entries`, `hr.leave_requests`, `hr.approval_steps` ✅ (M14)
+
+- **PURPOSE:** İzin süreci (tür → politika → hakediş/bakiye → talep → onay) ve **genel**
+  onay adımları (`ASSIGNED`/`SEPARATE_ACTOR` koşullarının veri kaynağı).
+- **`leave_types`:** `id, tenant_id, code, name, category, is_paid, uses_balance,
+  requires_approval, requires_document, min_advance_notice_days, max_consecutive_days,
+  is_system, status, created_at, updated_at, deleted_at`
+  · **kısmi UNIQUE** `(tenant_id, code) WHERE deleted_at IS NULL` (OD21)
+  · `status` kapalı küme `CHECK` · **sistem kodları rezerve** (`is_system`; kod değiştirilemez).
+- **`leave_policies`:** `accrual_method` (`fixed`/`tenure_based`), `fixed_days`,
+  `allow_negative_balance`, `allow_refund_after_approval`, `status` (+ OD21)
+  · **kısmi UNIQUE** `(tenant_id, leave_type_id) WHERE deleted_at IS NULL`
+  → **tür başına tek yaşayan politika** · `fixed_days` tutarlılığı `CHECK` ile.
+- **`leave_policy_rules`:** `min_service_months`, `max_service_months` (NULL = açık uçlu),
+  `entitlement_days`; aralıklar **[min, max)** yarı açıktır ve **çakışamaz**
+  (`trg_leave_policy_rules_overlap`).
+- **`leave_balances`:** `period_year, entitled_days, carried_forward_days, adjustment_days,
+  used_days, reserved_days` + **ÜRETİLEN** `available_days`
+  (`entitled + carried_forward + adjustment - used - reserved`, STORED)
+  · **kısmi UNIQUE** `(employee_id, leave_type_id, period_year) WHERE deleted_at IS NULL`
+  · `trg_leave_balances_nonnegative`: politika izin vermiyorsa **negatif bakiye reddedilir**.
+- **`leave_balance_entries`:** **append-only** olay defteri — `entry_kind`
+  (`accrual`/`carryover`/`adjustment`/`reservation`/`reservation_release`/`usage`/`refund`),
+  `delta_days`, `leave_request_id`, `reason`, `actor_id`
+  · **idempotans kısıtları:** `(balance_id, entry_kind, period_year) WHERE entry_kind='accrual'`
+  ve `(leave_request_id, entry_kind)` (çift tüketim engeli)
+  · `adjustment` için **gerekçe zorunlu** (`CHECK`).
+- **`leave_requests`:** `employee_id, leave_type_id, start_date, end_date, start_time,
+  end_time, is_half_day, days_requested` (**sunucu hesaplar**), `reason`,
+  `status` (kapalı küme: `draft`/`pending`/`approved`/`rejected`/`canceled`/`taken`),
+  `submitted_at, decided_at, decided_by_id, canceled_at, cancel_reason, document_ref`
+  (M16 entegrasyon noktası; FK **yok**) + OD21
+  · `trg_leave_requests_state`: **yasak durum geçişleri**, `decided_at`/`canceled_at`
+  zorunluluğu ve **belge zorunlu türde belgesiz onay yasağı** (fail-closed).
+- **`approval_steps`:** **genel** onay adımı — `subject_kind` + `subject_id` (**FK değil**,
+  polimorfik), `step_no`, `approver_user_id` **veya** `approver_role_code`, `status`,
+  `decided_at`, `decision_reason`, `delegated_from_id` + OD21
+  · **kısmi UNIQUE** `(subject_kind, subject_id, step_no) WHERE deleted_at IS NULL`
+  · `trg_approval_steps_order`: **adım sırası atlanamaz**.
+- **TENANT ISOLATION:** `tenant_id` RLS + FORCE + kiracı-içi FK guard'ları (14 tetikleyici)
+  · **PERSONAL DATA LEVEL:** K2 (izin gerekçesi) — denetim kaydına **yazılmaz**.
+- **RLS:** ✅ + FORCE (7 tablo; toplam FORCE RLS tablo sayısı **19**)
+- **Yetki turu:** `SELECT/INSERT/UPDATE`; **`DELETE`/`TRUNCATE` yok** (OD21).
+  `leave_balance_entries` **append-only**: yalnız `SELECT/INSERT` (UPDATE de yok).
+- **AUDIT:** yüksek — `leave.type.*`, `leave.policy.*`, `leave.request.create/submit/approve/
+  reject/cancel/override/taken`, `leave.balance.accrual/adjustment` (serbest metin gerekçe
+  audit'e yazılmaz; `has_reason` bayrağı tutulur).
 
 ### `hr.shifts`, `hr.shift_assignments`, `hr.attendance_records`
 - **PURPOSE:** Vardiya ve devamsızlık; düzeltme onayı.
@@ -602,7 +652,7 @@ Her iş kalemi **tek bir Django migration** (veya `RunSQL` bloğu) olarak yazıl
 | **M11** | **Organizasyon ağacı garantileri (OD24 kapalı):** `CHECK (parent_id IS DISTINCT FROM id)`, `BEFORE INSERT/UPDATE` **döngü reddi** tetikleyicisi (ata zinciri yürüyüşü, derinlik sınırı 20), `employee_manager` için `CHECK (employee_id <> manager_employee_id)` + aynı tetikleyici deseni, `relation_type='primary'` kısmi benzersizliği. **`path`/closure kolonu EKLENMEZ** — **✅ UYGULANDI** (`organization/0002_od24_tree_guards` + `0008_employee_manager_active_guard`): `hr.departments_tree_guard()` döngüyü, **derinliği (≤ 20)** ve **silinmiş ata** altına yeni aktif birim bağlanmasını reddeder; `hr.employee_manager_active_guard()` silinmiş çalışan/yöneticiyle yeni aktif ilişkiyi engeller; `employee_manager` kısmi benzersizlikleri `0004`'te | Şema + tetikleyici | M10 | Tetikleyici/kısıt DROP |
 | **M12** | `hr.employees` + `hr.employee_personal_data` (K3 şifreli kolonlar) + RLS + guard'lar. **OD27 kapalı: `company_id` EKLENMEZ** — **✅ UYGULANDI** (`organization/0003_od24_employees`): `employees` = **iş kaydı, PII içermez**; `department_id` **NOT NULL** (OD24 §4), `user_id`/`position_id` nullable, kısmi `(tenant_id, employee_no)` benzersizliği, `status` kapalı küme, `termination_date >= hire_date`; `employee_personal_data` **PK `employee_id` (1:1)**, K2 açık + **K3 Fernet şifreli** (`apps/common/fields.py`) | Yeni | M10 | DROP TABLE |
 | **M13** | `hr.employee_manager` + RLS + guard + kısmi benzersizlik — **✅ UYGULANDI** (`organization/0004_od24_employee_manager`): `relation_type` (`primary`/`secondary`/`delegate`) kapalı küme, `effective_from`/`effective_to` (tarih aralığı `CHECK`), `created_by_id`; **tek aktif birincil yönetici** kısmi benzersiz indeksi, `(employee_id, manager_employee_id)` kısmi benzersizliği, self-manager `CHECK`'i, kiracı guard'ları + **silinmiş çalışanla yeni aktif ilişki yasağı**. **RBAC değildir — yetki üretmez** | Yeni | M12 | DROP TABLE |
-| **M14** | `hr.leave_*`, `hr.approval_steps` + RLS + guard | Yeni | M12 | DROP TABLE |
+| **M14** | `hr.leave_*`, `hr.approval_steps` + RLS + guard | Yeni | M12 | DROP TABLE | **✅ UYGULANDI 2026-09-11** — yedi tablo (`leave_types`, `leave_policies`, `leave_policy_rules`, `leave_balances`, `leave_balance_entries`, `leave_requests`, `approval_steps`) + RLS/FORCE (12 → **19**) + 4 DB guard'ı + 14 kiracı guard'ı + izin kataloğu delta'sı (`rbac/0011`) · migration'lar: `leave/0001…0004` |
 | **M15** | `hr.shifts`, `hr.shift_assignments`, `hr.attendance_records` + RLS + guard | Yeni | M12 | DROP TABLE |
 | **M16** | `hr.documents` + `hr.document_access` + sınıflandırma/kişisel veri işaretleri + RLS + guard | Yeni | M12 | DROP TABLE |
 | **M17** | `hr.access_requests` + `hr.access_grants` (kiracı içi) + RLS + guard + `PURPOSE_QUALITY` CHECK | Yeni | M12 | DROP TABLE |
@@ -734,7 +784,8 @@ yeni tablo migration'ı sonunda **açık bir yetki turu** yapılır:
 | Tablo türü | `persopyro_app` yetkisi |
 |---|---|
 | Normal iş tablosu | SELECT, INSERT, UPDATE, DELETE |
-| **OD21 soft-delete tablosu** (`departments`, `positions`, `employees`, `employee_personal_data`, `employee_manager` — M10–M13) | **SELECT, INSERT, UPDATE** (DELETE/TRUNCATE revoke — silme `deleted_at` ile; K2/K3 ve `employees` fiziksel silinmez, `ON DELETE CASCADE` zinciri runtime'da kurulamaz) |
+| **OD21 soft-delete tablosu** (`departments`, `positions`, `employees`, `employee_personal_data`, `employee_manager` — M10–M13; `leave_types`, `leave_policies`, `leave_policy_rules`, `leave_balances`, `leave_requests`, `approval_steps` — M14) | **SELECT, INSERT, UPDATE** (DELETE/TRUNCATE revoke — silme `deleted_at` ile; K2/K3 ve `employees` fiziksel silinmez, `ON DELETE CASCADE` zinciri runtime'da kurulamaz) |
+| **Append-only olay tablosu** (`leave_balance_entries` — M14) | **SELECT, INSERT** (UPDATE/DELETE/TRUNCATE revoke — bakiye defteri yalnız ekleme; denetim izi) |
 | Denetim/olay tablosu (`audit_logs`, `platform_access_notices`) | **INSERT, SELECT** (UPDATE/DELETE revoke) |
 | Yansı/dizin tablosu (`tenant_directory`) | **SELECT** |
 | Global tanım tablosu (`permissions`) | **SELECT** |
@@ -764,9 +815,15 @@ indeksler `tenant_id` ile başlar; (2) dışa aktarma/sıralama indeksleri
 | `employees` | **kısmi** UNIQUE `(tenant_id, employee_no) WHERE deleted_at IS NULL`; `(tenant_id, department_id)`, `(tenant_id, user_id)`, `(tenant_id, status)` | Kapsam + listeler + OD21 |
 | `employee_personal_data` | PK `employee_id`; `(tenant_id)` | 1:1 erişim |
 | `employee_manager` | **kısmi** UNIQUE `(employee_id) WHERE relation_type='primary' AND effective_to IS NULL AND deleted_at IS NULL` (**tek aktif birincil yönetici**, ✅ M13), **kısmi** UNIQUE `(employee_id, manager_employee_id) WHERE deleted_at IS NULL AND effective_to IS NULL`, `(tenant_id, manager_employee_id)` | Raporlama zinciri + "ekibim" sorgusu (OD21/OD24) |
+| `leave_types` | **kısmi** UNIQUE `(tenant_id, code) WHERE deleted_at IS NULL`, `(tenant_id, status)` | Sistem kodları rezerve + OD21 |
+| `leave_policies` | **kısmi** UNIQUE `(tenant_id, leave_type_id) WHERE deleted_at IS NULL` | Tür başına **tek yaşayan** politika |
+| `leave_policy_rules` | `(policy_id, min_service_months)` | Kural eşleşmesi (çakışma guard'ı ayrıca) |
+| `leave_balances` | **kısmi** UNIQUE `(employee_id, leave_type_id, period_year) WHERE deleted_at IS NULL`, `(tenant_id, employee_id, period_year)` | Dönem bakiyesi tekilliği + sorgular |
+| `leave_balance_entries` | **kısmi** UNIQUE `(balance_id, entry_kind, period_year) WHERE entry_kind='accrual'`, **kısmi** UNIQUE `(leave_request_id, entry_kind) WHERE leave_request_id IS NOT NULL`, `(tenant_id, employee_id, period_year)` | Hakediş idempotansı + **çift tüketim engeli** |
+| `leave_requests` | **kısmi** `(tenant_id, status, start_date)`, `(tenant_id, employee_id, start_date)` | Onay kuyruğu + çalışan geçmişi |
+| `approval_steps` | **kısmi** UNIQUE `(subject_kind, subject_id, step_no) WHERE deleted_at IS NULL`, `(tenant_id, approver_user_id, status)`, `(subject_kind, subject_id)` | Adım tekilliği + onay kuyruğu |
 | `documents` | **kısmi** UNIQUE (belge numarası varsa) `WHERE deleted_at IS NULL`; `(tenant_id, owner_employee_id)`, `(tenant_id, classification)`, `(tenant_id, contains_personal_data)`, `(tenant_id, retention_until)` | Yetki + saklama işleri + OD21 |
 | `document_access` | `(tenant_id, document_id)`, **kısmi** `(expires_at) WHERE expires_at IS NOT NULL` | Erişim kontrolü + süre temizliği |
-| `leave_requests` / `approval_steps` | `(tenant_id, status)`, `(tenant_id, approver_user_id, status)` | Onay kuyruğu |
 | `attendance_records` | `(tenant_id, employee_id, work_date)` | Devam sorguları |
 | `access_requests` (her iki şema) | `(status, created_at)`, `(tenant_id, requested_by_id)` | Onay kuyruğu |
 | `access_grants` (her iki şema) | **kısmi** `(expires_at) WHERE revoked_at IS NULL` | Süreli izinlerin otomatik kapanması |

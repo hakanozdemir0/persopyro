@@ -352,12 +352,14 @@ if [ "$(tablo_var "$FRESH_DB" "hr.roles")" = "$VAR" ]; then
     bekle "kapsam tipleri (M8: OD5)" \
         "$(sql_demo "SELECT string_agg(code || ':' || scope_type, ',' ORDER BY code) FROM hr.roles")" \
         "dept_manager:UNIT,employee:SELF,hr_manager:TENANT,tenant_admin:TENANT,tenant_officer:TENANT"
-    bekle "tenant_admin izinleri (hedef katalog)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "29"
-    bekle "dept_manager hedef izin seti (§6.2 DY)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "14"
-    bekle "tenant_officer hedef izin seti (§6.2 ŞYT)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "19"
+    # İzin sayıları M14 (izin modülü) sonrası hedef katalogtur: kiracı tarafı kod
+    # sayısı 29 → 33 (platform.* kodları kiracı rollerine verilmez).
+    bekle "tenant_admin izinleri (hedef katalog, M14 sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "33"
+    bekle "dept_manager hedef izin seti (§6.2 DY, M14 sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "16"
+    bekle "tenant_officer hedef izin seti (§6.2 ŞYT, M14 sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "21"
     bekle "scope_type kapalı küme kısıtı (M8)" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.roles'::regclass AND conname='roles_scope_type_valid'")" "1"
     bekle "scope_org_unit_id kolonu (M9)" \
@@ -381,8 +383,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.departments")" = "$VAR" ]; then
         bekle "hr.$tablo tenant_isolation politikası" \
             "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_policies WHERE schemaname='hr' AND tablename='$tablo' AND policyname='tenant_isolation'")" "1"
     done
-    bekle "hr şemasında FORCE RLS tablo sayısı (7 + 5 yeni)" \
-        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "12"
+    bekle "hr şemasında FORCE RLS tablo sayısı (M10-M13 sonrası: 12)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "19"
     bekle "OD27: company_id/legal_entity_id kolonu YOK" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND column_name IN ('company_id','legal_entity_id')")" "0"
     bekle "M9 tamamlama: user_roles.scope_org_unit_id → departments FK" \
@@ -425,6 +427,73 @@ if [ "$(tablo_var "$FRESH_DB" "hr.departments")" = "$VAR" ]; then
     kontrol_metni "kapsam sondası: kardeş birim DENY" "$PROBE" "kapsam_disi_erisim=0"
     kontrol_metni "kapsam sondası: K2/K3 kapsamdan gelmez" "$PROBE" "kisisel_veri=0"
     kontrol_metni "kapsam sondası: TENANT rolü kiracı geneli" "$PROBE" "tenant_geneli=1"
+fi
+
+adim "6e/8 M14 izin modülü (tablo, guard, RLS, politika/hakediş, onay akışı)"
+if [ "$(tablo_var "$FRESH_DB" "hr.leave_types")" = "$VAR" ]; then
+    for tablo in leave_types leave_policies leave_policy_rules leave_balances \
+        leave_balance_entries leave_requests approval_steps; do
+        bekle "tablo hr.$tablo" "$(tablo_var "$FRESH_DB" "hr.$tablo")" "$VAR"
+        bekle "hr.$tablo RLS+FORCE+politika" \
+            "$(sql_deger "$FRESH_DB" "SELECT ((c.relrowsecurity AND c.relforcerowsecurity)::text || ':' || (SELECT count(*) FROM pg_policies p WHERE p.schemaname='hr' AND p.tablename='$tablo' AND p.policyname='tenant_isolation')) FROM pg_class c WHERE c.oid='hr.$tablo'::regclass")" \
+            "true:1"
+    done
+    bekle "kiracı verisi taşıyan FORCE RLS tablosu (12 → 19)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "19"
+
+    # M14 veritabanı guard'ları (döngü/negatif bakiye/durum makinesi/onay sırası).
+    for tetik in trg_leave_policy_rules_overlap trg_leave_balances_nonnegative \
+        trg_leave_requests_state trg_approval_steps_order; do
+        bekle "guard tetikleyicisi $tetik" \
+            "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger WHERE tgname='$tetik' AND NOT tgisinternal")" "1"
+    done
+    bekle "leave_requests kiracı guard'ı" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger WHERE tgname='trg_leave_requests_employee_id_same_tenant' AND NOT tgisinternal")" "1"
+    bekle "leave_balances (çalışan,tür,dönem) kısmi benzersizliği" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname='leave_balances_employee_type_period_uniq'")" "1"
+    bekle "leave_requests durum kapalı küme CHECK" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.leave_requests'::regclass AND conname='leave_requests_status_valid'")" "1"
+    bekle "leave_types kodsuz sistem türü yok" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.leave_types WHERE is_system AND code = ''")" "0"
+
+    # Yetki turu: soft-delete tablolarında runtime silme yok; defter append-only.
+    bekle "app rolü izin tablolarında DELETE alamaz (OD21)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM unnest(ARRAY['leave_types','leave_policies','leave_policy_rules','leave_balances','leave_requests','approval_steps']) AS t WHERE has_table_privilege('persopyro_app','hr.'||t,'DELETE')")" "0"
+    bekle "app rolü bakiye defterinde UPDATE/DELETE alamaz (append-only)" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('persopyro_app','hr.leave_balance_entries','UPDATE')::text || has_table_privilege('persopyro_app','hr.leave_balance_entries','DELETE')::text")" \
+        "falsefalse"
+    if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$PLATFORM_ROLE'")" = "1" ]; then
+        for tablo in leave_types leave_policies leave_policy_rules leave_balances \
+            leave_balance_entries leave_requests approval_steps; do
+            bekle "platform rolü hr.$tablo erişemez" \
+                "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','hr.$tablo','SELECT')::text || has_table_privilege('$PLATFORM_ROLE','hr.$tablo','INSERT')::text || has_table_privilege('$PLATFORM_ROLE','hr.$tablo','UPDATE')::text || has_table_privilege('$PLATFORM_ROLE','hr.$tablo','DELETE')::text")" \
+                "falsefalsefalsefalse"
+        done
+    else
+        bilgi "UYARI: '$PLATFORM_ROLE' rolü yok → platform erişim yasağı denetimi atlandı."
+    fi
+
+    # İzin kataloğu: M14 ile eklenen dört kod ve matris izin sayıları.
+    bekle "izin kataloğu M14 kodları" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions WHERE code IN ('leave.request.cancel','leave.request.approve.override','leave.balance.read','leave.balance.manage')")" "4"
+    bekle "izin kataloğu toplam" "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")" "39"
+    for cift in "tenant_admin:33" "tenant_officer:21" "hr_manager:22" "dept_manager:16" "employee:8"; do
+        rol="${cift%%:*}"
+        adet="${cift##*:}"
+        bekle "varsayılan rol izin sayısı ($rol)" \
+            "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id=rp.role_id WHERE r.code='$rol' AND r.deleted_at IS NULL")" "$adet"
+    done
+
+    # Uçtan uca akış sondası: tür → politika → hakediş → talep → onay → bakiye.
+    IZIN1="$(django_owner manage.py shell < scripts/_leave_probe.py 2>&1 | tail -1)"
+    IZIN2="$(django_owner manage.py shell < scripts/_leave_probe.py 2>&1 | tail -1)"
+    kontrol_metni "izin sondası: varsayılan türler" "$IZIN1" "IZIN_PROBE turler=7"
+    kontrol_metni "izin sondası: hakediş" "$IZIN1" "hakedis=14.0"
+    kontrol_metni "izin sondası: onaylandı" "$IZIN1" "durum=approved"
+    kontrol_metni "izin sondası: bakiye bir kez tükendi" "$IZIN1" "kullanilan=3.0"
+    kontrol_metni "izin sondası: defter kayıtları" "$IZIN1" "defter=3"
+    bekle "izin sondası idempotent (ikinci çalıştırma aynı sonuç)" \
+        "$([ "$IZIN1" = "$IZIN2" ] && echo 1 || echo 0)" "1"
 fi
 
 adim "6c/8 Gerçek HTTP (roller: app)"

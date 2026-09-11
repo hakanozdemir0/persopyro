@@ -546,6 +546,28 @@ Kurallar:
 | `leave.balance.manage` | — | — | ● (TENANT) | — | — | — |
 | `leave.type.manage` | — | — | ● (TENANT) | — | — | — |
 
+**Uygulama (M14 ✅, 2026-09-11):** bu sekiz kodun **tamamı** katalogdadır
+(`leave.request.cancel`, `leave.request.approve.override`, `leave.balance.read`,
+`leave.balance.manage` M14 ile eklendi — `rbac/0011_m14_leave_permissions`).
+Rol bağları matrise göre kurulur; `hr_manager` matriste sütun olmadığı için
+**değiştirilmedi**. Denetim kararı (`apps/leave/services/authorization.py`):
+
+| İşlem | Koşullar (uygulanan) |
+|---|---|
+| Talebi görme | `leave.request.read` ∧ aynı kiracı ∧ (`SELF` ∨ kapsam ∨ **karar verebildiği** adım) |
+| Talep oluşturma | `leave.request.create` ∧ aynı kiracı ∧ (`SELF` ∨ kapsam); çalışan/tür aktif olmalı |
+| İptal | `leave.request.cancel` ∧ aynı kiracı ∧ (`SELF` yalnız onay öncesi ∨ kapsam) |
+| Onay | `leave.request.approve` ∧ aynı kiracı ∧ (`ASSIGNED` ∨ **TENANT** kapsam) ∧ `SEPARATE_ACTOR` ∧ kapsam |
+| Bakiye görme/düzeltme | `leave.balance.read`/`.manage` ∧ aynı kiracı ∧ (`SELF` ∨ kapsam); düzeltmede **gerekçe zorunlu** |
+
+**Onay yönlendirmesi (uygulanan v1):** docs'ta kesin sıra tanımlı olmadığı için
+güvenli sıra kullanılır → (1) çalışanın **birincil yöneticisi** (`employee_manager`,
+`SEPARATE_ACTOR` ihlali varsa atlanır), (2) **yetkili rol** adımı (`hr_manager` rol
+kodu + kapsam). **Birincil yönetici olmak onay yetkisi üretmez**: onay için izin
+kodu + kapsam + adım sahipliği gerekir. Sıra atlanamaz (DB guard'ı + servis
+`current_step` seçimi); yetkili **override** (`leave.request.approve.override`)
+adımları kayıtlı gerekçeyle atlar ve denetim kaydı yazar.
+
 #### F. Vardiya ve devam
 
 | İzin kodu | SA | PA | ŞİRKET YÖN. | ŞİRKET YETK. | DEPT. YÖN. | ÇALIŞAN |
@@ -867,7 +889,7 @@ Her rol ve her yeni modül için aşağıdaki iddialar test edilir:
 | T5 | İzin verilmemiş uç nokta 403, kimlik yoksa 401 | ✅ |
 | T6 | Kapsam dışı kayıt isteği 404 (varlık sızdırmaz) | 🔜 |
 | T7 | Kendi kendini yükseltme (rol/izin/kapsam) engellenir | 🔜 |
-| T8 | Talep sahibi kendi talebini onaylayamaz (SEPARATE_ACTOR) | 🔜 |
+| T8 | Talep sahibi kendi talebini onaylayamaz (SEPARATE_ACTOR) | ✅ **izin tarafı uygulandı (M14)**: `can_approve_step()` kendi talebini reddeder; birincil yönetici kendi talebinin onay adımı **kurulmaz** |
 | T9 | Kişisel veri maskesiz **hiçbir** varsayılan yanıtta yok | 🔜 |
 | T10 | Onaysız/süresi geçmiş erişimle kişisel veri açılmaz | 🔜 |
 | T11 | Genel kimlik ters çözümlemesi gerekçesiz ve kayıtsız çalışmaz | 🔜 |
@@ -1161,6 +1183,7 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
 | **M8** | `hr.roles.scope_type` kapalı küme (`TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`) + dokümandaki backfill; varsayılan şablonlarda `dept_manager` = `UNIT` | ✅ UYGULANDI (`rbac/0006`): NOT NULL + DB `CHECK`; backfill eşlemesi uygulandı |
 | **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi**: rol `scope_type ∈ {UNIT, UNIT_DIRECT}` ise `scope_org_unit_id` **zorunlu**; benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** | ✅ **TAMAMLANDI** (`rbac/0007` + `0008_od5_scope_org_unit_fk` + `0009`/`0010`): kolon, benzersizlik, **gerçek FK (`hr.departments.id`)**, kiracı guard'ı ve "aktif birim" denetimi; devre dışı bırakma serbest |
 | **M10–M13** | `departments`/`positions`/`employees`/`employee_manager`: kapsam hesabı için `(tenant_id, parent_id)` indeksi (M24) ve `employees.department_id` zorunluluğu | ✅ UYGULANDI (`organization/0001`–`0009`): tablolar + `department_id` NOT NULL + kısmi benzersizlikler + kiracı guard'ları + RLS/FORCE; alt ağaç çözümlemesi tek noktada |
+| **M14** | İzin modülü: talep görünürlüğü/onayı kapsam ile daraltılır; `ASSIGNED`/`SEPARATE_ACTOR` koşullarının veri kaynağı `approval_steps` | ✅ UYGULANDI (`leave/0001`–`0004`, `rbac/0011`): `izin ∧ kapsam` kararı `apps/leave/services/authorization.py`; onay sırası (birincil yönetici → yetkili rol) atlanamaz; bakiye olay defteriyle izlenir; izin gerekçesi (K2) denetim kaydına yazılmaz |
 | **Resolver** | **organization scope resolver** (`scope_org_unit_id` → alt ağaç kimlikleri, kiracı bağlamında) + **permission resolver** ile birleşik karar: `izin ∧ kapsam` | ✅ UYGULANDI (`apps/rbac/services/scope.py`): recursive CTE ile gerçek alt ağaç (≤ 20), `UNIT_DIRECT` ayrımı, çoklu atama birleşimi, fail-closed; nesne kararı `object_in_org_scope()` + çalışan hedefi için `can_access_employee()`. İki görünüm: `declared_permission_codes` (sahiplik) / `effective_permission_codes` (kullanılabilir) |
 | **Testler** | T7 (kendini yükseltme), alt ağaç/kardeş birim ayrımı, multi-scope birleşim, NULL fail-closed, silinmiş birim/atama, süre bitimi, move sonrası yeniden hesaplama, PII ayrımı | ✅ UYGULANDI: M7–M9 testleri + M10–M13 testleri (`tests/test_organization_m10_m13.py`, 56 test): alt ağaç/kardeş birim, çoklu kapsam birleşimi, silinmiş birim/atama, süre bitimi, move sonrası **yeniden hesaplama**, izin ∧ kapsam (ALLOW/DENY), K2/K3 ayrımı |
 

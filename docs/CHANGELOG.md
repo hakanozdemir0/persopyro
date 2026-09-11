@@ -3,6 +3,111 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.23.0] — 2026-09-11 — M14: izin (leave) modülü — tür, politika, hakediş, talep, onay
+
+**Baseline (son commit `042dfc7`):** çalışma ağacı temiz, migration'lar tam uygulanmış,
+tam test suite **330 passed**; canlı DB ölçümü: 39 izin kodu, FORCE RLS tablo **12**,
+izin tablosu **0**. Kapsam dışı (bu turda **dokunulmadı**): vardiya/devam (`shifts`,
+`attendance_records`), evrak (`documents`), access request/grant, dashboard,
+onboarding/billing, **frontend/API CRUD uçları**, çalışma takvimi ve resmî tatil
+hesabı, maskeleme motoru, zamanlayıcı (cron) kurulumu.
+
+### Ölçüm (canlı DB, öncesi → sonrası)
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| İzin kodu (katalog) | 35 | **39** (`leave.request.cancel`, `leave.request.approve.override`, `leave.balance.read`, `leave.balance.manage`) |
+| Kiracı verisi taşıyan FORCE RLS tablosu | 12 | **19** (`leave_types`, `leave_policies`, `leave_policy_rules`, `leave_balances`, `leave_balance_entries`, `leave_requests`, `approval_steps`) |
+| Varsayılan rol izin sayıları | 29/19/22/14/6 | **33/21/22/16/8** (tenant_admin/tenant_officer/hr_manager/dept_manager/employee; `platform.*` kodları kiracı rollerine verilmez) |
+| Runtime yetkileri (yeni tablolar) | — | `SELECT/INSERT/UPDATE`; **`DELETE`/`TRUNCATE` yok**; defter **append-only** (`SELECT/INSERT`) |
+| `persopyro_platform` erişimi | — | **hiçbiri** (7 tabloda 0/0/0/0) |
+| DB guard'ı (izin modülü) | — | **4** yeni tetikleyici (+ 14 kiracı-içi FK guard'ı) |
+| Demo verisi | — | 7 izin türü, 1 politika, 3 bakiye, onaylanmış sonda talebi |
+
+### Eklenen / değişen
+
+- **Yeni uygulama `apps/leave`** — modeller, servis paketi (`types`, `policies`,
+  `balances`, `requests`, `authorization`), `manage.py accrue_leave_entitlements`
+  komutu ve sistem izin türü katalogu (`leave_type_catalog.py`).
+- **M14 ✅ (`leave/0001_m14_leave_schema`)** — yedi tablo; OD21 kısmi benzersizlikler;
+  `leave_balances.available_days` **üretilen (STORED)** kolon; `approval_steps`
+  **genel** onay tablosu (`subject_kind`/`subject_id`, FK **yok**); `leave_requests`
+  `document_ref` M16 entegrasyon noktası (gerçek FK **eklenmedi**).
+- **`leave/0002_m14_leave_guards`** — dört DB guard'ı: kıdem aralığı **çakışma reddi**,
+  **negatif bakiye** reddi (politika izin vermiyorsa), **talep durum makinesi**
+  (yasak geçişler + karar/iptal zamanı + **belgesiz onay yasağı**), **onay sırası**
+  (önceki adım karara bağlanmadan sonraki adım karar veremez).
+- **`leave/0003_m14_rls_leave` + `0004_m14_leave_same_tenant_guards`** — RLS + FORCE
+  (7 tablo) ve 14 kiracı-içi yabancı anahtar guard'ı.
+- **`rbac/0011_m14_leave_permissions`** — matrisin **E. İzin** bölümündeki dört eksik
+  kod katalogda; rol bağları matrise göre tamamlandı (idempotent; `hr_manager`
+  değiştirilmedi).
+- **Hakediş (§2/§4):** `fixed` ve `tenure_based` ([min, max) yarı açık); sabit değerler
+  **kod içine gömülmedi**; hakediş **idempotent** (dönem başına tek `accrual` kaydı;
+  değer değişirse fark gerekçeli **düzeltme** kaydı olarak yazılır).
+- **Bakiye modeli (§3):** güncel durum + **append-only olay defteri** (rezervasyon,
+  kullanım, iade, hakediş, düzeltme); manuel düzeltmede **gerekçe zorunlu** ve
+  denetimli; **negatif bakiye** yalnız politikayla izin verilirse.
+- **Talep + akış (§5–§9, §11–§12):** sunucu tarafı gün hesabı (**takvim günü**; hafta
+  sonu/tatil hesabı takvim modülüne bırakıldı — sahte kesinlik yok), istemci
+  değeri doğrulanır, ön bildirim/azami süre kuralları; kapalı durum kümesi; onay
+  sırası **birincil yönetici → yetkili rol**; `SEPARATE_ACTOR`; adım atlama yalnız
+  `leave.request.approve.override` + kayıtlı gerekçeyle; onaya sunumda **rezervasyon**,
+  nihai onayda **tek** kullanım, iade politika koşuluna bağlı.
+- **Yetkilendirme (§10):** yeni sistem yazılmadı — `apps/leave/services/authorization.py`
+  mevcut `izin ∧ kapsam` katmanını genişletir; **aynı kiracı** koşulu açıkça doğrulanır
+  (fail-closed); ASSIGNED görünürlüğü yalnız **karar verebilen** adım sahibi için.
+- **Yetki turu (`scripts/02_grant_app_privileges.sql`)** — izin tablolarında
+  `DELETE`/`TRUNCATE` geri alındı; `leave_balance_entries` **append-only**.
+
+### Doğrulanan
+
+- **Testler:** yeni `tests/test_leave_m14_core.py` (16) + `tests/test_leave_m14_flow.py`
+  (23) + `tests/leave_helpers.py` ortak yardımcıları; istek listesindeki 28 senaryo
+  kapsandı (tür izolasyonu/benzersizlik, sistem kodu rezervi, fixed/kıdem hakediş,
+  çakışan kural reddi, idempotent accrual, talep oluşturma/doğrulama, izin ∧ kapsam
+  ALLOW/DENY, sibling/cross-tenant DENY, sıra atlanamaz, override, belge zorunluluğu,
+  iptal/iade, çift tüketim engeli, süresi dolmuş rol ataması, denetim kayıtları,
+  RLS/FORCE, platform erişim yasağı, runtime yetki turu). **Tam suite: 369 passed**
+  (330 → 369; regresyon yok). `tests/test_rbac_scope_m7_m9.py` katalog delta'sına
+  (M14) göre güncellendi.
+- **Kalite:** `ruff check .` ✅, `bandit` ✅, `manage.py check` ✅,
+  `makemigrations --check` ✅, `migrate` ✅ (5 yeni migration).
+- **Fresh install (`scripts/verify_fresh_install.sh`)**: yeni adım **`6e/8`** — yedi
+  tablo, RLS/FORCE/politika, **FORCE RLS 19**, dört guard tetikleyicisi, kiracı
+  guard'ı, kısmi benzersizlik, durum `CHECK`, yetki turu (app `DELETE` yok, defter
+  append-only, platform erişemez), katalog kodları ve **rol izin sayıları** ve
+  **uçtan uca izin sondası** (`scripts/_leave_probe.py`: tür → politika → hakediş →
+  talep → onay → bakiye; **iki kez çalıştırılıp idempotans doğrulanır**). Sıfırdan
+  kurulum: **OK**, 369 passed, geçici DB temizlendi.
+- **HTTP smoke (`scripts/smoke.sh`):** health/ready 200, `/admin/` 404, token 201 →
+  logout 204 → 401, askıya alınmış kiracı 403; açık process/port yok.
+- **Eski garantiler:** platform authorization ✅, tenant RLS + FORCE ✅, NOBYPASSRLS ✅,
+  `auth_*`/`api_tokens`/`permissions` daraltmaları ✅, `employee_personal_data`
+  güvenlik sınırı ✅ (izin kapsamı K2/K3 erişimi **üretmez**).
+
+### Kalan (bilinçli, kapsam dışı)
+
+- Çalışma takvimi / resmî tatil ve hafta sonu hesabı (M15), evrak modülü ve gerçek
+  `document_ref` FK'si (M16), ekip çakışma kontrolü, carryover (devir) işi, izin
+  gerekçesi maskeleme, bildirimler ve API CRUD uçları.
+
+### Güvenlik
+
+- **Yeni `SECURITY FINDING` yok.** Kapatılan yüzeyler: kapsamsız/izinsiz talep
+  oluşturma, sibling birim ve cross-tenant görünürlük/onay, kendi talebini onaylama
+  (`SEPARATE_ACTOR`), adım atlama, belgesiz onay, negatif bakiye, çift tüketim
+  (rezervasyon/kullanım/iade), süresi dolmuş veya silinmiş rol atamasıyla onay,
+  runtime `DELETE` ile izin kaydı silme.
+- **`OPEN DECISION` yok** (OD5/OD21/OD24/OD27 kapalı; yeni karar gerekmedi).
+  Mevcut açık kararlar: OD6–OD18 (**13**), bu modülü **engelleyen yok**.
+- **Bilinçli sınır (raporlandı):** gerçek iki bağlantılı yarış testi (`transactional_db`)
+  bu projenin test ortamında **çalıştırılamıyor** — `pytest-django` teardown'ındaki
+  `flush`, `hr.permissions`/`hr.role_permissions` TRUNCATE sırasını çözemiyor
+  (ayrıca ham SQL tablolar Django tablo listesinde yok). Garanti iki katmanda
+  **doğrudan** sınanır: servis (`select_for_update` + durum kontrolü) ve veritabanı
+  (`(leave_request_id, entry_kind)` benzersiz kısıtı).
+
 ## [0.22.0] — 2026-09-11 — M10–M13: organizasyon ve çalışan temel veri modeli + M9 tamamlama
 
 **Baseline (son commit `1964e0b`):** çalışma ağacı temiz, migration'lar tam uygulanmış,

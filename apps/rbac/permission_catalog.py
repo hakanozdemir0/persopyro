@@ -36,7 +36,11 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("leave.request.read", "İzin taleplerini görme", "leave"),
     ("leave.request.create", "İzin talebi oluşturma", "leave"),
     ("leave.request.approve", "İzin talebi onaylama/reddetme", "leave"),
-    ("leave.type.manage", "İzin türü yönetimi", "leave"),
+    ("leave.request.approve.override", "İzin onay adımlarını kayıtlı gerekçeyle atlama", "leave"),
+    ("leave.request.cancel", "İzin talebi iptali", "leave"),
+    ("leave.balance.read", "İzin bakiyelerini görme", "leave"),
+    ("leave.balance.manage", "İzin bakiyesi düzeltme", "leave"),
+    ("leave.type.manage", "İzin türü ve politikası yönetimi", "leave"),
     # Vardiya ve devam
     ("shift.read", "Vardiyaları görme", "shift"),
     ("shift.assign", "Vardiya atama", "shift"),
@@ -102,11 +106,15 @@ PLATFORM_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PLATFORM_PERMISSION
 LEGACY_ROLE_CODE_MAP: dict[str, str] = {"manager": "dept_manager"}
 
 # --- Hedef izin setleri (§6.2 matrisinden; yalnız MEVCUT katalog kodları) ----
-# Matriste bulunan ama katalogda henüz **olmayan** kodlar (ör.
-# `leave.balance.read`, `approval.task.decide`, `audit.read.tenant`,
-# `employee.personal_data.read`, `document.share`, `dataaccess.*`) ayrı iş
-# kalemiyle eklenir (AUTHORIZATION §5.2 "eklenecek" + bölüm 13/6) — buraya
-# **uydurulmaz**. Her kodun yanındaki bölüm/sütun etiketi matristeki kaynağıdır.
+# Matriste bulunan ama katalogda henüz **olmayan** kodlar (ör. `approval.task.decide`,
+# `audit.read.tenant`, `employee.personal_data.read`, `document.share`,
+# `dataaccess.*`) ayrı iş kalemiyle eklenir (AUTHORIZATION §5.2 "eklenecek" + bölüm
+# 13/6) — buraya **uydurulmaz**. Her kodun yanındaki bölüm/sütun etiketi matristeki
+# kaynağıdır.
+#
+# M14 (izin modülü) ile matrisin **E. İzin** bölümünde tanımlı dört kod katalogda
+# eksikti ve bu iş kalemiyle eklendi: `leave.request.cancel`,
+# `leave.request.approve.override`, `leave.balance.read`, `leave.balance.manage`.
 DEPT_MANAGER_PERMISSIONS: tuple[str, ...] = (
     "user.read",  # B: ◐ (UNIT)
     "org.department.read",  # C: ● (UNIT)
@@ -115,6 +123,8 @@ DEPT_MANAGER_PERMISSIONS: tuple[str, ...] = (
     "leave.request.read",  # E: ● (UNIT)
     "leave.request.create",  # E: ◐ (UNIT, kendi adına)
     "leave.request.approve",  # E: ◐ (UNIT + ASSIGNED + SEPARATE_ACTOR)
+    "leave.request.cancel",  # E: ◐ (UNIT)
+    "leave.balance.read",  # E: ● (UNIT)
     "shift.read",  # F: ● (UNIT)
     "shift.assign",  # F: ● (UNIT)
     "shift.schedule.manage",  # F: ◐ (UNIT)
@@ -140,6 +150,8 @@ TENANT_OFFICER_PERMISSIONS: tuple[str, ...] = (
     "leave.request.read",  # E: ● (TENANT)
     "leave.request.create",  # E: ●
     "leave.request.approve",  # E: ◐ (ASSIGNED)
+    "leave.request.cancel",  # E: ◐
+    "leave.balance.read",  # E: ● (TENANT)
     "shift.read",  # F: ● (TENANT)
     "shift.assign",  # F: ◐
     "shift.schedule.manage",  # F: ◐
@@ -208,6 +220,8 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "employee.read",
             "leave.request.read",
             "leave.request.create",
+            "leave.request.cancel",
+            "leave.balance.read",
             "shift.read",
             "document.read",
         ],

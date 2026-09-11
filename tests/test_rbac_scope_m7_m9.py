@@ -137,7 +137,9 @@ def test_m7_manager_yerinde_dept_manager_olur_atamalar_korunur(tenant_a, user_a)
         kodlar = set(
             RolePermission.objects.filter(role=yeni).values_list("permission__code", flat=True)
         )
-        assert kodlar == set(DEPT_MANAGER_PERMISSIONS)
+        # M7 göçü **donmuş** seti yazar; sonradan eklenen kodlar ayrı migration'la
+        # (M14 → rbac/0011) gelir. Bu yüzden karşılaştırma göçün kendi setiyle yapılır.
+        assert kodlar == set(m7.DEPT_MANAGER_PERMISSIONS)
 
 
 def test_m7_eski_fazla_izinler_kalmaz(tenant_a) -> None:
@@ -155,7 +157,9 @@ def test_m7_eski_fazla_izinler_kalmaz(tenant_a) -> None:
         )
         assert "user.manage" not in kodlar
         assert "employee.sensitive.read" not in kodlar
-        assert kodlar == set(DEPT_MANAGER_PERMISSIONS)
+        # M7 göçü **donmuş** seti yazar; sonradan eklenen kodlar ayrı migration'la
+        # (M14 → rbac/0011) gelir. Bu yüzden karşılaştırma göçün kendi setiyle yapılır.
+        assert kodlar == set(m7.DEPT_MANAGER_PERMISSIONS)
 
 
 def test_m7_tenant_officer_hedef_izin_setiyle_olusturulur(tenant_a) -> None:
@@ -169,7 +173,7 @@ def test_m7_tenant_officer_hedef_izin_setiyle_olusturulur(tenant_a) -> None:
         kodlar = set(
             RolePermission.objects.filter(role=officer).values_list("permission__code", flat=True)
         )
-        assert kodlar == set(TENANT_OFFICER_PERMISSIONS)
+        assert kodlar == set(m7.TENANT_OFFICER_PERMISSIONS)
         # ŞY ile aynı olmadığı (kısıtlı hedef set) açıkça doğrulanır.
         assert kodlar < set(ALL_PERMISSION_CODES)
 
@@ -246,8 +250,13 @@ def test_m7_katalog_ile_donmus_kopya_ayrismaz() -> None:
     Ayrışırsa: yeni kurulum (katalog) ile mevcut kurulum (migration) farklı rol
     setine sahip olur — sessiz yetki farkı.
     """
-    assert tuple(DEPT_MANAGER_PERMISSIONS) == tuple(m7.DEPT_MANAGER_PERMISSIONS)
-    assert tuple(TENANT_OFFICER_PERMISSIONS) == tuple(m7.TENANT_OFFICER_PERMISSIONS)
+    # M14 (izin modülü) katalogu AUTHORIZATION §6.2 **E** bölümündeki iki kodla
+    # genişletti; fark yalnızca bu bilinçli delta olmalı (sessiz ayrışma yasak).
+    m14_delta = {"leave.request.cancel", "leave.balance.read"}
+    assert set(DEPT_MANAGER_PERMISSIONS) - set(m7.DEPT_MANAGER_PERMISSIONS) == m14_delta
+    assert set(m7.DEPT_MANAGER_PERMISSIONS) - set(DEPT_MANAGER_PERMISSIONS) == set()
+    assert set(TENANT_OFFICER_PERMISSIONS) - set(m7.TENANT_OFFICER_PERMISSIONS) == m14_delta
+    assert set(m7.TENANT_OFFICER_PERMISSIONS) - set(TENANT_OFFICER_PERMISSIONS) == set()
     assert LEGACY_ROLE_CODE_MAP == {m7.LEGACY_ROLE_CODE: m7.TARGET_ROLE_CODE}
     assert DEFAULT_ROLE_TEMPLATES["dept_manager"]["permissions"] == list(
         DEPT_MANAGER_PERMISSIONS

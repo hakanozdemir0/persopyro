@@ -239,6 +239,26 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
   çalışan kaydı runtime yolunda fiziksel silinmez → `ON DELETE CASCADE` zinciri de
   kurulamaz). `persopyro_platform` bu tabloların **hiçbirine** erişemez (ayrı güvenlik
   sınırı; ölçümle ve testle doğrulanır).
+- **İzin modülü DB garantileri (M14 ✅, 2026-09-11):** durum makinesi
+  (`trg_leave_requests_state`) **yasak geçişleri** (ör. `approved → draft`), karar/iptal
+  zaman damgası zorunluluğunu ve **belge zorunlu türde belgesiz onayı** reddeder;
+  `trg_leave_balances_nonnegative` negatif bakiyeyi politika açıkça izin vermedikçe
+  engeller; `trg_leave_policy_rules_overlap` çakışan kıdem aralıklarını reddeder;
+  `trg_approval_steps_order` **onay sırasının atlanmasını** engeller.
+- **Çift tüketim / yarış (M14):** talep satırı `select_for_update()` ile kilitlenir;
+  nihai onay yalnızca `pending` durumdaki talep için verilir; bakiye hareketleri
+  **append-only** olay defterine yazılır ve `(leave_request_id, entry_kind)` benzersiz
+  kısıtı aynı talep için ikinci `usage`/`refund` kaydını **veritabanında** reddeder →
+  eşzamanlı iki onayda bile bakiye iki kez düşemez.
+- **Yetki turu (izin tabloları):** `persopyro_app` `SELECT/INSERT/UPDATE`; `DELETE`/
+  `TRUNCATE` geri alınır (OD21). `leave_balance_entries` **append-only**: yalnız
+  `SELECT/INSERT` (UPDATE de verilmez). `persopyro_platform` yedi tablonun **hiçbirine**
+  erişemez (ölçüm + test).
+- **Denetim olayları (M14):** `leave.type.create/update/deactivate`,
+  `leave.policy.create/update/deactivate`, `leave.request.create/submit/approve/
+  approve_step/reject/cancel/override/taken`, `leave.balance.accrual/adjustment`.
+  **Serbest metin gerekçe (K2 olabilir) denetim kaydına yazılmaz**; yalnızca
+  `has_reason` bayrağı ve kimlikler yazılır (gerekçe kendi tablosunda, RLS korumalı).
 - **Denetim olayları (M10–M13):** `org.unit.create/update/move/delete/restore`,
   `org.unit.manager_change`, `org.position.create`, `employee.create`,
   `employee.department_change`, `employee.primary_manager_set`, `employee.manager.close`.
