@@ -5,6 +5,102 @@ değişen / doğrulanan / kalan başlıklarını içerir.
 
 ---
 
+## [0.14.0] — 2026-09-11 — OD26 KAPATILDI: tenant API token modeli (F8 çözüm kararı; kod yok)
+
+Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:
+`git status` yalnızca `.md` gösterir).
+
+### Karar (OD26 — KAPALI)
+
+- **Model:** `hr.api_tokens` genişletilir; **yeni/ikinci token sistemi kurulmaz**
+  (OD22 ile aynı alan anlamları). Eklenenler: `token_kind` (`interactive`/`service`),
+  `purpose` NOT NULL (≥ 10 karakter), `scopes text[]` NOT NULL (boş kapsam yalnızca
+  iptal edilmiş satırda; **wildcard yasak**; değerler `hr.permissions.code`'dan
+  doğrulanır; **`platform.*` yasak**), `revoked_at` + `revoked_reason` (kapalı küme).
+- **Kesişim kuralı (fail-closed):**
+  `effective = current_user_permissions ∩ token_scopes` — tek kilit nokta
+  (`apps/rbac/permissions.py`). Token sahibinin sahip olmadığı yetkiyi taşıyamaz;
+  sonradan verilen izni kazanmaz; izin geri alınırsa o izni kullanamaz → rol
+  değişiminde ayrı token iptali gerekmez.
+- **TTL:** `interactive` ≤ 30 gün (720 sa), `service` ≤ 90 gün (2160 sa), **süresiz
+  yok**; tavan üstü istek açık hatayla reddedilir. `API_TOKEN_TTL_HOURS=720`
+  varsayılan olarak korunur.
+- **İptal:** `token/logout` artık **silmez, işaretler**; yeni `token/revoke-all`;
+  süre bitimi, sahip pasif/silinmiş, **kiracı askıda/iptal/silinmiş**, güvenlik
+  olayında toplu iptal. İptal **tek yönlü**, izli (`revoked_at`+`revoked_reason`+
+  denetim).
+- **Değişmezlik:** `scopes`/`purpose`/`expires_at`/`token_kind` üretimden sonra
+  değişmez → değişiklik = iptal + yeniden üretim (sessiz yetki kayması olmaz).
+- **Geriye dönük uyumluluk:** mevcut kapsamsız token'lar **"tüm izinler" sayılmaz**;
+  migrasyonda **iptal edilir** (`revoked_reason='policy_migration'`, sentinel
+  `scopes='{}'`) ve kullanıcı yeniden giriş yapıp kapsamlı token üretir. Ölçüm:
+  bugün `hr.api_tokens` **0 satır**.
+
+### Yeni iş kalemleri
+
+- **M29** — `hr.api_tokens` kolonları + CHECK'ler + iki tetikleyici (kapsam
+  doğrulama; değişmezlik + tek yönlü iptal).
+- **M30** — yetki turu: UPDATE `last_used_at` (+ iptal akışı); `delete()` yolu
+  kaldırılır.
+- **F10 (veri göçü)** — mevcut token'ların iptali.
+
+### SECURITY FINDING
+
+- **F11 (Yüksek) — Kiracı askıya alınsa/iptal edilse bile erişim kesilmiyor.**
+  Ölçüm: `TenantStatus` (`active`/`trial`/`suspended`/`canceled`) tanımlı ama
+  **hiçbir kod bu değeri okumuyor**. Askıya alınmış/iptal edilmiş kiracının
+  kullanıcıları **yeni giriş yapabiliyor** (dizin satırı yalnızca fiziksel silmede
+  kalkar); soft-delete edilmiş kiracıda yeni giriş engelliyor ama **mevcut
+  oturum/token çalışmaya devam ediyor** (RLS yalnızca `tenant_id` eşitliğine bakar,
+  kiracı durumuna bakmaz). Etki: ticari kontrol (askıya alma/iptal) ve hesap
+  kapatmanın güvenlik karşılığı yok. Kapatma yolu OD26 kapsamına eklendi
+  (`status NOT IN ('active','trial')` veya `deleted_at IS NOT NULL` → reddet +
+  askıya almada toplu token iptali). Kodlanmadı.
+- **F8** — çözüm kararı verildi; kod bekliyor. **F9/F10** açık kalmaya devam ediyor.
+
+### Ek düzeltme (doküman hatası, kod değil)
+
+- `docs/API.md` §2 yanlış biçimde `Authorization: Bearer` ve `/api/v1/auth/refresh`
+  yazıyordu; kod `Token` anahtar sözcüğünü kullanır ve **refresh ucu yoktur** →
+  düzeltildi, token sözleşmesi OD26 kararıyla güncellendi.
+- `docs/DATABASE.md`'ye **etiket çakışması** notu eklendi: `F#` bu belgede veri göçü,
+  `SECURITY.md`'de güvenlik bulgusu anlamına gelir.
+
+### Yeni OPEN DECISION
+
+- **Yok.** Karar sayıları: kapalı **14** (OD1–OD4, OD19–OD28), açık **14**
+  (OD5–OD18). Engelleyici açık karar yoktur; **OD5** organizasyon modülünden önce
+  netleşmelidir.
+
+### Değişen dosyalar
+
+| Dosya | Değişiklik |
+|---|---|
+| `docs/AUTHORIZATION.md` | OD26 **KAPALI** (9 başlıklı kesin karar: model, kapsam kuralı, TTL/`token_kind`, iptal, migration, F8 iş listesi, çakışmalar, gerekçe/güvenlik etkisi); durum satırları ve sayılar |
+| `docs/DATABASE.md` | `api_tokens` kartı hedef modelle güncellendi; B.3 satırı; **M29/M30**; veri göçü **F10**; bölüm I'de OD26 kapalı; etiket çakışması notu |
+| `docs/SECURITY.md` | **§3.5 Kiracı API token'ları** (yeni); T21 karar verildi; F8 "çözüm kararı verildi"; **F11** bulgusu; §15'e G10 |
+| `docs/ARCHITECTURE.md` | **K32** karar kaydı |
+| `docs/API.md` | §2 kimlik doğrulama düzeltildi + token gövdesi/iptal sözleşmesi; §4.1 uç tablosu (`revoke-all`, iptal semantiği) |
+| `docs/CHANGELOG.md` | Bu kayıt |
+
+### Doğrulanan / doğrulanmayan
+
+- **Doğrulandı (kaynak okuma + ölçüm):** `ApiToken` alanları ve `issue()` imzası;
+  `TokenLogoutView`'ın `delete()` çağrısı; `authenticate_credentials`'ta
+  `revoked_at`/kiracı durumu kontrolünün **yokluğu**; `permission_catalog.py`'de
+  **29 izin kodu** ve gerçek ad alanı; `TenantStatus`'un hiçbir kodda okunmadığı;
+  `API_TOKEN_TTL_HOURS=720`; `tenant_directory` tetikleyicisinin yalnızca
+  fiziksel silmede satır kaldırması.
+- **Doğrulanmayan (kasıtlı):** hiçbir kod/migration/DB değişikliği yapılmadı;
+  kesişim kuralı, tetikleyiciler ve uçlar **yazılmadı** (M29/M30/F10 iş kalemleri).
+
+### Kalan
+
+M2, M5, M10–M13, M25–M28, **M29/M30** ve F10; F7, F9, F11 açık. Açık kararlar:
+OD5–OD18.
+
+---
+
 ## [0.13.0] — 2026-09-11 — OD27 ve OD28 KAPATILDI (mimari karar; kod yok)
 
 Yalnızca doküman. **Kod, migration ve veritabanı değiştirilmedi** (doğrulandı:

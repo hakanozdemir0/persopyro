@@ -839,7 +839,7 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1–OD4, OD19–OD25, OD27 ve OD28 KAPATILDI** (13 karar).
+**Durum (2026-09-11):** **OD1–OD4, OD19–OD28 KAPATILDI** (14 karar).
 Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
@@ -1384,24 +1384,160 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   (B) kimlik kayması nedeniyle reddedildi; (C) insan tarafından okunabilirliği
   kaybettirdiği için reddedildi.
 
-### OD26 — Tenant API token modelinin hizalanması (kapsam ve iptal izi) 🆕
+### OD26 — Tenant API token modelinin hizalanması — **KAPALI** ✅ (2026-09-11)
 
-- **Neden açık (ölçüm — bulgu F8):** Mevcut `hr.api_tokens` **kapsamsız**dır (token,
-  kullanıcının tüm yetkilerini taşır), **`revoked_at` yoktur** (iptal = satır silme →
-  iptal izi kaybolur) ve TTL sabittir (`API_TOKEN_TTL_HOURS=720` = 30 gün). Platform
-  token'ları için OD22 bu üç noktayı **kapatmıştır**; tenant tarafı hâlâ açık.
-- **Seçenekler:** (A) Tenant token'a da `scope` (izin kodu listesi), `revoked_at` ve
-  `purpose` ekle; iptal artık silme değil işaretleme olsun. (B) Yalnızca `revoked_at`
-  ekle (kapsam olmadan; en az yetki kazanımı yok). (C) Değişiklik yok (kabul edilen
-  risk olarak kaydet).
-- **Öneri:** (A). Gerekçe: aynı güvenlik sınıfındaki iki token türünün farklı
-  kurallarla yaşaması bakım ve denetim yükü üretir; kapsamsız token, en az yetki
-  ilkesini (T16) kimlik bilgisi seviyesinde boşaltır.
-- **Etki:** `docs/DATABASE.md` (B.3, M3/M27), `docs/SECURITY.md` bölüm 3/6; mevcut
-  token üretim/doğrulama servisi ve testleri. **Bu turda kod değiştirilmedi.**
-- **Karar beklenmeden yapılacak:** yalnızca `revoked_at` (B alt kümesi) eklenmesi
-  geriye dönük uyumludur ve denetim izini geri kazandırır; **kapsam (A)** karar
-  gerektirir.
+**1) Durum:** **KAPALI.** Bulgu **F8**'in çözüm tasarımı kesinleşti; uygulama işleri
+madde 7'de listelendi (**bu turda kod yazılmadı**).
+
+**2) Kesin tenant token modeli** — `hr.api_tokens` genişletilir; **yeni/ikinci bir
+token sistemi kurulmaz** (OD22 ile aynı alan anlamları):
+
+Korunur: `id`, `tenant_id`, `user_id`, `token_hash` (UNIQUE, SHA-256), `label`,
+`expires_at` NOT NULL, `last_used_at`, `created_at`.
+
+- **`token_kind varchar(16) NOT NULL DEFAULT 'interactive'`** —
+  `CHECK IN ('interactive','service')`.
+- **`purpose text NOT NULL`** — `CHECK (length(btrim(purpose)) >= 10)`;
+  boş/anlamsız gerekçe yok (OD4 ile aynı ilke).
+- **`scopes text[] NOT NULL DEFAULT '{}'`** — `CHECK (cardinality(scopes) >= 1) OR
+  (revoked_at IS NOT NULL)`; wildcard yasak (`NOT ('*' = ANY(scopes))`); **her değer
+  `hr.permissions.code` içinde bulunmalı** ve **`platform.*` ad alanı yasak**
+  (tetikleyici ile); tekrar eden değer yok.
+- **`revoked_at timestamptz NULL`** + **`revoked_reason varchar(32) NULL`** (kapalı
+  küme: `logout`, `owner_disabled`, `tenant_disabled`, `admin_revoke`,
+  `security_incident`, `policy_migration`); `CHECK ((revoked_at IS NULL) =
+  (revoked_reason IS NULL))`.
+- **Değişmezlik:** `scopes`, `purpose`, `expires_at`, `token_kind`, `token_hash`,
+  `tenant_id`, `user_id` oluşturulduktan sonra **değişmez** (tetikleyici); yalnızca
+  `last_used_at` ve `revoked_at`/`revoked_reason` yazılabilir → değişiklik isteği
+  **iptal + yeniden üretim** ile yapılır (sessiz yetki kayması olmaz).
+- **İptal tek yönlüdür:** `revoked_at` tekrar NULL yapılamaz (tetikleyici).
+- **Raw token saklanmaz** (mevcut davranış korunur); özet **loglanmaz**.
+- **Tenant izolasyonu:** tablo RLS dışıdır (tasarım gereği, bkz. A.5), ancak token
+  **yalnızca kendi `tenant_id`'si** için bağlam kurar ve **kiracı sınırını aşamaz**;
+  token ile başka kiracı bağlamı açılamaz.
+
+**3) Scope / effective permission kuralı:**
+
+`effective_permissions = current_user_permissions ∩ token_scopes` → **fail-closed**.
+
+- Tek kilit nokta: `apps/rbac/permissions.py` zinciri
+  (`effective_permission_codes(request)`): istek **token** ile doğrulandıysa
+  **kesişim**, **oturum** ile doğrulandıysa kullanıcının izinleri.
+- Üretim anında: `scopes ⊆ effective_permission_codes(owner)`; **boş liste**,
+  **wildcard**, **katalogda olmayan kod** ve **`platform.*`** → `400`. Böylece token,
+  üreticinin sahip olmadığı bir yetkiyi **taşıyamaz**.
+- Kesişim iki kuralı tek kuralla sağlar: (a) token sonradan verilen izni **kazanmaz**;
+  (b) kullanıcıdan izin geri alınırsa token o izni **kullanamaz** → rol değişiminde
+  ayrıca token iptali gerekmez.
+- Kapsam RBAC'i **yalnızca daraltır, genişletemez**; token kapsamı bir **yetki
+  kaynağı değildir**.
+
+**4) TTL / `token_kind` kararı:**
+
+- `interactive` (insan; parola + MFA ile üretilir): varsayılan **30 gün**,
+  **üst sınır 30 gün (720 sa)**.
+- `service` (entegrasyon/makine kullanıcısı): **üst sınır 90 gün (2160 sa)**.
+- **Süresiz token yok**; `expires_at` NOT NULL kalır. İstemci tavanın üzerinde TTL
+  isterse **açık hata** (`400`) döner — sessiz kırpma yapılmaz.
+- `service` token v1'de **yalnızca sahibi adına** üretilebilir (başkası adına üretim
+  yeni bir yetki devri kavramı gerektirir → v1 dışı).
+- `API_TOKEN_TTL_HOURS=720` **varsayılan** olarak korunur; tavanlar ayrıca sunucu
+  tarafında dayatılır. **Ayrı token sistemi kurulmaz**: aynı tablo, aynı doğrulama,
+  yalnızca tavan ve denetim etiketi farklı.
+
+**5) Revocation kuralları:**
+
+- **Açık iptal:** `POST /api/v1/auth/token/logout` → **silme değil iptal**
+  (`revoked_at=now(), revoked_reason='logout'`) — mevcut fiziksel silme kaldırılır.
+- **Yeni uç:** `POST /api/v1/auth/token/revoke-all` → sahibinin **tüm** token'ları
+  (self-servis "her cihazdan çık").
+- **Süre bitimi:** `expires_at` geçmişse reddedilir (iptal kaydı gerekmez).
+- **Sahip pasif/silinmiş/askıda:** `status != active` veya `deleted_at IS NOT NULL`
+  → reddedilir (mevcut `is_active` kontrolü; `INACTIVE`/`ARCHIVED` bu durumları
+  karşılar → ayrı `suspended` durumu **eklenmez**).
+- **Kiracı askıda/iptal/silinmiş:** reddedilir → **yeni kural, kodda yok**
+  (bkz. **SECURITY FINDING F11**).
+- **Toplu iptal:** servis fonksiyonları
+  (`revoke_tokens(user=…|tenant=…|kind=…, reason='security_incident')`) — kimlik
+  bilgisi sızıntısı/güvenlik olayı senaryosu.
+- **İptal edilen token yeniden etkinleştirilemez**; yerine yeni token üretilir.
+- Her iptal `revoked_at` + `revoked_reason` ve denetim kaydı (`token.revoke` /
+  `token.revoke_all`) ile izlenir → **iptalin denetim izi kalır** (F8'in ikinci yarısı).
+
+**6) Eski token migration stratejisi (fail-closed):**
+
+- Kapsamsız mevcut token'lar **"tüm izinler" sayılmaz**; **hiçbiri çalışmaya devam
+  etmez**.
+- Sıra: (1) tüm mevcut satırlar iptal edilir
+  (`revoked_at=now(), revoked_reason='policy_migration'`); (2) zorunlu alanlar
+  iptal edilmiş eski satırlara **sentinel** ile yazılır (`scopes='{}'`,
+  `purpose='policy_migration (kapsamsız dönem)'` — boş kapsam yalnızca iptal edilmiş
+  satırda geçerlidir); (3) `NOT NULL` + CHECK + tetikleyiciler kurulur; (4) kullanıcı
+  yeniden giriş yapıp **kapsamlı** token üretir.
+- Kullanıcı verisi etkilenmez; yeniden üretim parola + MFA gerektirir.
+- Bugünkü ölçüm: `hr.api_tokens` **0 satır** → geçiş bugün risksizdir; plan yine de
+  üretim için yazılmıştır.
+
+**7) F8'in kapanması için gereken işler** (implementasyon; bu turda yapılmadı):
+
+1. **Şema:** **M29** (kolonlar + CHECK'ler + kapsam doğrulama tetikleyicisi +
+   değişmezlik/tek yönlü iptal tetikleyicisi), **M30** (yetki turu: `api_tokens`
+   UPDATE yalnızca `last_used_at`/`revoked_at`/`revoked_reason` ile sınırlı kalır),
+   **F10** veri göçü (mevcut token'ları iptal et).
+2. **Model:** `ApiToken` alanları + `revoke(reason)` + `is_usable`
+   (`revoked_at IS NULL AND expires_at > now`); `delete()` yolu kaldırılır.
+3. **Doğrulama:** `authenticate_credentials` → `revoked_at IS NULL` kontrolü +
+   **kiracı durumu** kontrolü (F11) + `request.auth.scopes` erişilebilirliği.
+4. **Yetki:** `effective_permission_codes(request)` kesişimi (tek kilit nokta).
+5. **Üretim servisi:** gövde `purpose`, `scopes`, `kind`, `ttl_hours?`; sunucu
+   tarafı doğrulama (alt küme + katalog + wildcard + `platform.*` + tavan); denetim
+   kaydı (`token.issue`).
+6. **Uçlar:** `token/logout` → iptal; yeni `token/revoke-all`.
+7. **Testler:** boş kapsam reddi · wildcard reddi · katalogda olmayan kod reddi ·
+   sahip olunmayan kapsam reddi · `platform.*` reddi · kesişim (izin geri alınınca
+   token o izni kaybeder) · sonradan verilen iznin token'a yansımaması · iptal sonrası
+   `401` · tek yönlü iptal · süre bitimi `401` · sahip pasif → `401` · kiracı askıda →
+   `401` · düz metin saklanmaması · eski (`policy_migration`) token'ın reddi.
+8. **Denetim:** `token.issue`, `token.revoke`, `token.revoke_all` eylemleri; kapsam
+   kümesi + `purpose` + `kind` kaydedilir (**token'ın kendisi asla**).
+
+**8) Mevcut kodla çakışmalar (ölçüm):**
+
+- `apps/accounts/views.py` → `TokenLogoutView` **fiziksel silme** yapıyor
+  (`ApiToken.objects.filter(pk=…).delete()`) → iptal izi kaybolur; **değişecek**.
+- `apps/accounts/authentication.py` → **`revoked_at` kontrolü yok**, **kiracı durumu
+  kontrolü yok**.
+- `ApiToken.issue(user, label)` → `purpose`/`scopes`/`kind`/TTL parametresi yok;
+  **imza değişecek**.
+- `apps/rbac/permissions.py` → yalnızca kullanıcı izinlerine bakıyor; kesişim
+  eklenmezse **kapsam dekoratif kalır** (asıl F8 boşluğu buradadır).
+- `tests/test_api_auth.py` → `/auth/token` çağrıları yalnızca `email`+`password`
+  gönderiyor → **bu testler güncellenmeden yeşil kalmaz** (beklenen davranış
+  değişikliği; kapsam zorunlu hale geliyor).
+- `settings.API_TOKEN_TTL_HOURS=720` korunur (varsayılan); tavanlar yeni ayarlarla.
+- `docs/API.md` §2 **`Authorization: Bearer`** ve `/api/v1/auth/refresh` yazıyordu;
+  kod `Token` anahtar sözcüğü kullanır ve refresh ucu **yoktur** → doküman hatası bu
+  turda düzeltildi (kod değil).
+- Önerilen örnek kapsam adları (`employees.read`, `leave.approve` vb.) **katalogda
+  yoktur**; gerçek ad alanı `employee.read`, `leave.request.approve`,
+  `org.department.read`, `shift.assign`… (**29 kod**, `apps/rbac/permission_catalog.py`)
+  → kapsam değerleri **katalogdan** doğrulanır.
+
+**Gerekçe:** Aynı güvenlik sınıfındaki iki token türünün (platform: OD22, tenant:
+OD26) farklı kurallarla yaşaması bakım ve denetim yükü üretir; kapsamsız token
+**en az yetki ilkesini** kimlik bilgisi seviyesinde boşaltır ve iptalin izi
+kalmadığı için olay müdahalesi kanıtsız kalır.
+
+**Güvenlik etkisi:** F8 kapanır (kapsam + iptal izi); token ile yetki yükseltme yolu
+kapanır; sızıntıda etki alanı kapsamla sınırlanır ve toplu iptal kanıtlanabilir olur.
+Kiracı durumu kuralı eklenmediği sürece **F11 açık kalır**.
+
+**Şema/migration etkisi:** Yeni sistem yok; `hr.api_tokens` genişletilir (5 yeni
+kolon, 2 tetikleyici, CHECK'ler) + veri göçü F10. Kiracı RLS politikaları ve mevcut
+tablolar **değişmez**; uygulanmış migration dosyaları **değiştirilmez**.
+
+**9) Yeni OPEN DECISION:** **Yok.** Kalan tüm noktalar bu kararla kapatıldı.
 
 ### OD27 — Kiracı içinde birden fazla tüzel şirket (`companies`) — **KAPALI** ✅ (2026-09-11)
 
@@ -1510,9 +1646,11 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
   erişim politikası buna göre uygulanır; "varlığı bilmek" ≠ "içeriği görmek".
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
-- **Karar durumu:** **OD1–OD4, OD19–OD25, OD27 ve OD28 KAPATILDI** (2026-09-11).
-  Açık: **15 karar** (OD5–OD18, OD26). **Engelleyici açık karar yoktur**; OD5
+- **Karar durumu:** **OD1–OD4, OD19–OD28 KAPATILDI** (2026-09-11).
+  Açık: **14 karar** (OD5–OD18). **Engelleyici açık karar yoktur**; OD5
   (departman yöneticisi kapsamı) organizasyon modülü kodlanmadan önce netleşmelidir.
   Açık **SECURITY FINDING**'ler: F7 (soft-delete yetkiyi kaldırmıyor), F9 (denetim
-  satırı `SET_NULL` ile güncellenebiliyor) ve F10 (prefix/slug benzerliği —
-  typosquatting, Düşük).
+  satırı `SET_NULL` ile güncellenebiliyor), F10 (prefix/slug benzerliği —
+  typosquatting, Düşük) ve **F11 (kiracı askıya alınınca erişim kesilmiyor, Yüksek)**.
+  F8 (tenant token kapsamsız/iptal izsiz) **OD26 ile karara bağlandı**; kodlaması
+  M29/M30 + F10 veri göçü olarak planlandı.

@@ -48,7 +48,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | **T18** | **Paralel yetkilendirme yolu: `/admin/` + `is_staff` + `auth_permission` uygulamanın RBAC'ini atlar** | **Yüksek** | **Karar verildi (OD19 — kapalı): `/admin/` kaldırılır, `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek başına yetki vermez.** Uygulama bekliyor 🔜 |
 | **T19** | **Fazla yetki: uygulama rolünün global tanım tablolarını (`permissions`) ve yansıları yazabilmesi** | **Orta** | **`permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6)** 🔜 |
 | **T20** | **Yetki çürümesi: soft-delete edilmiş rol, atama veya izin istisnası yetki vermeye devam ediyor** | **Yüksek** | **OD21 kararı: yetki çözümlemesi `deleted_at IS NULL` uygular; `objects` silinmişi gizler; geri alma açık izin + kayıt gerektirir (F7)** ⚠️ uygulama bekliyor |
-| **T21** | **Kapsamsız/uzun ömürlü API token'ı: token kullanıcının tüm yetkilerini taşır, iptalin denetim izi kalmaz** | **Orta** | **Platform token'ları OD22 ile sınırlandı (zorunlu kapsam, `revoked_at`, kısa TTL); tenant tarafı OD26 kararı bekliyor (F8)** ⚠️ |
+| **T21** | **Kapsamsız/uzun ömürlü API token'ı: token kullanıcının tüm yetkilerini taşır, iptalin denetim izi kalmaz** | **Orta** | **Karar verildi (OD26 — kapalı):** zorunlu `purpose` + `scopes` (katalog doğrulamalı), **kesişim kuralı** (`current_user_permissions ∩ token_scopes`), `revoked_at`/`revoked_reason`, interactive ≤ 30 gün / service ≤ 90 gün, süresiz yasak, toplu iptal. Uygulama bekliyor 🔜 (M29/M30 + F10) |
 
 ---
 
@@ -98,6 +98,28 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
   bu form değil, **mevcut oturum + `is_staff`** birleşimidir.
 - Kurtarma akışı (MFA cihaz kaybı) kimlik doğrulamalı ve kayıtlı olmalıdır 🔜;
   kurtarma, güvenlik zincirinin en zayıf halkasıdır.
+
+### 3.5 Kiracı API token'ları 🔜 KARAR (OD26 — kapalı)
+
+- Token **opaktır**; DB'de yalnızca **SHA-256 özeti** saklanır, ham token ve özeti
+  **loglanmaz**. 256+ bit entropi nedeniyle tuzsuz özet kabul edilir.
+- **Zorunlu alanlar:** `purpose` (≥ 10 karakter, boş/anlamsız gerekçe yok) ve
+  `scopes` (en az bir kod; **var olmayan kod**, **wildcard** ve **`platform.*`**
+  reddedilir; değerler `hr.permissions` kataloğundan doğrulanır).
+- **Kesişim kuralı (fail-closed):**
+  `effective = current_user_permissions ∩ token_scopes`. Token, sahibinin **sahip
+  olmadığı** bir yetkiyi taşıyamaz; sonradan verilen izni **kazanmaz**; izin geri
+  alınırsa o izni **kullanamaz**. Kapsam RBAC'i yalnızca **daraltır**.
+- **TTL:** `interactive` ≤ **30 gün**, `service` ≤ **90 gün**; **süresiz token yok**;
+  tavan üstü istek **açık hata** ile reddedilir (sessiz kırpma yok).
+- **İptal:** açık iptal (`token/logout`, `token/revoke-all`), süre bitimi, sahip
+  pasif/silinmiş, **kiracı askıda/iptal/silinmiş**, güvenlik olayında **toplu iptal**.
+  İptal **tek yönlüdür** (yeniden etkinleştirme yok) ve `revoked_at` +
+  `revoked_reason` + denetim kaydı ile **izlenir**.
+- **Değişmezlik:** `scopes`/`purpose`/`expires_at`/`token_kind` oluşturulduktan sonra
+  değişmez → değişiklik = iptal + yeniden üretim (sessiz yetki kayması olmaz).
+- **İzolasyon:** token yalnızca **kendi kiracısı** için bağlam kurar; kiracı sınırını
+  aşamaz (bulgu F8'in kapanma yolu — **M29/M30 + F10**).
 
 ---
 
@@ -210,14 +232,18 @@ silinmiş rolü "var" sayıp atlar (işlevsel hata). **Kapatma yolu (OD21 karar�
 `objects` yöneticisi silinmişi gizler, yetki çözümlemesi `deleted_at IS NULL`
 uygular, geri alma açık `*.restore` izni + denetim kaydı gerektirir (T20).
 
-**F8 — Tenant API token'ı kapsamsız ve iptal izi yok (Orta, açık).** Ölçüm:
-`hr.api_tokens` alanları `tenant_id, user_id, token_hash, label, expires_at,
-last_used_at, created_at`tır; **`scope` ve `revoked_at` yoktur**, TTL sabittir
-(`API_TOKEN_TTL_HOURS=720` = 30 gün). Sonuç: bir token sahibinin **tüm** yetkilerini
-taşır (en az yetki kimlik bilgisi seviyesinde uygulanmaz) ve iptal satır silme
-olduğu için **iptal edildiği kanıtlanamaz**. Platform token'ları OD22 ile
-sınırlandırıldı; tenant tarafı **OD26** kararına bağlandı. Geriye dönük uyumlu ara
-adım: `revoked_at` eklemek (kapsam kararı ayrı) (T21).
+**F8 — Tenant API token'ı kapsamsız ve iptal izi yok (Orta) — ÇÖZÜM KARARI VERİLDİ
+(OD26 kapalı, kod bekliyor).** Ölçüm: `hr.api_tokens` alanları `tenant_id, user_id,
+token_hash, label, expires_at, last_used_at, created_at`tır; **`scopes` ve
+`revoked_at` yoktur**, TTL sabittir (`API_TOKEN_TTL_HOURS=720` = 30 gün). Sonuç: bir
+token sahibinin **tüm** yetkilerini taşır (en az yetki kimlik bilgisi seviyesinde
+uygulanmaz) ve iptal satır silme olduğu için **iptal edildiği kanıtlanamaz**.
+**Kapatma yolu (OD26 — kapalı):** zorunlu `purpose` + `scopes` + **kesişim kuralı**
+(`current_user_permissions ∩ token_scopes`), `revoked_at`/`revoked_reason`, iptalin
+tek yönlü ve denetimli olması, `interactive` ≤ 30 gün / `service` ≤ 90 gün; mevcut
+kapsamsız token'lar **iptal edilir** (asla "tüm izinler" sayılmaz). Uygulama işleri:
+**M29/M30** (şema + yetki turu) ve **F10** (veri göçü) — henüz kodlanmadı (T21,
+SECURITY §3.5).
 
 **F9 — Denetim satırı `SET_NULL` ile güncellenebiliyor (Orta, açık).** Ölçüm:
 `apps/audit/models.py` içinde `AuditLog.user` ilişkisi `on_delete=SET_NULL`'dır ve
@@ -239,6 +265,24 @@ değil, platform operasyonudur; ancak `docs/PROJECT.md`'de **self-servis kayıt*
 planlandığı için bu yol açıldığında risk artar. **Azaltım (v1):** rezerve ad listesi
 (M5), prefix ≥ 3 karakter, yeni kiracı açılışında manuel inceleme, çok yakın prefix
 tespitinde (düzenleme mesafesi 1) uyarı. Kodlanmadı.
+
+**F11 — Kiracı askıya alınsa/iptal edilse bile erişim kesilmiyor (Yüksek, açık).**
+Ölçüm: `TenantStatus` (`active`, `trial`, `suspended`, `canceled`)
+`apps/tenancy/models.py:6`'da **tanımlı**, ancak **hiçbir kod bu değeri okumuyor**
+(`grep` tüm `apps/` ve `config/` içinde yalnızca alan tanımını bulur). Sonuçlar:
+(a) **askıya alınmış/iptal edilmiş** kiracının kullanıcıları **yeni giriş yapabilir**
+(oturum ve token) ve verilerine tam erişmeye devam eder — çünkü `tenant_directory`
+satırı yalnızca **fiziksel silmede** kaldırılır, durum değişiminde kalır;
+(b) **soft-delete edilmiş** kiracıda yeni giriş engellenir (slug/domain çözümlemesi
+dizin satırına bağlı), ancak **mevcut oturum/token** çalışmaya devam eder
+(`tenant_context` yalnızca `tenant_id` ayarını kurar; RLS yalnızca `tenant_id`
+eşitliğine bakar, kiracının durumuna **bakmaz**). Etki: ticari kontrolün (askıya
+alma/iptal) ve hesap kapatmanın **güvenlik karşılığı yoktur**; ödeme yapmayan veya
+sözleşmesi sonlanan müşteri veriye tam erişmeye devam eder. **Kapatma yolu (OD26
+kapsamına eklendi):** doğrulama sırasında kiracı durumu kontrol edilir —
+`status NOT IN ('active','trial')` veya `tenants.deleted_at IS NOT NULL` → oturum ve
+token reddedilir; askıya almada o kiracının token'ları **toplu iptal** edilir
+(`revoked_reason='tenant_disabled'`). Kodlanmadı.
 
 ---
 
@@ -471,7 +515,7 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
 ## 15. Açık güvenlik kararları
 
 Yetkilendirme tarafındaki kararlar `docs/AUTHORIZATION.md` bölüm 14'te
-listelenmiştir (OD1–OD25).
+listelenmiştir (OD1–OD28).
 
 **Kapatılan güvenlik kararları (2026-09-11):**
 
@@ -481,6 +525,11 @@ listelenmiştir (OD1–OD25).
 - **G8** — Django'nun paralel yetki yolu (OD19 kapalı): **`/admin/` kaldırılır,
   `auth_*` tablolarının yetkileri geri alınır, `is_staff`/`is_superuser` tek
   başına yetki vermez** (bölüm 3 ve 5).
+- **G10** — kiracı yaşam döngüsü durumunun erişime yansıması (OD26 kapsamında
+  karara bağlandı, bulgu **F11**): **`status NOT IN ('active','trial')` veya
+  `tenants.deleted_at IS NOT NULL` → oturum ve token reddedilir**; askıya almada
+  kiracının token'ları **toplu iptal** edilir (`revoked_reason='tenant_disabled'`).
+  Uygulama bekliyor 🔜.
 
 Açık olanlar:
 

@@ -18,12 +18,25 @@ nokta bu dokümana eklenir.
 
 ## 2. Kimlik doğrulama
 
-- `Authorization: Bearer <token>` başlığı ile taşınır.
-- Token kısa ömürlüdür; yenileme ayrı uç nokta (`/api/v1/auth/refresh`).
-- Çıkış, token'ı geçersiz kılar.
+- Oturum uçları **çerez** (HttpOnly) kullanır ve **CSRF korumalıdır**.
+- API istemcileri için **opak token**: `Authorization: Token <token>` başlığı ile
+  taşınır (Django `Bearer` biçimi **kullanılmaz**); yenileme ucu **yoktur** — süre
+  bitince yeni token alınır.
+- **Token gövdesi (OD26 — kapalı, uygulanacak 🔜):**
+  `POST /api/v1/auth/token` → `tenant`, `email`, `password`, `totp_code?`,
+  **`purpose`** (zorunlu, ≥ 10 karakter), **`scopes`** (zorunlu, en az bir izin
+  kodu), `kind` (`interactive` | `service`, varsayılan `interactive`),
+  `ttl_hours` (isteğe bağlı; `interactive` ≤ 720, `service` ≤ 2160).
+  Kapsam **sahibinin izinlerinin alt kümesi** olmalıdır; boş kapsam, wildcard,
+  katalogda olmayan kod ve `platform.*` → `400`.
+- Token ile yapılan isteklerde yetki **`kullanıcı izinleri ∩ token kapsamı`** olarak
+  hesaplanır (fail-closed); kapsam yalnızca **daraltır**.
+- İptal: `POST /api/v1/auth/token/logout` (yalnızca isteği yapan token) ve
+  **`POST /api/v1/auth/token/revoke-all`** (sahibin tüm token'ları). İptal
+  **işaretlemedir** (satır silinmez) ve **tek yönlüdür**.
 - Çok faktörlü doğrulama desteklenir; doğrulama bekleyen oturum kısıtlı yetkiye
   sahiptir.
-- Kimlik doğrulama uç noktaları (`/api/v1/auth/*`) `login_audit` tablosuna yazılır.
+- Kimlik doğrulama uç noktaları (`/api/v1/auth/*`) denetim kaydına yazılır.
 
 ## 3. Yetki
 
@@ -55,8 +68,9 @@ nokta bu dokümana eklenir.
 |---|---|---|---|
 | `/api/v1/auth/login` | POST | Yok (giriş) | Gövde: `tenant`, `email`, `password`, `totp_code?`. Oturum çerezi (HttpOnly) döner; **CSRF korumalı** |
 | `/api/v1/auth/logout` | POST | Oturum | Oturumu kapatır; denetim kaydı yazar |
-| `/api/v1/auth/token` | POST | Yok (giriş) | Aynı gövde; opak API token döner (201) |
-| `/api/v1/auth/token/logout` | POST | Token | Yalnızca isteği yapan token'ı iptal eder |
+| `/api/v1/auth/token` | POST | Yok (giriş) | Gövde: `tenant`, `email`, `password`, `totp_code?` + **`purpose`, `scopes`, `kind?`, `ttl_hours?`** (OD26 — kapalı, uygulanacak 🔜); opak API token döner (201) |
+| `/api/v1/auth/token/logout` | POST | Token | Yalnızca isteği yapan token'ı **iptal eder** (satır silinmez; `revoked_reason='logout'`) 🔜 |
+| `/api/v1/auth/token/revoke-all` | POST | Token | Sahibinin **tüm** token'larını iptal eder 🔜 (OD26) |
 | `/api/health` | GET | Yok | Canlılık (veritabanına dokunmaz) |
 | `/api/ready` | GET | Yok | Veritabanı erişilebilir mi (503 dönebilir) |
 
