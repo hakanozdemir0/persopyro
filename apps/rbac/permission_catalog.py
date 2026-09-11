@@ -50,6 +50,28 @@ PERMISSIONS: list[tuple[str, str, str]] = [
 
 ALL_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PERMISSIONS]
 
+# --- Platform izinleri (M6) --------------------------------------------------
+# `platform.*` kodları **aynı katalogda** (`hr.permissions`) yaşar — ikinci bir
+# katalog yoktur (OD3; docs/AUTHORIZATION.md §5.2 "Platform" satırı).
+#
+# ÖNEMLİ: Bu kodlar `ALL_PERMISSION_CODES`'a **girmez**. `tenant_admin` gibi kiracı
+# şablonları tüm katalogu değil, yalnızca kiracı izinlerini alır; aksi halde her
+# yeni kiracının yöneticisi platform izinlerine sahip olurdu (yetki yükseltme).
+PLATFORM_PERMISSIONS: list[tuple[str, str, str]] = [
+    ("platform.tenant.read", "Platform: kiracı bilgilerini görme (PII maskeli)", "platform"),
+    ("platform.tenant.manage", "Platform: kiracı oluşturma/durum/limit yönetimi", "platform"),
+    ("platform.settings.manage", "Platform: sistem ayarlarını yönetme", "platform"),
+    ("platform.role.assign", "Platform: platform rolü atama (platform admini atama)", "platform"),
+    ("platform.audit.read", "Platform: platform denetim kayıtlarını görme", "platform"),
+    (
+        "platform.support.manage",
+        "Platform: destek oturumu yönetimi (onaylı/süreli/kayıtlı)",
+        "platform",
+    ),
+]
+
+PLATFORM_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PLATFORM_PERMISSIONS]
+
 # Kiracı oluşturulduğunda üretilen varsayılan roller.
 # Nesne seviyesi kapsam (kendi kaydı / kendi ekibi) organizasyon modülüyle
 # birlikte gelecek; buradaki izinler modül düzeyindedir.

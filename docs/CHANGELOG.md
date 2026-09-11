@@ -3,6 +3,155 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.19.0] — 2026-09-11 — Platform authorization paketi (M6 + M31–M33)
+
+**Baseline (son commit `d8b3906`):** `bash scripts/run_tests.sh` → **207 passed**
+(0 skip); çalışma ağacı temiz; **`persopyro_platform` rolü mevcut**
+(`rollsuper=f, rolcreatedb=f, rolcreaterole=f, rolbypassrls=f, rolcanlogin=t`) →
+M1–M5'teki platform yetki testleri artık **atlanmadan** koşuyor.
+
+### Numaralandırma notu (ölçülmüş — sapma raporlanır)
+
+İstenen "M6–M9 platform authorization paketi" ile `docs/DATABASE.md`'deki M6–M9
+satırları **birebir örtüşmüyor**: belgedeki **M7** rol kodu göçü (`manager →
+dept_manager`, `tenant_officer`), **M8** `hr.roles.scope_type`, **M9**
+`hr.user_roles.scope_org_unit_id` — yani **kiracı RBAC işleri**; ayrıca **M9 `M10`
+(departments/organizasyon) iş kalemine bağlıdır**. Bu turda organizasyon ve kiracı
+org/employee tabloları **kapsam dışı** olduğu için **belgedeki M7–M9 uygulanmadı**.
+Bunun yerine istenen **platform authorization** işleri, numara çakışması olmadan
+belgeye **M31–M33** olarak eklendi (M6 zaten platform izin kataloğudur). Belgedeki
+M7–M9 tanımları **değiştirilmedi**.
+
+### M6 — Platform izin kataloğu ✅
+
+- `apps/rbac/migrations/0004_od3_platform_permissions.py`: altı kod **ortak
+  katalogda** (`hr.permissions`) — `platform.tenant.read`, `platform.tenant.manage`,
+  `platform.settings.manage`, `platform.role.assign`, `platform.audit.read`,
+  `platform.support.manage` (AUTHORIZATION.md §5.2/§6.2A; kodlar **uydurulmadı**).
+  Katalog 29 → **35**; idempotent (`get_or_create`), kodlar sabit/benzersiz
+  (`permissions_code_key`), jokersiz.
+- **İkinci katalog açılmadı**: `apps/rbac/permission_catalog.py` içinde
+  `PLATFORM_PERMISSIONS` ayrı liste; `ALL_PERMISSION_CODES` **değiştirilmedi** →
+  `tenant_admin` gibi kiracı şablon rolleri platform izni **almaz** (test).
+- **Yetki boşluğu kapatıldı (ölçülmüş):** app rolü `hr.permissions` üzerinde
+  öncesi `SELECT/INSERT/UPDATE/DELETE = t/t/t/t`, sonrası **`t/f/f/f`** (+ TRUNCATE
+  geri alındı). Aynı daraltma `scripts/02_grant_app_privileges.sql` içinde de var
+  (betik yetkiyi geri açmıyor — regresyon testi).
+
+### M31 — Platform default rolleri ve izin bağları ✅
+
+- `platform/0004_od3_platform_soft_delete.py`: `platform.roles`,
+  `platform.role_permissions`, `platform.user_roles` tablolarına **`deleted_at`**
+  (K25 standardı: silme = `deleted_at`; silinen kayıt yetki vermez) + FK indeksleri.
+- `platform/0005_od3_platform_rolleri_ve_izinleri.py`:
+  - `superadmin` **6/6**, `platform_admin` **4/4** — izinler **açık bağlarla**;
+    **izin devralma (inheritance) YOK** (hiyerarşi yalnız yönetim ilişkisi).
+    `platform_admin`'de `settings.manage` ve `role.assign` **yok** → kendini
+    superadmin yapamaz, platform ayarlarını değiştiremez.
+  - Seed **idempotent** (var olan etkin bağ atlanır, çift kayıt yok); **soft-delete
+    edilmiş rol/bağ bulunursa açık hata** (otomatik restore yok); **izin kodu
+    katalogda yoksa sessiz geçilmez** (kiracı tarafındaki `MissingPermissionError`
+    ile aynı ilke).
+  - **Gerçek kullanıcı seed edilmez** (`platform.users` = 0; bootstrap komutu ayrı).
+  - Platform rolüne `hr.permissions` üzerinde **SELECT** (paylaşılan katalog, salt
+    okunur) — aynısını `scripts/03_platform_roles.sql` yapar; böylece test/sıfırdan
+    kurulum ile üretim **aynı** sonucu üretir.
+  - Ölçüm: `platform.role_permissions` = **10 satır** (6 + 4).
+
+### M32 — Platform authorization servisi ✅ (`apps/platform/permissions.py`)
+
+- **Tek merkezi çözümleyici:** etkin izin kümesi tek sorguyla (`ETKIN_IZIN_SQL`)
+  hesaplanır — **yalnız aktif** kullanıcı (`status='active'`, `is_active`,
+  `deleted_at IS NULL`), **yalnız aktif ve süresi geçmemiş** rol ataması, **yalnız
+  aktif** rol ve rol-izin bağı. **Soft-delete edilen hiçbir kayıt yetki vermez.**
+- **Django yetki sistemi kullanılmaz** (`auth_permission`/`auth_group`/`is_staff`
+  yok — kaynak denetimi testi AST ile yorumları hariç tutarak yapar).
+- **Tenant RBAC kod yoluna düşülmez:** `apps.rbac` import edilmez, kiracı tabloları
+  sorgulanmaz; ortak katalogda **kiracı izni bağlansa bile** `platform.*` süzgeci
+  nedeniyle platform yetkisi üretilmez (test).
+- **Fail-closed:** karar verilemezse (pasif kullanıcı, süresi geçmiş atama, silinmiş
+  rol/bağ, bilinmeyen kod) sonuç **izin yok**; `require_permission` hata verir.
+- **Self-elevation koruması:** `assign_role`/`revoke_role` — kullanıcı **kendi**
+  rolünü atayamaz/değiştiremez; atama için `platform.role.assign` **ve** atanacak
+  rolün **tüm izinleri** gerekir (sahip olmadığı yetkiyi dağıtamaz) → `platform_admin`
+  kendini/kimseyi superadmin yapamaz; yönetim hiyerarşisi (üst rol alt rolü atar)
+  kontrol edilir; atama `granted_by_id` ile kayıtlanır, kaldırma **soft-delete**
+  (denetim izi kalır); çift atama ve soft-delete edilmiş atamanın sessiz canlandırması
+  reddedilir.
+- **Kullanıcı durumu:** `platform_user_can_authenticate` + `authenticate_platform_token`
+  → pasif/silinmiş platform kullanıcısı **yetki alamaz, token kullanamaz,
+  kimlik doğrulayamaz** (login uç noktası bu pakette **yok**; kapı servis katmanında).
+
+### M33 — İlk platform SUPERADMIN bootstrap ✅
+
+`manage.py create_platform_superadmin --email ... --reason ... [--password-stdin]`
+
+- Django Admin **kullanılmaz**; gerçek kullanıcı migration'a **seed edilmez**.
+- **Varsayılan parola yok**; parola yalnızca `--password-stdin` veya etkileşimli
+  `getpass` ile alınır — **`--password` seçeneği bilinçli olarak yok** (komut
+  satırına/süreç listesine sızmaz); parola **hash'lenir** (Argon2id; Django
+  `PASSWORD_HASHERS`), **ham parola loglanmaz/gösterilmez**; Django parola
+  doğrulayıcıları (min 10 + benzerlik/yaygın/yalnız-sayı) dayatılır.
+- **Sessiz yükseltme yok:** e-posta zaten varsa (aktif, pasif **veya soft-delete**)
+  komut **açık hata** verir; mevcut kullanıcıya superadmin rolü eklenmez, parolası
+  ezilmez. Atama `granted_by_id = NULL` + **zorunlu gerekçe (≥10 karakter)** ile
+  kayıtlanır (bootstrap = açık yönetim operasyonu; aktör henüz yok).
+- Platform şemasına erişemeyen rolle çalıştırılırsa **fail-closed** hata verir.
+
+### Ölçümler (canlı DB)
+
+- `hr.permissions`: 35 kod (6'sı `platform.*`); app rolü `t/f/f/f`.
+- `platform.role_permissions`: superadmin 6, platform_admin 4, toplam **10**;
+  `platform.users` **0**; `platform.roles` **2**.
+- Platform rolü: `platform.*` altı tabloda `SELECT/INSERT/UPDATE/DELETE = true`
+  (allowlist); `hr.permissions` SELECT `true`, INSERT `false`; `hr.tenants`
+  SELECT/INSERT/UPDATE/DELETE **`false`**; `hr.users`/`hr.audit_logs`/`hr.api_tokens`
+  ve `auth_*`/`django_admin_log` **`false`**; `platform` şema `CREATE` **`false`**;
+  `rolsuper=f, rolbypassrls=f`.
+
+### Doğrulama
+
+- **Testler:** **244 passed, 0 skipped** (baseline 207 → +37 yeni test; iki yeni
+  dosya: `tests/test_platform_authorization.py`, `tests/test_platform_bootstrap.py`).
+  Self-elevation, soft-delete (rol/atama/bağ), pasif kullanıcı, inheritance yokluğu,
+  Django-auth/tenant-RBAC ayrılığı, SUPERADMIN≠PII, allowlist, NOBYPASSRLS,
+  hr.tenants yazma yasağı, seed idempotentliği ve bootstrap kuralları test edildi.
+- **Sıfırdan kurulum:** `scripts/verify_fresh_install.sh` (yeni **4b/8** adımı:
+  M6–M8 durumu) → tüm adımlar OK, **244 passed**, `SONUÇ: OK`, kalan geçici
+  veritabanı **0**; `/admin/` 404, health/ready 200, token 201 → logout 204 → 401.
+- **Mevcut DB upgrade:** `rbac/0004`, `platform/0004`, `platform/0005` uygulandı.
+  NOT (şeffaflık): `platform/0005` uygulandıktan sonra dosyaya katalog yetkisi
+  bloğu eklendiği için migration **geri alınıp yeniden uygulandı**
+  (`migrate platform 0004` → `migrate.sh`); yani ters yön de gerçek veriyle denendi.
+- **HTTP smoke (canlı DB):** health 200, ready 200, `/admin/` **404**, giriş 201,
+  çıkış 204, çıkış sonrası aynı token 401, geçersiz token 401, askıdaki kiracı 403.
+- **Kalite:** `ruff check .` → *All checks passed*; `bandit -q -r apps config` →
+  **0 bulgu**; `manage.py check` temiz; `makemigrations --check` → *No changes
+  detected*.
+
+### Kalan / doğrulanmayan
+
+- Platform **login/token uç noktaları yok** (bilinçli: bu paketin kapsamı dışı) →
+  `authenticate_platform_token` HTTP seviyesinde test edilmedi, servis seviyesinde
+  test edildi.
+- Platform → kiracı verisi erişimi (talep/onay/süre/denetim) **M17–M19**'da; bu
+  pakette platform rolüne kiracı tablolarında **yetki verilmedi**.
+- Belgedeki **M7–M9 (kiracı RBAC + organizasyon bağımlılığı)** bu turda **uygulanmadı**
+  (organizasyon modülü kapsam dışı).
+
+### SECURITY FINDING
+
+**Yok.** Aksine bir açık kapatıldı: kiracı runtime rolü (`persopyro_app`) global izin
+kataloğunu (`hr.permissions`) **yazabiliyordu** (INSERT/UPDATE/DELETE açıktı,
+`ALTER DEFAULT PRIVILEGES` kaynaklı) — M6 ile salt okunur hâle getirildi ve
+regresyon testine bağlandı.
+
+### OPEN DECISION
+
+**Yok.** Paket kapalı kararlarla uygulandı (OD3/OD19/OD21/OD22 + AUTHORIZATION.md
+§4.3/§5.2/§6.2A). Not: `platform.access_requests`/`access_grants` (OD1/OD4, M18–M19)
+hâlâ ayrı iş kalemidir; bu turda açılmadı.
+
 ## [0.18.0] — 2026-09-11 — Platform temeli (M1–M5) + kalıcı sıfırdan kurulum doğrulaması
 
 **Baseline (son commit `45db412`):** `bash scripts/run_tests.sh` → **171 passed**;

@@ -289,6 +289,35 @@ else
     bilgi "ATLANDI: '$PLATFORM_ROLE' rolü yok → platform rol ölçümü yapılamadı."
 fi
 
+adim "4b/8 M6-M8 platform yetkilendirme durumu (katalog, roller, seed)"
+if [ "$(tablo_var "$FRESH_DB" "hr.permissions")" = "$VAR" ]; then
+    bekle "platform izin kodları (6)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions WHERE code LIKE 'platform.%'")" "6"
+    bekle "app rolü hr.permissions SALT OKUNUR (M6)" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$APP_ROLE','hr.permissions','INSERT')")" "f"
+    bekle "app rolü hr.permissions SELECT" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$APP_ROLE','hr.permissions','SELECT')")" "t"
+fi
+if [ "$(tablo_var "$FRESH_DB" "platform.role_permissions")" = "$VAR" ]; then
+    bekle "superadmin izin bağı (6)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM platform.role_permissions rp JOIN platform.roles r ON r.id = rp.role_id WHERE r.code = 'superadmin'")" "6"
+    bekle "platform_admin izin bağı (4)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM platform.role_permissions rp JOIN platform.roles r ON r.id = rp.role_id WHERE r.code = 'platform_admin'")" "4"
+    bekle "platform_admin rol atama izni YOK (self-elevation)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM platform.role_permissions rp JOIN platform.roles r ON r.id = rp.role_id JOIN hr.permissions p ON p.id = rp.permission_id WHERE r.code = 'platform_admin' AND p.code = 'platform.role.assign'")" "0"
+fi
+if [ "$(tablo_var "$FRESH_DB" "platform.users")" = "$VAR" ]; then
+    bekle "seed edilmiş platform kullanıcısı yok (M9)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM platform.users")" "0"
+fi
+if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$PLATFORM_ROLE'")" = "1" ] \
+    && [ "$(tablo_var "$FRESH_DB" "hr.permissions")" = "$VAR" ]; then
+    bekle "platform rolü hr.permissions SELECT (allowlist)" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','hr.permissions','SELECT')")" "t"
+    bekle "platform rolü hr.permissions yazamaz" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','hr.permissions','INSERT')")" "f"
+fi
+
 adim "5/8 manage.py check + makemigrations --check + denetim komutları"
 kontrol_metni "manage.py check" "$(django_owner manage.py check 2>&1 || true)" "no issues"
 kontrol_metni "makemigrations --check" \

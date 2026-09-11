@@ -203,8 +203,12 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 - Yetki kontrolü dört katmanda: uç nokta → servis → nesne → veritabanı (RLS) ✅.
 - Kapsam dışı kayıt için "yetkin yok" değil **"bulunamadı"** döner (varlık
   sızdırmama) 🔜.
-- Kendi kendini yükseltme yasağı 🔜: kullanıcı kendi rolüne izin ekleyemez,
-  kapsamını genişletemez, kendi talebini onaylayamaz (ayrılık ilkesi).
+- Kendi kendini yükseltme yasağı: kullanıcı kendi rolüne izin ekleyemez,
+  kapsamını genişletemez, kendi talebini onaylayamaz (ayrılık ilkesi) —
+  **platform tarafı UYGULANDI ✅ (M8/M32, 2026-09-11):** kullanıcı kendi rolünü
+  atayamaz/değiştiremez; `platform_admin` kendini superadmin yapamaz ve sahip
+  olmadığı izni kimseye dağıtamaz (atama için `platform.role.assign` **ve** rolün
+  tüm izinleri gerekir); rol devralma yok. Kiracı tarafı 🔜 (rol yönetimi akışı).
 - Son kiracı yöneticisi kaldırılamaz/pasifleştirilemez 🔜 (kilitlenme koruması).
 - **Tek yetkilendirme yolu — UYGULANDI (OD19 kapalı ✅):** Yetki kararı **yalnızca**
   bu modelde verilir. Django'nun kendi yetki sistemi (`auth_permission`, `auth_group`,
@@ -221,7 +225,12 @@ Ayrıntı: `docs/AUTHORIZATION.md`. Güvenlik açısından özet:
 - **Tanım tabloları salt okunur:** `hr.permissions` (global katalog) ve yansı/dizin
   tabloları uygulama rolünde yalnızca **SELECT** olmalıdır; `ALTER DEFAULT
   PRIVILEGES` ile gelen geniş DML her yeni tabloda daraltılır 🔜
-  (`docs/DATABASE.md` D.6).
+  (`docs/DATABASE.md` D.6). — **İzin kataloğu tarafı KAPATILDI ✅ (M6, 2026-09-11):**
+  ölçüm öncesi `hr.permissions` üzerinde app rolü `SELECT/INSERT/UPDATE/DELETE =
+  t/t/t/t` iken artık **`t/f/f/f`**; daraltma hem migration'da hem
+  `scripts/02_grant_app_privileges.sql` içinde vardır ve regresyon testiyle sabittir
+  (katalog yazılabilir olsaydı kiracı runtime yolu izin kodlarını değiştirebilirdi →
+  yetki yükseltme yüzeyi).
 
 - **Platform rolleri ayrı kimlik alanında yaşar** — KARAR (OD3 — kapalı),
   **şema tarafı UYGULANDI ✅ (M1–M5)**: platform kullanıcıları kiracı kullanıcı
@@ -382,6 +391,22 @@ erişim.
   onaylayıcı onaylar; talebi açan onaylayamaz 🔜 (OD4 — kapalı).
 - **Ayrılık ilkesi:** bir kişi hem platform hem kiracı yöneticisi rolü taşımaz
   ❓OD11.
+- **Platform yetkilendirme servisi UYGULANDI ✅ (M32, 2026-09-11):**
+  `apps/platform/permissions.py` tek merkezi çözümleyicidir — **yalnız aktif**
+  platform kullanıcısı, **yalnız aktif ve süresi geçmemiş** rol ataması, **yalnız
+  aktif** rol ve rol-izin bağı (soft-delete edilen hiçbiri yetki vermez);
+  **Django `auth_permission`/`is_staff` kullanılmaz**; kiracı RBAC kod yoluna
+  **düşülmez**; **izin devralma yok**; fail-closed. Platform izinleri **hiçbir
+  kiracı/PII kodu içermez** (çözümleyici `platform.*` süzgeci uygular) →
+  **SUPERADMIN olmak kiracı kişisel verisine doğrudan erişim vermez**; kiracı
+  verisi yalnızca erişim talebi + çift onay + süreli kayıt ile açılır (OD1/OD3/OD4).
+  Pasif/silinmiş platform kullanıcısının **token'ı da çalışmaz**
+  (`authenticate_platform_token`).
+- **İlk SUPERADMIN bootstrap (M33):** `manage.py create_platform_superadmin` —
+  Django Admin yok; parola yalnızca **stdin/etkileşimli** alınır (`--password`
+  seçeneği yok), **hash'lenir** (Argon2id), **ham parola loglanmaz**, varsayılan
+  parola yok, parola politikası dayatılır; e-posta zaten varsa (pasif/silinmiş
+  dâhil) komut **açık hata** verir → **sessiz yükseltme yapılmaz**.
 - **Kapsam en azdır:** talep edilen kaynakla sınırlıdır; "tüm kiracı verisi"
   şeklinde toplu erişim verilmez.
 - **Otomatik kapanma:** süre dolduğunda erişim kendiliğinden biter; uzatma yeni

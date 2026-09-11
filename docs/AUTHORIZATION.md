@@ -265,6 +265,11 @@ Kurallar:
   kaldırılamaz/pasifleştirilemez.
 - Platform rolleriyle kiracı rolleri **aynı kullanıcıda birleşemez** (bir kişi
   hem SUPERADMIN hem ŞİRKET YÖNETİCİSİ olamaz) — çıkar çatışmasını önler ❓OD11.
+- **Platform tarafı UYGULANDI ✅ (M8):** hiyerarşi izin devralma üretmez; "üst rol,
+  alt rolü atayabilir" kuralı **aktör atayacağı rolün tüm izinlerine sahip olmalı +
+  `platform.role.assign` iznine sahip olmalı + kendine atama yasak** üçlüsüyle
+  dayatılır (kod: `apps/platform/permissions.py`, `assign_role`/`revoke_role`).
+  Kiracı tarafındaki karşılığı rol yönetimi akışıyla birlikte gelecektir.
 
 ### 4.4 Kapsam (scope) kodları
 
@@ -317,7 +322,7 @@ Bu tasarımla **eklenecek** 🔜 (mevcut kodlar korunur, yenileri eklenir):
 
 | Modül | Yeni kodlar |
 |---|---|
-| Platform | `platform.tenant.read`, `platform.tenant.manage`, `platform.settings.manage`, `platform.audit.read`, `platform.support.manage`, `platform.role.assign` |
+| Platform | `platform.tenant.read`, `platform.tenant.manage`, `platform.settings.manage`, `platform.audit.read`, `platform.support.manage`, `platform.role.assign` — ✅ **eklendi (M6)**: 6 kod `hr.permissions` içine yazıldı (katalog 29 → **35**); kiracı şablon rollerine **girmez** |
 | Kiracı | `tenant.export`, `tenant.delete` |
 | Kullanıcı/rol | `user.public_id.resolve`, `user.permission_override.manage`, `role.assign` |
 | Organizasyon | `org.unit.manage`, `org.unit.move` |
@@ -424,6 +429,23 @@ Kurallar:
   açan onaylayamaz, iki farklı platform kullanıcısı onaylar (OD4 — kapalı).
 - Platform kullanıcıları ayrı modeldir (`platform_users`); kiracı kullanıcı
   tablosuyla birleştirilmez ve kiracı RLS politikaları onlar için gevşetilmez.
+
+**Uygulama durumu (M6–M8, 2026-09-11):**
+
+- **Kodlar (M6):** altı `platform.*` izni ortak katalogda (`hr.permissions`); ikinci
+  katalog yok. `hr.permissions` uygulama rolünde **salt okunur** (ölçüm: öncesi
+  `t/t/t/t` → sonrası `t/f/f/f`).
+- **Kümeler (M7):** `superadmin` **6/6**, `platform_admin` **4/4** — açık bağlarla;
+  **izin devralma yok** (hiyerarşi yalnız yönetim ilişkisi). `platform_admin`'de
+  `platform.settings.manage` ve `platform.role.assign` **yoktur**.
+- **Çözümleyici (M8):** `apps/platform/permissions.py` — aktif kullanıcı + aktif
+  (süresi geçmemiş) atama + aktif rol + aktif rol-izin bağı; **soft-delete edilmiş
+  hiçbir kayıt yetki vermez**; fail-closed. `platform_admin` **kendini superadmin
+  yapamaz**, sahip olmadığı izni dağıtamaz; hiçbir kullanıcı kendi rolünü
+  atayamaz/değiştiremez.
+- **SUPERADMIN ≠ kişisel veri:** platform izinleri **hiçbir** kiracı/PII kodu
+  içermez; kiracı verisi yalnızca erişim talebi/onayı (OD1/OD4, M17–M19) ile açılır.
+  Bootstrapped ilk superadmin de (M33) bu kuralın dışında değildir.
 
 #### B. Kullanıcı, rol ve izin yönetimi
 
@@ -888,6 +910,16 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
 `platform.user_roles`; ayrı DB rolü `persopyro_platform`
 (`NOBYPASSRLS`) ve `persopyro_app` için platform şemasında **sıfır yetki**.
 Kalan: erişim talebi/onay katmanı (M17–M19) ve platform uç noktaları.
+
+**Yetkilendirme paketi (2026-09-11 — M6/M31/M32/M33):** **UYGULANDI ✅** — platform
+izin kataloğu ortak katalogda tanımlandı (6 kod, salt okunur katalog); roller açık
+izin bağlarıyla seed edildi (superadmin 6/6, platform_admin 4/4, **devralma yok**);
+tek merkezi çözümleyici (`apps/platform/permissions.py`) aktiflik/soft-delete/
+süre kurallarını fail-closed dayatır; **self-elevation yasak** (kendine atama,
+sahip olmadığı yetkiyi dağıtma, hiyerarşi ihlali reddedilir); ilk SUPERADMIN
+`manage.py create_platform_superadmin` ile, parola hash'li ve açık yönetim
+operasyonu olarak oluşturulur. **Login uç noktası yok** (bu paketin kapsamı dışı);
+servis/model guard'ları ve testleri vardır.
 
 - **KARAR:** SUPERADMIN ve ADMIN için **ayrı `platform_users` modeli** kullanılır.
   Bu kullanıcılar **kiracıya bağlı olmaz**; kiracı kullanıcıları ile platform

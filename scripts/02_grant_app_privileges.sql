@@ -85,7 +85,23 @@ BEGIN
 END
 $$;
 
--- 5) Django teknik yetki tabloları (OD19 / M22b) ------------------------------
+-- 5) Global izin kataloğu (M6) ----------------------------------------------
+-- `hr.permissions` **paylaşılan katalogdur** ve salt okunurdur: kiracı runtime yolu
+-- kod ekleyemez/güncelleyemez/silemez. "ALL TABLES" satırı geniş DML verdiği için
+-- bu daraltma ondan SONRA gelir (ölçüldü: öncesinde app rolü INSERT/UPDATE/DELETE
+-- yetkisine sahipti — yetki yükseltme yüzeyi).
+-- Aynı kural `apps/rbac/migrations/0004_od3_platform_permissions.py` içinde de vardır.
+DO $$
+BEGIN
+    IF to_regclass('hr.permissions') IS NOT NULL THEN
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+            ON hr.permissions FROM persopyro_app;
+        GRANT SELECT ON hr.permissions TO persopyro_app;
+    END IF;
+END
+$$;
+
+-- 6) Django teknik yetki tabloları (OD19 / M22b) ------------------------------
 -- `auth_permission`, `auth_group`, `auth_group_permissions` ve `django_admin_log`
 -- Persopyro'nun yetki kaynağı DEĞİLDİR; Django Admin kaldırıldı ve uygulama bu
 -- tabloları çalışma anında okumaz/yazmaz. Uygulama rolünün TÜM yetkileri geri
