@@ -61,6 +61,29 @@ class ManagerRelationType(models.TextChoices):
     DELEGATE = "delegate", "Yetki devri (delege)"
 
 
+class BloodType(models.TextChoices):
+    """
+    Kan grubu — **K3 (özel nitelikli: sağlık)** verisi; şifreli saklanır.
+
+    Neden K3: KVKK m.6 kapsamında sağlık verisi özel nitelikli kişisel veridir;
+    projede sağlık alanları (`health_notes`, `disability_status`) **şifreli**
+    tutulur (docs/AUTHORIZATION.md §7). Kan grubu da aynı sınıfta ele alınır.
+
+    Yazım: Türkiye kullanımı — **`0` = O** (ör. `0 Rh+`); Rh faktörü `+`/`-`.
+    Değer kapalı kümedendir; doğrulama servis katmanında yapılır (şifreli kolonda
+    veritabanı `CHECK` uygulanamaz).
+    """
+
+    A_POS = "A+", "A Rh+"
+    A_NEG = "A-", "A Rh-"
+    B_POS = "B+", "B Rh+"
+    B_NEG = "B-", "B Rh-"
+    AB_POS = "AB+", "AB Rh+"
+    AB_NEG = "AB-", "AB Rh-"
+    ZERO_POS = "0+", "0 Rh+"
+    ZERO_NEG = "0-", "0 Rh-"
+
+
 class Department(TenantScopedModel):
     """
     Organizasyon birimi (ağaç düğümü).
@@ -307,6 +330,17 @@ class EmployeePersonalData(TimeStampedModel, SoftDeleteModel):
     )
     work_permit_valid_until = models.DateField("izin geçerlilik tarihi", null=True, blank=True)
     # --- K3 (özel nitelikli kişisel veri — ŞİFRELİ) ---
+    blood_type = EncryptedCharField(
+        "kan grubu (şifreli)",
+        max_length=500,
+        blank=True,
+        null=True,
+        choices=BloodType.choices,
+        help_text=(
+            "K3 (sağlık) verisi: Fernet ile şifreli saklanır; boş = bilinmiyor. "
+            "Kapalı küme: A+/A-/B+/B-/AB+/AB-/0+/0- (Türkiye yazımı: 0 = O)."
+        ),
+    )
     health_notes = EncryptedTextField("sağlık notları (şifreli)", blank=True, null=True)
     disability_status = EncryptedCharField("engellilik durumu (şifreli)", blank=True, null=True)
     biometric_ref = EncryptedCharField("biyometrik referans (şifreli)", blank=True, null=True)

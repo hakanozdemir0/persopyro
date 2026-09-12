@@ -727,6 +727,43 @@ kontrol_metni "çalışan menüsü: yetki yönetimi kapalı" "$CALISAN_ME" '"rol
 kontrol_metni "çalışan menüsü: kişisel veri kapalı" "$CALISAN_ME" '"pii_gorunur":false'
 oturum_kapat
 
+# --- 6c-8) Kayıt formu: bütün kişisel veriler + kan grubu (K3, şifreli) ---------
+# Ölçülen: (1) kayıt formu K2 alanlarının tamamını + kan grubunu sorar,
+# (2) çalışan + bütün kişisel veri TEK istekte yazılır, (3) kan grubu okunabilir,
+# (4) veritabanında ŞİFRELİ durur (Fernet), (5) geçersiz değer 400 (fail-closed).
+bilgi "kayıt formu + kan grubu (6c-8): bütün bilgiler, K3 şifreli saklanır"
+bekle "POST /auth/login (kiracı yöneticisi)" "$(oturum_ac "demo@persopyro.test")" "200"
+FORM_SAYFA="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/")"
+kontrol_metni "kayıt formu: kan grubu alanı (6c-8)" "$FORM_SAYFA" 'id="emp-kan"'
+kontrol_metni "kayıt formu: kimlik no alanı (6c-8)" "$FORM_SAYFA" 'id="emp-kimlik"'
+kontrol_metni "kayıt formu: IBAN alanı (6c-8)" "$FORM_SAYFA" 'id="emp-iban"'
+BIRIM_ID="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments" |
+    "$PYTHON" -c 'import json,sys; print(json.loads(sys.stdin.read())["data"][0]["id"])')"
+YENI_CALISAN="$(curl -fsS -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees" \
+    -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+    -d "{\"employee_no\":\"VRF-9\",\"department_id\":\"$BIRIM_ID\",\"hire_date\":\"2026-01-05\",
+         \"first_name\":\"Doğrulama\",\"last_name\":\"Kişisi\",\"national_id\":\"12345678901\",
+         \"blood_type\":\"0+\",\"personal_phone\":\"05550000000\",\"address\":\"Ankara\"}")"
+YENI_ID="$(printf '%s' "$YENI_CALISAN" |
+    "$PYTHON" -c 'import json,sys; print(json.loads(sys.stdin.read())["data"]["id"])')"
+kontrol_metni "çalışan tek istekte oluşturuldu (6c-8)" "$YENI_CALISAN" 'VRF-9'
+PII_YANIT="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees/$YENI_ID/personal")"
+# Boşluk farkından bağımsız ölçüm (JSON ayırıcı biçimi değişebilir).
+PII_SIK="$(printf '%s' "$PII_YANIT" | tr -d ' ')"
+kontrol_metni "kan grubu kodu kaydedildi (6c-8)" "$PII_SIK" '"blood_type":"0+"'
+kontrol_metni "kan grubu etiketi okundu (6c-8)" "$PII_YANIT" '0 Rh+'
+kontrol_metni "kimlik no kaydedildi (6c-8)" "$PII_SIK" '"national_id":"12345678901"'
+HAM_KAN="$(sql_demo "SELECT blood_type FROM hr.employee_personal_data WHERE employee_id='$YENI_ID'")"
+case "$HAM_KAN" in
+    gAAAAA*) bilgi "OK   kan grubu veritabanında ŞİFRELİ (6c-8)" ;;
+    *) bilgi "FAIL kan grubu düz metin görünüyor (6c-8): '$HAM_KAN'"; HATA_VAR=1 ;;
+esac
+bekle "geçersiz kan grubu → 400 (6c-8)" \
+    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees/$YENI_ID/personal" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"blood_type":"XY"}')" "400"
+oturum_kapat
+
 rm -f "$CEREZ"
 
 kill "$SUNUCU_PID" 2>/dev/null || true

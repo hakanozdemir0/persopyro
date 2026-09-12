@@ -8,8 +8,10 @@ Manuel test arayüzü — JSON uç noktaları (yalnızca geliştirme).
     gizleyerek kolaylık sağlar; güvenlik kontrolü **backend'dedir**.
   * **Bypass yok:** `BYPASSRLS`, `is_staff`, süper kullanıcı veya sabit kiracı
     bağlamı kullanılmaz; kiracı oturumdan çözülür (middleware).
-  * **K2/K3 gösterilmez:** `employee_personal_data` alanları bu uçlardan hiç
-    dönmez.
+  * **K2/K3 varsayılan gizli:** `employee_personal_data` alanları liste ve özet
+    yanıtlarında **hiç dönmez**; yalnızca `employee.sensitive.read` + organizasyon
+    kapsamı kapısından geçen `/personal` ucundan okunur/yazılır. K3 (özel nitelikli:
+    sağlık) alanlar veritabanında **şifreli** durur (bkz. OD30/OD31).
   * Hata kodları: 400 (girdi), 401 (oturum yok), 403 (yetki/kapsam), 409 (durum
     çakışması). Yanıtlarda yığın izi (stack trace) **gösterilmez**.
 """
@@ -30,6 +32,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import UserStatus
+from apps.common.crypto import SecretDecryptionError
 from apps.leave.leave_type_catalog import LeaveCategory
 from apps.leave.models import (
     ApprovalStep,
@@ -62,7 +65,7 @@ from apps.leave.services import (
     user_employee,
 )
 from apps.leave.services.balances import get_or_create_balance, period_year_for
-from apps.organization.models import Department, Employee, Position
+from apps.organization.models import BloodType, Department, Employee, Position
 from apps.organization.services import (
     OrganizationAuthorizationError,
     OrganizationError,
@@ -268,6 +271,22 @@ def _kapsam_ozeti(user) -> dict:  # noqa: ANN001
         "self_only": kapsam.self_only,
         "assigned_only": kapsam.assigned_only,
     }
+
+
+def _calisan_etiketi(employee: Employee) -> str:  # noqa: ANN001
+    """
+    Çalışanı seçim listelerinde gösteren kısa etiket.
+
+    DİKKAT (regresyon): `employee.user` **bağlı olmayabilir** (`user_id` NULL'dur).
+    Doğrudan `e.user.first_name` okunması, hesabı olmayan bir çalışan
+    oluşturulduğunda `/test-ui/api/lookups` ucunu `AttributeError` ile tümden
+    kırdı ve panel/çalışanlar sekmeleri boş kaldı. Etiket bu yüzden tek yerde ve
+    güvenli sırayla üretilir: **ad-soyad → e-posta → çalışan no**.
+    """
+    if employee.user_id:
+        ad = f"{employee.user.first_name} {employee.user.last_name}".strip()
+        return str(ad or employee.user.email or employee.employee_no)
+    return str(employee.employee_no)
 
 
 def _calisan_ozeti(employee: Employee, izin_durumu: dict | None = None) -> dict:  # noqa: ANN001
@@ -1052,7 +1071,9 @@ class EmployeeListView(TestUiView):
                     reason="Çalışan oluşturulurken atandı",
                 )
             # Kişisel veriler (yalnız `employee.sensitive.read` sahibi yazabilir).
-            pii = {a: veri[a] for a in PII_ALANLARI if a in veri}
+            # Kayıt formu K2 alanlarının tamamını + K3 (kan grubu) alanını toplar;
+            # yetki kapısı `_pii_yaz` içindedir (izin + kapsam), burada tekrarlanmaz.
+            pii = {a: veri[a] for a in (*PII_ALANLARI, *K3_ALANLARI) if a in veri}
             if pii:
                 _pii_yaz(request.user, calisan, pii)
                 for alan in ("first_name", "last_name"):
@@ -1586,16 +1607,18 @@ class LookupView(TestUiView):
                         ).order_by("code")
                     ],
                     "users": _kullanici_secenekleri(request.user),
+                    # Kan grubu: K3 (sağlık) — kapalı küme; seçenekler tek kaynaktan
+                    # (model `BloodType`) gelir, etiketler arayüzde gösterilir.
+                    "blood_types": [
+                        {"value": kod, "label": etiket} for kod, etiket in KAN_GRUBU_SECENEKLERI
+                    ],
                     # Çalışan oluştururken "Yönetici" seçimi için: yalnız
                     # kapsamdaki çalışanlar (ad/e-posta değil, kimlik + no).
                     "employees": [
                         {
                             "id": str(e.pk),
                             "employee_no": e.employee_no,
-                            "label": (
-                                f"{e.user.first_name} {e.user.last_name}".strip()
-                                or (e.user.email if e.user_id else e.employee_no)
-                            ),
+                            "label": _calisan_etiketi(e),
                             "department": e.department.name if e.department_id else None,
                         }
                         for e in kapsamdaki_calisanlar(request.user)
@@ -1675,8 +1698,41 @@ PII_ALANLARI = (
 )
 
 
+K3_ALANLARI = ("blood_type",)
+"""Özel nitelikli (sağlık) alanlar — **şifreli** kolonlar, kapalı kümeyle doğrulanır."""
+
+KAN_GRUBU_SECENEKLERI: tuple[tuple[str, str], ...] = tuple(
+    (str(kod), str(etiket)) for kod, etiket in BloodType.choices
+)
+KAN_GRUBU_KAPALI_KUME: set[str] = {kod for kod, _ in KAN_GRUBU_SECENEKLERI}
+KAN_GRUBU_ETIKET: dict[str, str] = {kod: etiket for kod, etiket in KAN_GRUBU_SECENEKLERI}
+
+
+def _kan_grubu_etiket(kod: str | None) -> str | None:
+    """Kan grubu kodunu okunabilir etikete çevirir (ör. `0+` → `0 Rh+`)."""
+    if not kod:
+        return None
+    return KAN_GRUBU_ETIKET.get(kod, kod)
+
+
+def _sifreli_oku(kayit, alan: str):  # noqa: ANN001, ANN202
+    """
+    Şifreli (K3) alanı okur; anahtar/veri sorunu varsa `None` döner.
+
+    Neden yutuluyor: anahtar değişmiş/bozuk bir satır yüzünden **tüm** kişisel veri
+    yanıtının 500'e düşmesi kabul edilemez; okunamayan alan "bilinmiyor" (`None`)
+    döner. Yazma yolu etkilenmez: şifreleme sırasında hata oluşursa istek hata
+    verir (fail-closed).
+    """
+    try:
+        return getattr(kayit, alan)
+    except SecretDecryptionError:
+        return None
+
+
 def _pii_ozeti(kayit) -> dict:  # noqa: ANN001
     """Kişisel veri kaydı (yalnız `employee.sensitive.read` sahibine döner)."""
+    kan = _sifreli_oku(kayit, "blood_type")
     return {
         "first_name": kayit.first_name,
         "last_name": kayit.last_name,
@@ -1694,6 +1750,9 @@ def _pii_ozeti(kayit) -> dict:  # noqa: ANN001
         "national_id": kayit.national_id,
         "iban": kayit.iban,
         "bank_name": kayit.bank_name,
+        # K3 (şifreli): kod + okunabilir etiket birlikte döner.
+        "blood_type": kan,
+        "blood_type_label": _kan_grubu_etiket(kan),
     }
 
 
@@ -1722,6 +1781,24 @@ def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
             setattr(kayit, alan, _tarih(deger, alan) if deger else None)
         else:
             setattr(kayit, alan, ("" if deger is None else str(deger)).strip())
+    # K3 (özel nitelikli — şifreli): yalnız kapalı kümeden değer kabul edilir.
+    for alan in K3_ALANLARI:
+        if alan not in veri:
+            continue
+        ham = veri.get(alan)
+        kod = ("" if ham is None else str(ham)).strip()
+        if not kod:
+            setattr(kayit, alan, None)  # boş = bilinmiyor (şifreli kolonda NULL)
+        elif alan == "blood_type":
+            if kod not in KAN_GRUBU_KAPALI_KUME:
+                raise LeaveError(
+                    "Kan grubu geçersiz. Kapalı kümeden seçin: "
+                    + ", ".join(sorted(KAN_GRUBU_KAPALI_KUME, key=len))
+                    + "."
+                )
+            setattr(kayit, alan, kod)
+        else:  # yeni K3 alanı eklenirse kendi doğrulaması yazılmalı (fail-closed)
+            raise LeaveError(f"'{alan}' alanı bu arayüzden yazılamaz.")
     if not (kayit.first_name or "").strip() or not (kayit.last_name or "").strip():
         raise LeaveError("Kişisel veri için ad ve soyad zorunludur.")
     uyruk = (kayit.citizenship or "").strip().upper()
@@ -1731,6 +1808,7 @@ def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
         )
     kayit.save()
     # Denetim: kişisel veri DEĞERİ yazılmaz, yalnızca hangi alanların değiştiği bilgisi.
+    # K3 (sağlık) alanlar ayrı anahtarla yazılır ki denetimde sınıfı görünür olsun.
     from apps.audit.services import log_action  # noqa: PLC0415
 
     log_action(
@@ -1739,7 +1817,10 @@ def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
         user=user,
         table_name="employee_personal_data",
         record_id=calisan.pk,
-        changes={"alanlar": sorted({a for a in PII_ALANLARI if a in veri})},
+        changes={
+            "alanlar": sorted({a for a in PII_ALANLARI if a in veri}),
+            "k3_alanlar": sorted({a for a in K3_ALANLARI if a in veri}),
+        },
     )
 
 
@@ -1870,6 +1951,14 @@ class EmployeeDetailView(TestUiView):
             # şekle göre çalışır.
             "is_self": calisan.user_id is not None
             and str(calisan.user_id) == str(request.user.pk),
+            # Şekil sözleşmesi (regresyon): kullanıcı hesabı **bağlı olmayan**
+            # çalışanda da bu alanlar boş liste olarak döner. Eksik bırakıldığında
+            # arayüz `yetki_gorunur` true iken `assignable_roles.map` çağırıp
+            # çöküyordu (detay ekranı hiç açılmıyordu).
+            "revoked_assignments": [],
+            "permission_overrides": [],
+            "effective_permissions": [],
+            "assignable_roles": [],
         }
         if detay["yetki_gorunur"] and calisan.user_id:
             atamalar = (

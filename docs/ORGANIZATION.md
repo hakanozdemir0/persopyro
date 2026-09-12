@@ -109,6 +109,9 @@ mesajı için).
   Departman yöneticisi kapsamındaki çalışanın **organizasyon kimliğini** görür, kişisel
   verisini **görmez** (`403`); kapsam dışı kayıtta `404`. Şirket yöneticisi izni,
   Yetki Yönetimi ekranından başka bir role de verebilir — veriyi yalnızca yetki verilenler görür.
+  Kişisel veri formu **bütün alanları** toplar (ad, soyad, kimlik no, doğum tarihi,
+  kan grubu, iletişim, adres, yakın kişi, vatandaşlık/izin, banka + IBAN); kan grubu
+  K3 olduğu için veritabanında şifreli durur (OD31).
 - Kapsam kodları: `TENANT` (tüm kiracı), `UNIT` (kendi birimi ve alt ağacı),
   `UNIT_DIRECT` (yalnızca kendi birimi), `ASSIGNED` (atanan kayıt), `SELF`.
 - Rol bazlı görünürlük (güncel rol kodlarıyla):
@@ -208,7 +211,9 @@ kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`.
 (`employees_status_valid`: `active`/`suspended`/`terminated`/`archived`);
 `termination_date` boş ya da `hire_date`'ten sonra olmalıdır; çalışan kaydında
 **kişisel veri kolonu yoktur** (ad/iletişim/kimlik/sağlık verisi
-`employee_personal_data` içinde, K3 alanları şifreli).
+`employee_personal_data` içinde, K3 alanları şifreli: `health_notes`,
+`disability_status`, `biometric_ref` ve **kan grubu** — `blood_type`, migration
+0012; sağlık verisi sayıldığı için şifreli, kapalı küme A+/A-/B+/B-/AB+/AB-/0+/0-).
 
 ## 8. Vardiya, devam ve evrak (hedef şema)
 

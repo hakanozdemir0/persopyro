@@ -208,10 +208,11 @@ Kiracı `slug`: `demo`.
 ### Otomatik doğrulama
 
 `bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki + çıkış +
-bakiye + rol yönetimi + taşıma) ve `bash scripts/verify_fresh_install.sh`
-(**6c-1…6c-6** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
+bakiye + rol yönetimi + taşıma + kan grubu/K3) ve `bash scripts/verify_fresh_install.sh`
+(**6c-1…6c-8** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
 bakiye/unvan/rol görünürlüğü, taşıma hedefleri, rol atama-kaldırma, yetkisiz 403,
-PII'siz çalışan dizini, kişisel veri kapısı, rol oluşturma, üretim varsayılanında 404).
+kişisel veri kapısı, rol oluşturma, gömülü arayüz JS sözdizimi (`node --check`),
+kayıt formu + kan grubunun şifreli saklanması, üretim varsayılanında 404).
 
 ### Elle denenecek yeni akışlar (bildirim 5. tur)
 
@@ -272,4 +273,25 @@ düzenlenmesi **vardır** ama kararı arayüz vermez: yetki kararı servis katma
    (önceki sürümde eski alan adı okunduğu için yanlış metin görünüyordu).
 6. **Çalışan detayı:** kişisel veriler tablosu etiket/değer düzeninde; IBAN satırı
    **bir kez** görünür (önceki sürümde iki kez basılıyordu).
+
+### Elle denenecek yeni akışlar (bildirim 8. tur — kayıt formu bütün bilgileri ister)
+
+1. **Çalışanlar → Yeni çalışan:** kişisel veri bölümünde **kimlik no** ve **kan
+   grubu** alanları vardır; kan grubu açılır liste kapalı kümeden gelir
+   (A Rh+ … 0 Rh-; boş = bilinmiyor). Zorunlu alanlar yalnız ad/soyad olarak
+   işaretlidir.
+2. **Tek adımda kayıt:** ad/soyad + kimlik no + kan grubu + iletişim + adres +
+   yakın kişi + vatandaşlık/izin + banka/IBAN doldurup **Çalışanı oluştur** →
+   kayıt oluşur; aynı sayfadaki **Detay** ile bütün alanlar dolu görünür.
+3. **Kan grubu şifreli:** Detay → *Kişisel veriler* bölümünde kan grubu **etiketle**
+   görünür (`0 Rh+`). Veritabanında düz metin **değildir**:
+   `sql_demo "SELECT blood_type FROM hr.employee_personal_data WHERE employee_id='<id>'"`
+   → `gAAAAA…` ile başlar.
+4. **Yetki sınırı:** `finans.mudur@persopyro.test` (departman yöneticisi) aynı
+   çalışanın kişisel verisini görmez ve yazamaz (`403`); `personel@persopyro.test`
+   yalnız kendi kaydını görür.
+5. **Geçersiz değer:** kan grubu alanına elle geçersiz bir değer gönderilirse
+   (`{"blood_type":"XY"}`) sunucu **400** + "kapalı küme" mesajı verir (fail-closed).
+6. **Boşaltma:** kan grubu "(bilinmiyor)" seçilip kaydedilirse alan temizlenir
+   (`null`); diğer alanlar korunur.
 

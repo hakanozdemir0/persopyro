@@ -81,6 +81,15 @@
       .join("");
   }
 
+  // Kan grubu seçenekleri: K3 (sağlık) alanı — kapalı küme sunucudan gelir
+  // (`lookups.blood_types`); boş değer "bilinmiyor" demektir.
+  function kanGrubuSecenekler(secili = "") {
+    return [`<option value="">(bilinmiyor)</option>`]
+      .concat((LOOKUPS.data.blood_types || []).map((b) =>
+        `<option value="${esc(b.value)}"${b.value === secili ? " selected" : ""}>${esc(b.label)}</option>`))
+      .join("");
+  }
+
   // --- Panel ---------------------------------------------------------------
   async function yuklePanel() {
     const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/dashboard");
@@ -478,13 +487,18 @@
             <div><label>&nbsp;</label><button type="button" id="emp-pass-uret">Parola üret</button></div>
           </div>` : ""}
         ${LOOKUPS.meta.can_see_pii ? `
-        <h4>${LOOKUPS.meta.can_create_users ? "3" : "2"}) Kişisel veriler</h4>
-          <p class="muted small">Bu alanları yalnızca <code>employee.sensitive.read</code>
-            izni olan roller görür ve düzenler.</p>
+        <h4>${LOOKUPS.meta.can_create_users ? "3" : "2"}) Kişisel veriler
+          <span class="muted small">— K2/K3, yalnızca <code>employee.sensitive.read</code></span></h4>
+          <p class="muted small">Zorunlu olan yalnızca <strong>ad</strong> ve <strong>soyad</strong>dır;
+            diğer alanlar boş bırakılabilir (sonradan <em>Detay → Kişisel verileri güncelle</em> ile
+            tamamlanır).</p>
           <div class="row">
-            <div><label>Ad *</label><input id="emp-ad" placeholder="Ayşe"></div>
-            <div><label>Soyad *</label><input id="emp-soyad" placeholder="Demir"></div>
+            <div><label>Ad <span class="zorunlu">*</span></label><input id="emp-ad" placeholder="Ayşe"></div>
+            <div><label>Soyad <span class="zorunlu">*</span></label><input id="emp-soyad" placeholder="Demir"></div>
+            <div><label>Kimlik no (TCKN / uyruk no)</label><input id="emp-kimlik" placeholder="12345678901"></div>
             <div><label>Doğum tarihi</label><input id="emp-dogum" type="date"></div>
+            <div><label>Kan grubu <span class="muted small">(şifreli saklanır)</span></label>
+              <select id="emp-kan">${kanGrubuSecenekler()}</select></div>
             <div><label>Kişisel e-posta</label><input id="emp-pmail" placeholder="ayse@ornek.com"></div>
             <div><label>Kişisel telefon</label><input id="emp-ptel" placeholder="05xx xxx xx xx"></div>
             <div><label>Adres</label><input id="emp-adres" placeholder="İlçe / İl"></div>
@@ -496,7 +510,9 @@
             <div><label>İzin geçerlilik tarihi</label><input id="emp-izin-tarih" type="date"></div>
             <div><label>Banka</label><input id="emp-banka" placeholder="Örnek Bankası"></div>
             <div><label>IBAN</label><input id="emp-iban" placeholder="TR00 0000 0000 0000 0000 0000 00"></div>
-          </div>` : ""}
+          </div>
+          <p class="muted small">Kan grubu <strong>K3 (özel nitelikli: sağlık)</strong> verisidir;
+            veritabanında <strong>Fernet ile şifreli</strong> saklanır ve yalnız yetkili roller görür.</p>` : ""}
         <div class="form-alt"><button class="primary" id="emp-create">Çalışanı oluştur</button></div>
       </div>` : ""}`;
 
@@ -519,11 +535,14 @@
           govde.email = deger("emp-email");
           govde.password = document.getElementById("emp-pass").value;
         }
-        // Kişisel veriler (yalnız yetkisi olan gönderir).
+        // Kişisel veriler (yalnız yetkisi olan gönderir): K2 alanlarının tamamı
+        // + K3 (kan grubu) — kayıt formu bütün bilgileri tek adımda toplar.
         if (LOOKUPS.meta.can_see_pii) {
           Object.assign(govde, {
             first_name: deger("emp-ad"), last_name: deger("emp-soyad"),
+            national_id: deger("emp-kimlik"),
             birth_date: deger("emp-dogum") || null,
+            blood_type: deger("emp-kan"),
             personal_email: deger("emp-pmail"), personal_phone: deger("emp-ptel"),
             address: deger("emp-adres"),
             emergency_contact_phone: deger("emp-yakin-tel"),
@@ -610,6 +629,8 @@
             <tr><th>Oturma/çalışma izni</th><td>${esc(p.work_permit_type) || yok}
               ${p.work_permit_valid_until ? " · " + esc(p.work_permit_valid_until) + "'e kadar" : ""}</td></tr>
             <tr><th>Kimlik no</th><td>${esc(p.national_id) || yok}</td></tr>
+            <tr><th>Kan grubu <span class="muted small">(K3 · şifreli)</span></th>
+              <td>${p.blood_type_label ? esc(p.blood_type_label) : yok}</td></tr>
           </tbody></table></div>
           <button data-pii-guncelle="${esc(calisanId)}">Kişisel verileri güncelle</button>`
           : `<p class="muted">${esc(pm.mesaj)}</p>
@@ -623,6 +644,12 @@
     let yetkiBolumu = `<p class="muted">Rol/yetki bölümünü görmek için <code>role.manage</code> izni
       (şirket yöneticisi) gerekir.</p>`;
     if (c.yetki_gorunur) {
+      // DİKKAT (regresyon): hesabı bağlı olmayan çalışanda rol alanları boş döner;
+      // `|| []` olmadan `.map` çağrısı detay ekranını çökertiyordu.
+      const kaldirilanListe = c.revoked_assignments || [];
+      const istisnaListe = c.permission_overrides || [];
+      const atanabilirListe = c.assignable_roles || [];
+      const izinListe = c.effective_permissions || [];
       const rolSatirlari = c.roles.length
         ? c.roles.map((r) => `<tr>
             <td>${esc(r.name)} <div class="muted small"><code>${esc(r.code)}</code></div></td>
@@ -632,18 +659,18 @@
               : `<button class="danger" data-revoke="${esc(r.id)}">Rolü kaldır</button>`}</td>
           </tr>`).join("")
         : `<tr><td colspan="4" class="muted">Etkin rol ataması yok.</td></tr>`;
-      const kaldirilanlar = (c.revoked_assignments || []).length
+      const kaldirilanlar = kaldirilanListe.length
         ? `<h4>Kaldırılmış atamalar</h4><table><thead><tr><th>Rol</th><th>Kapsam</th><th>Kaldırılma</th><th></th></tr></thead><tbody>
-           ${c.revoked_assignments.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.scope_text)}</td>
+           ${kaldirilanListe.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.scope_text)}</td>
              <td>${tarih(r.deleted_at)}</td>
              <td><button data-restore="${esc(r.id)}">Geri al</button></td></tr>`).join("")}</tbody></table>`
         : "";
-      const istisnalar = (c.permission_overrides || []).length
+      const istisnalar = istisnaListe.length
         ? `<h4>İzin istisnaları (salt okunur)</h4><table><thead><tr><th>İzin</th><th>Etki</th><th>Gerekçe</th></tr></thead><tbody>
-           ${c.permission_overrides.map((i) => `<tr><td><code>${esc(i.permission)}</code> ${esc(i.permission_name)}</td>
+           ${istisnaListe.map((i) => `<tr><td><code>${esc(i.permission)}</code> ${esc(i.permission_name)}</td>
              <td>${esc(i.effect_label)}</td><td>${esc(i.reason)}</td></tr>`).join("")}</tbody></table>`
         : `<p class="muted">İzin istisnası (override) yok.</p>`;
-      const rolSecenekleri = c.assignable_roles.map((r) => r.atanabilir
+      const rolSecenekleri = atanabilirListe.map((r) => r.atanabilir
         ? `<option value="${esc(r.id)}" data-kapsam="${r.kapsam_gerekli ? "1" : "0"}">${esc(r.name)} — ${esc(r.scope_type_label)}</option>`
         : `<option value="${esc(r.id)}" disabled>${esc(r.name)} — atanamaz (${esc(r.gerekce)})</option>`).join("");
       yetkiBolumu = `
@@ -663,8 +690,8 @@
           <p class="muted small">Kapsam zorunluluğu role göre sunucuda dayatılır; kullanıcı kendi rolünü
             yükseltemez, sahip olmadığı yetkiyi dağıtamaz.</p>` : `<p class="muted">Bu çalışana bağlı kullanıcı hesabı yok.</p>`}
         ${kaldirilanlar}
-        <h4>Etkin izinler (${c.effective_permissions.length})</h4>
-        <p class="muted small">${c.effective_permissions.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>
+        <h4>Etkin izinler (${izinListe.length})</h4>
+        <p class="muted small">${izinListe.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>
         ${istisnalar}`;
     }
 
@@ -712,9 +739,12 @@
     document.getElementById("pii-form").innerHTML = `
       <h4>Kişisel verileri kaydet</h4>
       <div class="row">
-        <div><label>Ad *</label><input id="pii-ad" value="${esc(d.first_name || "")}"></div>
-        <div><label>Soyad *</label><input id="pii-soyad" value="${esc(d.last_name || "")}"></div>
+        <div><label>Ad <span class="zorunlu">*</span></label><input id="pii-ad" value="${esc(d.first_name || "")}"></div>
+        <div><label>Soyad <span class="zorunlu">*</span></label><input id="pii-soyad" value="${esc(d.last_name || "")}"></div>
+        <div><label>Kimlik no (TCKN / uyruk no)</label><input id="pii-kimlik" value="${esc(d.national_id || "")}"></div>
         <div><label>Doğum tarihi</label><input id="pii-dogum" type="date" value="${esc(d.birth_date || "")}"></div>
+        <div><label>Kan grubu <span class="muted small">(K3 — şifreli)</span></label>
+          <select id="pii-kan">${kanGrubuSecenekler(d.blood_type || "")}</select></div>
         <div><label>Kişisel e-posta</label><input id="pii-pmail" value="${esc(d.personal_email || "")}"></div>
         <div><label>Kişisel telefon</label><input id="pii-ptel" value="${esc(d.personal_phone || "")}"></div>
         <div><label>Adres</label><input id="pii-adres" value="${esc(d.address || "")}"></div>
@@ -727,8 +757,9 @@
         <div><label>IBAN</label><input id="pii-iban" value="${esc(d.iban || "")}" placeholder="TR00 0000 0000 0000 0000 0000 00"></div>
         <div><button class="primary" id="pii-kaydet">Kaydet</button></div>
       </div>
-      <p class="muted small">Kimlik numarası ve IBAN gizlilik gereği bu formda
-        düzenlenmez; kayıt denetim günlüğüne alan adlarıyla yazılır (değerler yazılmaz).</p>`;
+      <p class="muted small">Kan grubu <strong>K3 (özel nitelikli: sağlık)</strong> verisidir ve
+        veritabanında <strong>şifreli</strong> saklanır; diğer alanlar K2 (kişisel veri).
+        Kayıt denetim günlüğüne yalnızca <strong>alan adları</strong> yazılır — değerler yazılmaz.</p>`;
     document.getElementById("pii-kaydet").addEventListener("click", async () => {
       const al = (id) => document.getElementById(id).value.trim();
       try {
@@ -736,7 +767,9 @@
           method: "POST",
           body: {
             first_name: al("pii-ad"), last_name: al("pii-soyad"),
+            national_id: al("pii-kimlik"),
             birth_date: al("pii-dogum") || null,
+            blood_type: al("pii-kan"),
             personal_email: al("pii-pmail"), personal_phone: al("pii-ptel"),
             address: al("pii-adres"),
             emergency_contact_phone: al("pii-yakin-tel"),

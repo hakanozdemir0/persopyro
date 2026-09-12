@@ -20,6 +20,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from django.db import connection
 from django.utils import timezone
 
 from apps.audit.models import AuditLog
@@ -2179,3 +2180,236 @@ def test_ui_kisisel_veri_banka_bilgisi(client, tenant_a, user_a) -> None:  # noq
         )
         assert "Örnek Bankası" not in str(kayit.changes)
         assert "iban" in kayit.changes["alanlar"]
+
+
+# =============================================================================
+# Bildirim (8. tur): çalışan kaydı bütün bilgileri ister — kan grubu (K3) dahil
+# =============================================================================
+
+
+def test_ui_kayit_formu_tum_kisisel_verileri_ister(client, tenant_a, user_a) -> None:
+    """Yeni çalışan formu K2 alanlarının tamamını + kan grubunu (K3) sorar."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    sayfa = client.get("/test-ui/").content.decode()
+    for alan_id in (
+        "emp-ad",
+        "emp-soyad",
+        "emp-kimlik",
+        "emp-dogum",
+        "emp-kan",
+        "emp-pmail",
+        "emp-ptel",
+        "emp-adres",
+        "emp-yakin-tel",
+        "emp-yakin-derece",
+        "emp-uyruk",
+        "emp-izin",
+        "emp-izin-tarih",
+        "emp-banka",
+        "emp-iban",
+    ):
+        assert f'id="{alan_id}"' in sayfa, alan_id
+    # Kan grubu kapalı kümesi sunucudan gelir (tek kaynak: model BloodType).
+    kan = client.get("/test-ui/api/lookups").json()["data"]["blood_types"]
+    assert [b["value"] for b in kan] == ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"]
+    assert {b["label"] for b in kan} >= {"0 Rh+", "AB Rh-"}
+
+
+def test_ui_kayit_formu_bilgileri_tek_adimda_yazar(client, tenant_a, user_a) -> None:
+    """Formun gönderdiği tam gövde: çalışan + bütün kişisel veri tek istekte yazılır."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    yanit = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "MUH-9",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "position_id": None,
+            "hire_date": "2026-01-05",
+            "manager_employee_id": str(lot["yonetici"].pk),
+            "first_name": "Ayşe",
+            "last_name": "Demir",
+            "national_id": "12345678901",
+            "birth_date": "1992-04-03",
+            "blood_type": "0+",
+            "personal_email": "ayse@ornek.test",
+            "personal_phone": "05551234567",
+            "address": "Kadıköy / İstanbul",
+            "emergency_contact_phone": "05559876543",
+            "emergency_contact_relation": "Eş",
+            "citizenship": "TR",
+            "work_permit_type": "",
+            "work_permit_valid_until": None,
+            "bank_name": "Örnek Bankası",
+            "iban": "TR33 0006 1005 1978 6457 8413 26",
+        },
+    )
+    assert yanit.status_code == 201, yanit.content
+    yeni_id = yanit.json()["data"]["id"]
+    veri = client.get(f"/test-ui/api/employees/{yeni_id}/personal").json()["data"]
+    assert veri["first_name"] == "Ayşe"
+    assert veri["national_id"] == "12345678901"
+    assert veri["blood_type"] == "0+"
+    assert veri["blood_type_label"] == "0 Rh+"
+    assert veri["address"] == "Kadıköy / İstanbul"
+    assert veri["iban"].startswith("TR33")
+
+
+def test_ui_kan_grubu_sifreli_saklanir_ve_denetlenir(client, tenant_a, user_a) -> None:
+    """Kan grubu (K3) veritabanında şifreli durur; denetimde yalnız alan adı yazılır."""
+    lot = kadro(tenant_a, user_a)
+    personel_id = str(lot["personel"].pk)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    kaydet = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {"first_name": "Ayşe", "last_name": "Demir", "blood_type": "AB-"},
+    )
+    assert kaydet.status_code == 200, kaydet.content
+    assert kaydet.json()["data"]["blood_type"] == "AB-"
+    assert kaydet.json()["data"]["blood_type_label"] == "AB Rh-"
+
+    # Veritabanı: şifreli kolon düz metin taşımaz (Fernet).
+    with tenant_context(tenant_a.id), connection.cursor() as cur:
+        cur.execute(
+            "SELECT blood_type FROM hr.employee_personal_data WHERE employee_id = %s",
+            [personel_id],
+        )
+        ham = cur.fetchone()[0]
+    assert ham is not None
+    # Fernet jetonu (sürüm ön eki `gAAAAA`) — düz metin değil. Kısa değerlerde
+    # şifreli metin tesadüfen aynı harfleri içerebilir; bu yüzden ön ek ölçülür.
+    assert ham.startswith("gAAAAA")
+    assert ham != "AB-"
+
+    # Denetim: değer değil, K3 alan adı yazılır.
+    with tenant_context(tenant_a.id):
+        kayit = (
+            AuditLog.objects.filter(action="employee.personal_data.update").first()
+            or AuditLog.objects.filter(action="employee.personal_data.create").first()
+        )
+        assert kayit.changes["k3_alanlar"] == ["blood_type"]
+        assert "AB-" not in str(kayit.changes)
+
+
+def test_ui_kan_grubu_gecersiz_ve_yetkisiz_reddedilir(client, tenant_a, user_a) -> None:
+    """Kan grubu kapalı kümeden olmalı; yetkisiz kullanıcı yazamaz (fail-closed)."""
+    lot = kadro(tenant_a, user_a)
+    personel_id = str(lot["personel"].pk)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+
+    kotu = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {"first_name": "A", "last_name": "B", "blood_type": "XX"},
+    )
+    assert kotu.status_code == 400
+    assert "kan grubu" in kotu.json()["error"]["message"].lower()
+
+    # Boş değer = "bilinmiyor": alan temizlenebilir.
+    temizle = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {"first_name": "A", "last_name": "B", "blood_type": "0+"},
+    )
+    assert temizle.status_code == 200
+    bos = _post(client, f"/test-ui/api/employees/{personel_id}/personal", {"blood_type": ""})
+    assert bos.status_code == 200
+    assert bos.json()["data"]["blood_type"] is None
+
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    # Departman yöneticisinde `employee.sensitive.read` yok → 403 ve yazılmaz.
+    assert _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE).status_code == 200
+    yasak = _post(
+        client,
+        f"/test-ui/api/employees/{personel_id}/personal",
+        {"first_name": "Olmaz", "last_name": "Olmaz", "blood_type": "A+"},
+    )
+    assert yasak.status_code == 403
+    with tenant_context(tenant_a.id), connection.cursor() as cur:
+        cur.execute(
+            "SELECT blood_type FROM hr.employee_personal_data WHERE employee_id = %s",
+            [personel_id],
+        )
+        assert cur.fetchone()[0] is None
+
+
+def test_ui_kullanicisiz_calisan_lookups_ve_listeyi_kirmaz(client, tenant_a, user_a) -> None:
+    """
+    (regresyon) Hesabı bağlı OLMAYAN çalışan `/lookups` ucunu kırmamalı.
+
+    Bildirilen hata: yönetici seçimi için üretilen çalışan etiketi doğrudan
+    `employee.user.first_name` okuyordu; `user_id` NULL olan bir çalışan
+    oluşturulduğunda `/test-ui/api/lookups` `AttributeError` ile 500 döndü ve
+    panel/çalışanlar sekmeleri **boş** kaldı (arayüzün tamamı lookups'a bağlı).
+    """
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+
+    # Hesabı bağlı olmayan çalışan (kullanıcı alanı boş) — kayıt ucu bunu destekler.
+    yeni = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "KONTROL-1",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": "2026-03-01",
+            "first_name": "Hesapsız",
+            "last_name": "Çalışan",
+        },
+    )
+    assert yeni.status_code == 201, yeni.content
+    assert yeni.json()["data"]["user_email"] is None
+
+    # 1) lookups 200 ve etiket çalışan numarasına düşer (ad/e-posta yok).
+    yanit = client.get("/test-ui/api/lookups")
+    assert yanit.status_code == 200, yanit.content
+    etiketler = {e["employee_no"]: e["label"] for e in yanit.json()["data"]["employees"]}
+    assert etiketler["KONTROL-1"] == "KONTROL-1"
+    # Hesabı olan çalışanın etiketi ad-soyad'dır.
+    beklenen = (
+        f"{lot['yonetici_user'].first_name} {lot['yonetici_user'].last_name}".strip()
+    )
+    assert etiketler["FIN-M1"] == beklenen
+
+    # 2) Çalışan listesi ve panel de çalışmaya devam eder.
+    assert client.get("/test-ui/api/employees").status_code == 200
+    assert client.get("/test-ui/api/dashboard").status_code == 200
+
+
+def test_ui_kullanicisiz_calisan_detayi_bos_listelerle_doner(client, tenant_a, user_a) -> None:
+    """
+    (regresyon) Hesabı bağlı olmayan çalışanın detayı **200** döner ve rol
+    alanları **boş liste** olarak gelir (arayüz `yetki_gorunur` true iken
+    `.map` çağırıp çöktüğü için şekil sözleşmesi sabit tutulur).
+    """
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    yeni = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "KONTROL-2",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": "2026-03-01",
+            "first_name": "Hesapsız",
+            "last_name": "İkinci",
+        },
+    )
+    assert yeni.status_code == 201
+    yeni_id = yeni.json()["data"]["id"]
+
+    yanit = client.get(f"/test-ui/api/employees/{yeni_id}")
+    assert yanit.status_code == 200, yanit.content
+    veri = yanit.json()["data"]
+    # Şirket yöneticisi rol bölümünü görür ama alanlar boş listedir (çökme yok).
+    assert veri["yetki_gorunur"] is True
+    assert veri["user_email"] is None
+    assert veri["roles"] == []
+    assert veri["revoked_assignments"] == []
+    assert veri["permission_overrides"] == []
+    assert veri["effective_permissions"] == []
+    assert veri["assignable_roles"] == []

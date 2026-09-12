@@ -3,6 +3,93 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.32.0] — 2026-09-12 — Çalışan kaydı bütün bilgileri ister: **kan grubu** (K3, şifreli) dahil
+
+**Baseline (son commit `911bb42`):** çalışma ağacı temiz, tam test suite **444 passed**.
+Kullanıcı bildirimi: *"çalışanların kayıt esnasında bütün bilgilerini iste, kan grubu dahil"*.
+
+### Veri modeli
+
+- `hr.employee_personal_data.blood_type` eklendi (migration **0012**, eklemeli ve
+  `nullable`): `EncryptedCharField` — **K3 (özel nitelikli: sağlık)** sayıldığı için
+  **Fernet ile şifreli**. Kapalı küme (`BloodType`): `A+/A-/B+/B-/AB+/AB-/0+/0-`
+  (Türkiye yazımı: `0` = O); boş değer "bilinmiyor"dur.
+- Mevcut kolonlar, kısıtlar, RLS politikaları, yetkiler ve K3 şifreleme altyapısı
+  **değişmedi**; uygulanmış migration'lar elle düzenlenmedi.
+
+### Arayüz (kayıt formu)
+
+- **Yeni çalışan** formunun "Kişisel veriler" bölümü artık **bütün alanları** sorar:
+  ad, soyad, **kimlik no (TCKN/uyruk no)**, doğum tarihi, **kan grubu**, kişisel
+  e-posta/telefon, adres, yakın kişi telefonu + yakınlık derecesi, vatandaşlık,
+  oturma/çalışma izni + geçerlilik, banka, IBAN. Zorunlu olan yalnız **ad/soyad**
+  olarak işaretlendi; kayıt **tek istekte** hem çalışanı hem kişisel veriyi yazar.
+- **Kan grubu** açılır listesi sunucudan gelir (`/test-ui/api/lookups →
+  blood_types`; tek kaynak model `BloodType`) — arayüzde sabit liste tutulmaz.
+- Kişisel veri güncelleme formunda da kimlik no + kan grubu vardır; eskimiş
+  "kimlik numarası bu formda düzenlenmez" notu gerçek davranışla değiştirildi.
+- Çalışan detayında kan grubu **etiketle** gösterilir (`0 Rh+`) ve alanın K3/şifreli
+  olduğu belirtilir.
+
+### Yetki ve güvenlik
+
+- Okuma **ve** yazma aynı kapıdan: `employee.sensitive.read` ∧ organizasyon kapsamı
+  (OD5 §5.7). İzinsiz okuma/yazma `403`, kapsam dışı `404` — davranış değişmedi.
+- Kan grubu **kapalı küme** doğrulaması servis katmanında (şifreli kolonda DB
+  `CHECK` yazılamaz): geçersiz değer `400`. Bilinmeyen yeni bir K3 alanı yazılmaya
+  çalışılırsa istek **fail-closed** reddedilir.
+- Denetim kaydı: değer yazılmaz; K2 alanları `alanlar`, K3 alanları `k3_alanlar`
+  anahtarıyla (ör. `["blood_type"]`) kaydedilir — sınıf farkı denetimde görünür.
+- Şifreli alan okunamazsa (anahtar değişmiş/bozuk satır) yanıt 500'e düşmez; alan
+  "bilinmiyor" (`null`) döner, yazma yolu fail-closed kalır.
+- **OD31 açıldı:** kan grubunun sınıfı (K3 mi K2 mi) ve K3 alanların arayüzden
+  toplanması kararı ürün/uyum sahibine bırakıldı; uygulanan seçenek (A) — K3/şifreli
+  ve arayüzde K2 kapısıyla toplanır — olarak kaydedildi. **Güvenlik açığı değildir**,
+  iki uçta da fail-closed'dur.
+
+### Hata düzeltmeleri (canlı doğrulamada bulundu — hesabı bağlı olmayan çalışan)
+
+- **`/test-ui/api/lookups` 500:** yönetici seçimi için üretilen etiket doğrudan
+  `employee.user.first_name` okuyordu; `user_id` NULL olan bir çalışan oluşturulunca
+  `AttributeError` fırlıyor ve **arayüzün tamamı** (panel, çalışanlar) boş kalıyordu.
+  Etiket artık tek yerde ve güvenli sırayla üretilir (`_calisan_etiketi()`:
+  ad-soyad → e-posta → çalışan no).
+- **Çalışan detayı açılmıyordu:** `yetki_gorunur` true iken rol alanları
+  (`revoked_assignments`, `permission_overrides`, `effective_permissions`,
+  `assignable_roles`) yalnız kullanıcısı bağlı çalışanda dönüyordu; arayüz `.map`
+  çağırıp çöküyordu. Bu alanlar artık **her yanıtta** boş liste olarak döner (şekil
+  sözleşmesi, `is_self` ile aynı ilke) ve arayüz `|| []` ile savunmalıdır.
+- İki hata da **canlı tarayıcı doğrulamasında** yakalandı (arayüzden hesapsız çalışan
+  oluşturulunca panel boş kaldı); düzeltmeler 2 regresyon testiyle kilitlendi.
+
+### Demo verisi
+
+- Demo çalışanlara kan grubu yazıldı (`DEMO-001` `A+`, `DEMO-002` `0+`, `DEMO-003`
+  `AB-`) — kurgusal kişiler; idempotenttir. Kimlik no/IBAN gibi gerçek hayatta
+  anlamlı alanlar **bilinçli olarak boş** bırakılmaya devam eder.
+
+### Doğrulama
+
+- Tam test suite: **444 → 450 passed** (6 yeni regresyon testi: form bütün alanları
+  sorar, kayıt tek istekte yazar, kan grubu **veritabanında şifreli** + denetimde
+  yalnız alan adı, geçersiz değer `400` / yetkisiz `403` / boşaltma `null`,
+  kullanıcısız çalışanda `/lookups` kırılmaz, kullanıcısız çalışanın detayı boş
+  listelerle `200` döner).
+- `verify_fresh_install.sh` yeni adım **6c-8** (sıfırdan kurulum): form alanları
+  (`emp-kan`, `emp-kimlik`, `emp-iban`) sunucudan gelir; çalışan + bütün kişisel veri
+  tek istekte oluşturulur; kan grubu kod + etiket olarak okunur; **ham kolon
+  `gAAAAA…` (şifreli, düz metin değil)**; geçersiz değer `400`.
+- Canlı tarayıcı: kayıt formunda kimlik no + kan grubu alanları görünür, kayıt
+  sonrası detayda kan grubu etiketi okunur; `node --check` ile gömülü betik denetlendi.
+
+### Kapsam dışı (bilinçli)
+
+- Diğer K3 alanları (`health_notes`, `disability_status`, `biometric_ref`) hâlâ
+  **arayüzden** toplanmaz/yazılmaz (özel nitelikli; operasyonel gereksinim yok).
+- K3 için ayrı izin kodu ve "onaylı süreli erişim" akışı bu turda **eklenmedi**
+  (OD30/OD31 açık; katalog değişikliği ayrı tur ister).
+- Kan grubu üzerinden **arama/filtreleme yok** (şifreli kolon; tasarım gereği).
+
 ## [0.31.0] — 2026-09-12 — Test arayüzü: görsel iyileştirme turu (tasarım belirteçleri, tablolar, boş durumlar, iki hata düzeltmesi)
 
 **Baseline (son commit `0fb2c49`):** çalışma ağacı temiz, tam test suite **444 passed**.

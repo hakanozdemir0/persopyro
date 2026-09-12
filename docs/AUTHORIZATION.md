@@ -638,7 +638,7 @@ adımları kayıtlı gerekçeyle atlar ve denetim kaydı yazar.
 | **K0 — İş verisi, kişisel değil** | departman adı, unvan, vardiya kodu | açık | izin yeterli |
 | **K1 — Kimlik (kurumsal)** | genel kullanıcı kimliği, iş e-postası | açık (kiracı içi) | izin yeterli |
 | **K2 — Kişisel veri** | ad-soyad, özel e-posta, telefon, adres, doğum tarihi, TCKN | **maskeli** | `*.personal_data.read` + gerekçe |
-| **K3 — Özel nitelikli (hassas)** | sağlık raporu, engellilik, biyometrik, din, sendika, ceza kaydı | **gizli** | `employee.sensitive.read` + onaylı süreli erişim |
+| **K3 — Özel nitelikli (hassas)** | sağlık raporu, **kan grubu**, engellilik, biyometrik, din, sendika, ceza kaydı | **gizli** | `employee.sensitive.read` + onaylı süreli erişim |
 | **K4 — Evrak içeriği** | kimlik fotokopisi, sözleşme, sağlık raporu dosyası | **gizli** | evrak politikası + `document.personal_data.read` |
 
 Maskeleme örnekleri: `Ayşe Yılmaz` → `A*** Y***`, `ayse@ornek.com` →
@@ -697,6 +697,11 @@ Kurallar:
 - Özel nitelikli alanlar (K3) veritabanında **şifreli** saklanır 🔜; anahtar
   uygulamadan ayrı yönetilir (mevcut Fernet altyapısı ✅ TOTP sırrı için bunu
   zaten yapıyor).
+  **Uygulandı ✅:** `employee_personal_data` içinde `health_notes`,
+  `disability_status`, `biometric_ref` ve **`blood_type`** (kan grubu — sağlık
+  verisi; migration 0012) Fernet ile şifreli tutulur. Şifreli kolonlar `text`'tir;
+  değer üzerinden **arama/eşitlik yapılamaz** (bilinçli). Kan grubunun hangi
+  sınıfa girdiği ve arayüzden toplanması **OD31**'de açıktır.
 - Denetim kayıtları kişisel verinin **değerini** taşımaz; yalnızca alan adı ve
   "görüntülendi/değişti" bilgisini taşır ✅.
 - Log ve hata mesajlarına kişisel veri yazılmaz (`docs/SECURITY.md` bölüm 8).
@@ -1979,7 +1984,7 @@ karar gereği v1'de yok.
 - Denetim kaydı: append-only, kişisel veri değeri taşımaz, platform erişimleri
   dahil; zincirleme ve saklama kararları OD13'te.
 - **Karar durumu:** **OD1–OD5, OD19–OD28 KAPATILDI** (2026-09-11).
-  Açık: **15 karar** (OD6–OD18 + **OD29**, **OD30** — `leave.balance.manage` rol ataması). **Engelleyici açık karar yoktur**; **OD5
+  Açık: **16 karar** (OD6–OD18 + **OD29**, **OD30**, **OD31** — `leave.balance.manage` rol ataması). **Engelleyici açık karar yoktur**; **OD5
   (departman yöneticisi kapsamı) 2026-09-11'de KAPATILDI** → organizasyon modülü
   (M7–M13) önündeki kapsam belirsizliği kalktı: `dept_manager` kapsamı **`UNIT`**
   (atandığı birim + alt ağaç), kapsam kaynağı `user_roles.scope_org_unit_id`,
@@ -2036,3 +2041,37 @@ izinsiz kullanıcı hem okuma hem yazmada `403` alır (fail-closed).
 **Karar sahibi:** ürün sahibi. **Not:** seçilen seçenek rol izin sayılarını değiştirir;
 `docs/AUTHORIZATION.md` §6.2 matrisi ve `scripts/verify_fresh_install.sh` beklentileri
 **birlikte** güncellenmelidir — bu yüzden bu turda kod değiştirilmedi.
+
+### OD31 — Kan grubu hangi veri sınıfına girer ve arayüzden toplanmalı mı? — **AÇIK** ⏳ (2026-09-12)
+
+**Bağlam:** Kullanıcı bildirimi: *"çalışanların kayıt esnasında bütün bilgilerini iste,
+kan grubu dahil"*. Kan grubu `hr.employee_personal_data` tablosuna eklendi (migration
+**0012**) ve **K3 (özel nitelikli — sağlık)** sayılarak `EncryptedCharField` ile
+**şifreli** saklanıyor (kapalı küme: A+/A-/B+/B-/AB+/AB-/0+/0-). Test arayüzü alanı
+**K2 ile aynı kapıdan** (`employee.sensitive.read` ∧ organizasyon kapsamı) okur/yazar,
+çünkü katalogda K3 için ayrı izin kodu yoktur (bkz. **OD30**).
+
+**Neden açık:** İki karar birbirine bağlı ve ürün/uyum sahibine ait:
+  (1) kan grubu **K3 (sağlık)** mı, yoksa şifreleme gerektirmeyen **K2** mi sayılacak;
+  (2) K3 alanlar **kayıt formunda** toplanmalı mı, yoksa yalnız açık izinle/işe giriş
+  evrakı üzerinden mi alınmalı (belge bölümü 7.3'teki "onaylı süreli erişim" kuralı
+  arayüzden toplamayı şu an kapsamıyor).
+
+**Güvenlik açığı değildir:** her iki uçta da ölçüm fail-closed'dur (izinsiz okuma/yazma
+`403`, geçersiz değer `400`) ve değer veritabanında düz metin durmaz.
+
+**Seçenekler:**
+  * **(A)** (uygulanan) Kan grubu **K3/şifreli** kalır ve arayüzde K2 kapısıyla toplanır;
+    ayrı K3 izni + süreli erişim M-evrak/OD30 turunda eklenir.
+  * **(B)** Kan grubu **K2** sayılır (şifreleme kaldırılır, maskeleme yeterli) —
+    kolon tipi `varchar` olur, yeni migration gerekir.
+  * **(C)** Kan grubu **K3/şifreli** kalır ama arayüzden **hiç toplanmaz**; yalnız
+    onaylı süreli erişim akışı (bölüm 7.3) ile girilir/görüntülenir.
+  * **(D)** Kan grubu kayıt formunda **isteğe bağlı** kalır ama alan K3 olarak işaretlenir
+    ve görüntüleme yalnız `employee.sensitive.read` + kapsam ile yapılır (bugünkü hâl,
+    karar kaydı olarak kabul).
+
+**Karar sahibi:** ürün sahibi. **Not:** seçenek (B) veya (C) seçilirse migration,
+`apps/testui/api.py` (`K3_ALANLARI`, `_pii_yaz` doğrulaması), `docs/DATABASE.md`
+kolon listesi ve `scripts/verify_fresh_install.sh` adım **6c-8** beklentileri
+**birlikte** güncellenir.

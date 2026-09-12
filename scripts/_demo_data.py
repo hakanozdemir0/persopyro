@@ -76,6 +76,9 @@ with tenant_context(TENANT_ID):
     # --- Organizasyon ve çalışan verisi (M10–M13) -----------------------------
     # NOT: Yalnızca **sahte/kişisel olmayan** demo verisi yazılır; kimlik numarası,
     # IBAN gibi gerçek hayatta anlamlı alanlar bilinçli olarak BOŞ bırakılır.
+    # İstisna: **kan grubu** (K3, şifreli) demo değeri yazılır — kurgusal kişiler
+    # için olduğundan risk taşımaz ve arayüzün K3 alanını gerçekten şifreli
+    # saklayıp gösterebildiğini görmeyi sağlar (rapor/elle test).
     from datetime import date
 
     from apps.organization.models import (
@@ -106,22 +109,30 @@ with tenant_context(TENANT_ID):
         tenant=kiracı, code="YON-1", defaults={"name": "Yönetici", "level": "senior"}
     )
 
-    def _calisan(no, birim, pozisyon, ad, soyad):  # noqa: ANN001
-        kisi, olustu = Employee.objects.get_or_create(
+    def _calisan(no, birim, pozisyon, ad, soyad, kan_grubu=None):  # noqa: ANN001
+        kisi, _ = Employee.objects.get_or_create(
             tenant=kiracı,
             employee_no=no,
             defaults={"department": birim, "position": pozisyon, "hire_date": date(2024, 1, 15)},
         )
-        if olustu:
-            EmployeePersonalData.objects.get_or_create(
-                employee=kisi,
-                defaults={"tenant": kiracı, "first_name": ad, "last_name": soyad},
-            )
+        veri, _ = EmployeePersonalData.objects.get_or_create(
+            employee=kisi,
+            defaults={"tenant": kiracı, "first_name": ad, "last_name": soyad},
+        )
+        # Kan grubu (K3, Fernet şifreli) — idempotent güncelleme; var olan demo
+        # veritabanında da görünür olsun (tekrar çalıştırılabilir).
+        if kan_grubu and veri.blood_type != kan_grubu:
+            veri.blood_type = kan_grubu
+            veri.save(update_fields=["blood_type", "updated_at"])
         return kisi
 
-    finans_muduru = _calisan("DEMO-001", finans, mudur, "Demo", "Yönetici")
-    muhasebe_calisani = _calisan("DEMO-002", muhasebe, uzman, "Demo", "Muhasebe")
-    ik_calisani = _calisan("DEMO-003", insan_kaynaklari, uzman, "Demo", "İnsanKaynakları")
+    finans_muduru = _calisan("DEMO-001", finans, mudur, "Demo", "Yönetici", kan_grubu="A+")
+    muhasebe_calisani = _calisan(
+        "DEMO-002", muhasebe, uzman, "Demo", "Muhasebe", kan_grubu="0+"
+    )
+    ik_calisani = _calisan(
+        "DEMO-003", insan_kaynaklari, uzman, "Demo", "İnsanKaynakları", kan_grubu="AB-"
+    )
     EmployeeManager.objects.get_or_create(
         tenant=kiracı,
         employee=muhasebe_calisani,

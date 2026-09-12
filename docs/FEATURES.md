@@ -261,8 +261,13 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   açılabilir" ve "onaydan sonra iade" anahtarlarını yönetir; kapalıyken aşırı talep
   `409` ile reddedilir, açıkken talep açılır ve kararı onaylayan verir.
 - **Yeni çalışan:** *Bağlı olduğu yönetici* seçilir (onay akışının ilk adımı bu ilişkiye
-  göre kurulur); kişisel veri bölümünde ad/soyad, doğum tarihi, adres, yakın kişi,
-  vatandaşlık, oturma/çalışma izni ve **Banka + IBAN** sorulur.
+  göre kurulur); kişisel veri bölümü **bütün alanları** sorar: ad, soyad, **kimlik no**,
+  doğum tarihi, **kan grubu**, kişisel e-posta/telefon, adres, yakın kişi + yakınlık,
+  vatandaşlık, oturma/çalışma izni ve **Banka + IBAN**. Zorunlu olan yalnız ad/soyaddır;
+  kayıt tek istekte hem çalışanı hem kişisel veriyi oluşturur.
+- **Kan grubu (K3):** kapalı kümeden seçilir (A+/A-/B+/B-/AB+/AB-/0+/0-, boş =
+  bilinmiyor), veritabanında **Fernet ile şifreli** saklanır; kanıt: adım **6c-8**
+  ham kolonun düz metin olmadığını ölçer. Sınıflandırma kararı **OD31**'de açıktır.
 - **Tarih biçimi:** tüm gösterimler **gg.aa.yyyy**.
 - **Self-elevation yasakları arayüzden bağımsız korunur:** kullanıcı kendi rolünü
   atayamaz/yükseltemez, sahip olmadığı yetkiyi dağıtamaz, `role.manage` yoksa
@@ -272,10 +277,10 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   kendi kayıtlarını, yönetici alt ağacındakileri görür).
 - **Görünürlük sınırları (test arayüzünde de geçerli):** rol kataloğu/yetki ekranı
   yalnızca `role.read` + düzenleme yalnızca `role.manage` (şirket yöneticisi);
-  `employee` kapsamlı kullanıcı **şirket dizinini** (çalışan no, genel kullanıcı
-  kimliği, unvan, birim — ad/e-posta yok) ve **organizasyon şemasını** görür, ancak
-  başkalarının izin/bakiye detaylarını görmez; yaklaşan izinler ve onay kuyruğu
-  yalnız kapsam/yetki dahilinde listelenir.
+  `employee` kapsamlı kullanıcı çalışan listesinde ve detayda **yalnız kendi kaydını**
+  görür (başka çalışanın kaydı/numarası dönmez, kapsam dışı detay `404`) ve
+  **organizasyon şemasını** görür; başkalarının izin/bakiye detaylarını görmez.
+  Yaklaşan izinler ve onay kuyruğu yalnız kapsam/yetki dahilinde listelenir.
 - **Departman düzenleme:** yetkili kullanıcı birimin adını ve kodunu değiştirebilir
   (denetimli `org.unit.update`); taşıma ayrı işlemdir, kapsam/ağaç bozulmaz.
 - **Yetki Yönetimi sekmesi (rol izin düzenleme):** şirket yöneticisi (`role.manage`)
