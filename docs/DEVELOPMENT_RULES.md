@@ -122,6 +122,16 @@ DEMO_PASSWORD="Demo-Parola-1234" .venv/bin/python manage.py shell < scripts/_dem
 Avantaj: şema hazırsa (`bash scripts/migrate.sh`) ek kurulum gerekmez. Demo verisi
 idempotenttir; betik tekrar çalıştırılabilir.
 
+**DİKKAT — şablon önbelleği:** Django şablon yükleyicisi bu sürümde **her zaman**
+`cached.Loader` ile sarmalanır; `runserver` otomatik yeniden yükleme yapmadığında
+(`--noreload`) şablon (`*.html`) değişiklikleri **sunucu yeniden başlatılmadan
+görünmez**. Belirti: düzeltilmiş şablon yerine eski sürüm servis edilir (ör. panel
+boş kalır). Kural: her `.html` değişikliğinden sonra sunucuyu durdurup yeniden
+başlatın. Gömülü betiği denetlemek için: sayfayı alıp `<script>` içeriğini çıkarın
+ve `node --check <dosya>.js` çalıştırın (`verify_fresh_install.sh` adım **6c-7**
+bunu otomatik yapar; `node` yoksa atlanır).
+
+
 ### URL
 
 `http://127.0.0.1:8000/test-ui/login/` (panel: `/test-ui/`)
@@ -246,3 +256,20 @@ Impersonation **yok** (kullanıcı değiştirmek için çıkış + giriş). Üre
 tema/tasarım sistemi ve JS çerçevesi bu kapsamda değildir. Rol izinlerinin
 düzenlenmesi **vardır** ama kararı arayüz vermez: yetki kararı servis katmanında
 (`apps/rbac/services/roles.py`) verilir, arayüz yalnızca bunu yansıtır.
+
+### Elle denenecek yeni akışlar (bildirim 7. tur — görsel iyileştirme)
+
+1. **Genel görünüm:** üst bar kaydırmada sabit ve yarı saydam; seçili sekme dolu
+   mavi; kart başlıkları sayı rozetiyle (`Çalışanlar · 3 kayıt`).
+2. **Form alanları:** etiketler koyu ve yarı kalın, odaklanan alan mavi çerçeve +
+   halka; alanlar ekran genişliğine göre 2-4 sütuna yayılır.
+3. **Tablolar:** başlık satırı açık gri ve büyük harf; satır üzerine gelince hafif
+   vurgu; geniş tablolar kart içinde **yatay kayar** (sayfa taşmaz).
+4. **Durumlar:** `pill` etiketleri (onaylandı/bekliyor/reddedildi) renkli; işlem
+   sonucu mesajı sol kenarlı ve renkli; modal açılışta hafif animasyonlu.
+5. **Çalışanlar → Çalışan listesi:** kayıt yoksa kesikli çerçeveli boş durum
+   metni; kapsamı SELF olan kullanıcıda açıklama "yalnız kendi kaydınız" der
+   (önceki sürümde eski alan adı okunduğu için yanlış metin görünüyordu).
+6. **Çalışan detayı:** kişisel veriler tablosu etiket/değer düzeninde; IBAN satırı
+   **bir kez** görünür (önceki sürümde iki kez basılıyordu).
+

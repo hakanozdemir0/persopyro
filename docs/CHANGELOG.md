@@ -3,6 +3,76 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.31.0] — 2026-09-12 — Test arayüzü: görsel iyileştirme turu (tasarım belirteçleri, tablolar, boş durumlar, iki hata düzeltmesi)
+
+**Baseline (son commit `0fb2c49`):** çalışma ağacı temiz, tam test suite **444 passed**.
+Kapsam: yalnızca geliştirme amaçlı manuel test arayüzü (`/test-ui/`) — **gömülü
+CSS/JS**, yeni bağımlılık veya frontend zinciri **yok**. Backend, veri modeli,
+yetki kararları ve API sözleşmesi **değişmedi**.
+
+Kullanıcı bildirimi: *"persopyro projesine görsel olarak iyileştirmeler yap"*.
+
+### Tasarım dili (base.html)
+
+- Renk/ölçü/gölge **tasarım belirteçleri** (`:root`): tek yerden yönetilen palet,
+  yarıçap ölçeği, üç gölge seviyesi, odak halkası, monospace değişkeni.
+- Tipografi: başlık hiyerarşisi (`h1`–`h4`), `h3` = büyük harf etiket, `h4` = alt
+  çizgili bölüm başlığı; gövde satır yüksekliği ve harf aralığı düzeltildi.
+- Üst bar: yarı saydam + bulanık zemin, marka için kare logo bloğu (`P`), yumuşak
+  alt gölge; sekmeler **dolu mavi** seçili durum ve dar ekranda yatay kaydırma.
+- Formlar: etiketler yarı kalın ve koyu; alanlar `grid auto-fit` ile 2-4 sütun;
+  odakta mavi çerçeve + halka; `.form-alt` ile düğme satırı ayraçlı.
+- Düğmeler: `primary` (dolu mavi), `danger` (kırmızı çerçeve), `ghost`, `kucuk`;
+  hover/active/focus-visible durumları ve gölge geçişleri.
+- Tablolar: açık gri büyük harf başlık, satır hover vurgusu, `.sayi` ile hizalı
+  sayılar, `.tablo-kaydir` ile **kart içinde yatay kaydırma** (geniş izin türü ve
+  çalışan tabloları sayfayı taşırmıyor).
+- Durum bileşenleri: `pill` renkleri (onaylandı/bekliyor/reddedildi), sol kenarlı
+  renkli mesaj şeridi, modal giriş animasyonu, `.bos` kesikli **boş durum** kutusu,
+  `.liste-satir` onay satırı düzeni, `.ipucu` bilgi şeridi, `.kv` etiket/değer
+  tablosu, `.rozet` sayaç etiketi; `prefers-reduced-motion` ve dar ekran kuralları.
+- Giriş ekranı (`login.html` çıktısı) yeni kart gölgesi/yarıçapıyla aynı dilde.
+
+### Arayüz düzeltmeleri (test arayüzü JS)
+
+- **Kapsam açıklaması düzeltildi:** çalışan listesi `meta.self_only` alanını
+  okuyor; önceki sürümde kaldırılmış `meta.directory_only` adı okunduğu için
+  SELF kapsamlı kullanıcıya **yanlış** ("şirket dizini") açıklama görünüyordu.
+- **Yinelenen IBAN satırı kaldırıldı:** çalışan detayındaki kişisel veri tablosunda
+  IBAN iki kez basılıyordu; artık bir kez, kimlik numarasıyla birlikte.
+- **Ölü kod temizlendi:** kaldırılan "şirket dizini" görünümünün (`c.dizin`,
+  `c.public_id`) kullanılmayan dalı ve `directory_only` metni silindi.
+- Kart başlıkları sayaç rozeti + sağ tarafta kapsam notu; liste boşsa kesikli boş
+  durum kutusu (yalnızca kayıt yoksa görünür).
+- Satır içi `style="..."` kullanımları sınıflara taşındı (`liste-satir`,
+  `form-alt`, `ipucu`); geniş tablolar `tablo-kaydir` ile sarıldı.
+
+### Doğrulama
+
+- Tam test suite: **444 passed** (bu turda yeni davranış eklenmedi; mevcut
+  regresyonlar şablon değişikliğinden etkilenmedi).
+- `node --check` ile gömülü arayüz betiği denetlendi. **Bu denetim bir hata
+  yakaladı:** çalışan listesindeki yeni koşullu blokta kapanmayan şablon dizesi
+  (template literal) tüm betiğin çalışmamasına ve panelin boş kalmasına yol açıyordu;
+  düzeltildi ve `verify_fresh_install.sh` adım **6c-7** ile kalıcı denetime bağlandı.
+- Canlı tarayıcı (gerçek sunucu, `demo@persopyro.test`): Panel, Departmanlar,
+  Çalışanlar (liste + detay + kişisel veriler), İzin Talebi sekmeleri tarandı;
+  konsol hatası yok, tasarım belirteçleri ve boş durum kutusu görünür.
+
+### Not (geliştirme ortamı)
+
+- Django şablon yükleyicisi bu sürümde her zaman `cached.Loader` ile sarmalanır;
+  `runserver --noreload` altında şablon değişiklikleri **sunucu yeniden
+  başlatılmadan** görünmez (bu turda panelin "eski" görünmesinin nedeni buydu).
+  Kural `docs/DEVELOPMENT_RULES.md` "DİKKAT — şablon önbelleği" notuna eklendi.
+
+### Kapsam dışı (bilinçli)
+
+- Üretim kullanıcı arayüzü, tema/tasarım sistemi, JS çerçevesi ve yeni npm
+  bağımlılığı yok; üretim varsayılanında `/test-ui/*` yine **404**.
+- Çalışan kayıt formunun alanları bu turda **değiştirilmedi** (sonraki turda
+  kan grubu dahil tüm alanlar eklendi — bkz. 0.32.0).
+
 ## [0.30.0] — 2026-09-11 — Test arayüzü: görünürlük ve izin akışı düzeltmeleri (kendi talebini onaylama, izin durumu noktası, banka bilgileri, tarih biçimi)
 
 **Baseline (son commit `9c81671`):** çalışma ağacı temiz, tam test suite **435 passed**.

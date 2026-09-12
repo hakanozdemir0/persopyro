@@ -88,23 +88,23 @@
     const calisan = data.employee;
 
     const bakiyeler = data.balances.length
-      ? `<table><thead><tr><th>Tür</th><th>Dönem</th><th>Hakediş</th><th>Devreden</th>
+      ? `<div class="tablo-kaydir"><table><thead><tr><th>Tür</th><th>Dönem</th><th>Hakediş</th><th>Devreden</th>
          <th>Düzeltme</th><th>Kullanılan</th><th>Bekleyen</th><th>Kalan</th></tr></thead><tbody>
          ${data.balances.map((b) => `<tr><td>${esc(b.leave_type)} <span class="muted">(${esc(b.leave_type_code)})</span></td>
            <td>${esc(b.period_year)}</td><td>${esc(b.entitled_days)}</td><td>${esc(b.carried_forward_days)}</td>
            <td>${esc(b.adjustment_days)}</td><td>${esc(b.used_days)}</td><td>${esc(b.reserved_days)}</td>
            <td><strong>${esc(b.available_days)}</strong></td></tr>`).join("")}
-         </tbody></table>`
+         </tbody></table></div>`
       : `<p class="muted">Balans kullanan izin türü için bakiye kaydı yok.</p>`;
 
     const talepler = data.my_requests.length
-      ? `<table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Aşama</th><th></th></tr></thead><tbody>
+      ? `<div class="tablo-kaydir"><table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Aşama</th><th></th></tr></thead><tbody>
          ${data.my_requests.map((t) => `<tr><td>${esc(t.leave_type)}</td>
            <td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td><td>${esc(t.days_requested)}</td>
            <td>${durumPill(t.status, t.status_label)}</td>
            <td>${t.current_step_no ? "adım " + esc(t.current_step_no) : "—"}</td>
            <td>${t.can_cancel ? `<button data-cancel="${esc(t.id)}">İptal et</button>` : ""}</td></tr>`).join("")}
-         </tbody></table>`
+         </tbody></table></div>`
       : `<p class="muted">Henüz talebiniz yok.</p>`;
 
     document.getElementById("tab-panel").innerHTML = `
@@ -153,13 +153,13 @@
       </div>
       <div class="card"><h2>Yaklaşan izinler (kapsamınızdaki onaylı talepler)</h2>
         ${data.upcoming_requests.length
-          ? `<table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Başlangıç</th>
+          ? `<div class="tablo-kaydir"><table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Başlangıç</th>
              <th>Bitiş</th><th>Gün</th></tr></thead><tbody>
              ${data.upcoming_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
                <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
                <td>${tarih(t.start_date)}</td><td>${tarih(t.end_date)}</td>
                <td>${esc(t.days_requested)}</td></tr>`).join("")}
-             </tbody></table>`
+             </tbody></table></div>`
           : `<p class="muted">Yaklaşan onaylı izin yok.</p>`}
       </div>
       <div class="card"><h2>Karara bağlanan izinler</h2>
@@ -169,20 +169,20 @@
           reddedilen <strong>${esc(data.status_counts.rejected)}</strong> ·
           iptal <strong>${esc(data.status_counts.canceled)}</strong></p>
         ${data.decided_requests.length
-          ? `<table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
+          ? `<div class="tablo-kaydir"><table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
              <th>Gün</th><th>Durum</th><th>Karar</th></tr></thead><tbody>
              ${data.decided_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
                <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
                <td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td><td>${esc(t.days_requested)}</td>
                <td>${durumPill(t.status, t.status_label)}</td>
                <td>${tarih(t.decided_at)}</td></tr>`).join("")}
-             </tbody></table>`
+             </tbody></table></div>`
           : `<p class="muted">Henüz karara bağlanmış izin talebi yok.</p>`}
       </div>
       <div class="card"><h2>İzin taleplerim</h2>${talepler}</div>
       <div class="card"><h2>Onayımı bekleyen talepler (${esc(data.pending_count)})</h2>
         ${data.pending_requests.length ? data.pending_requests.map((t) => `
-          <div class="row" style="border-bottom:1px solid var(--line); padding:8px 0">
+          <div class="liste-satir">
             <div>${esc(t.employee_no)} · ${esc(t.department)}</div>
             <div>${esc(t.leave_type)}</div>
             <div>${tarih(t.start_date)} → ${tarih(t.end_date)} (${esc(t.days_requested)} gün)</div>
@@ -411,23 +411,27 @@
   async function yukleCalisanlar() {
     const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/employees");
     EMPLOYEES = data;
+    const kayitSayisi = data.length;
     document.getElementById("tab-employees").innerHTML = `
-      <div class="card"><h1>Çalışanlar</h1>
-        <p class="muted">${meta.directory_only
-          ? `Bu görünüm <strong>şirket dizini</strong>dir: çalışan numarası, unvan ve birim
-             görünür; ad/e-posta ve izin bakiyesi gibi detaylar <strong>gizlidir</strong>.
-             Kendi kaydınız tam görünür.`
+      <div class="card">
+        <div class="kart-baslik">
+          <h1>Çalışanlar</h1>
+          <span class="rozet">${kayitSayisi} kayıt</span>
+          <span class="sag muted small">${meta.self_only
+            ? "yalnız kendi kaydınız"
+            : "kapsamınızdaki birimler + alt birimleri"}</span>
+        </div>
+        <p class="muted">${meta.self_only
+          ? `Bu görünümde <strong>yalnız kendi kaydınız</strong> listelenir; başka çalışanların
+             kaydı ve numarası gösterilmez.`
           : `Yalnızca <strong>kapsamınızdaki</strong> çalışanlar listelenir (tüm kiracı /
              birim + alt birimleri). Kişisel veri (K2/K3) gösterilmez.`}</p>
-        <table><thead><tr><th>No</th><th>Çalışan</th><th>Birim</th><th>Unvan</th>
+        ${kayitSayisi ? `<div class="tablo-kaydir"><table><thead><tr><th>No</th><th>Çalışan</th><th>Birim</th><th>Unvan</th>
           <th>Rol</th><th>Yıllık izin (hak / kullanılan / bekleyen / kalan)</th><th>Durum</th><th></th></tr></thead><tbody>
           ${data.map((c) => `<tr>
             <td>${esc(c.employee_no)}${izinNoktasi(c.izin_durumu)}</td>
-            <td>${c.dizin
-              ? `<span class="muted">dizin kaydı</span>
-                 <div class="muted small">${esc(c.public_id || "")}</div>`
-              : `${esc(c.user_name || c.user_email) || "<span class='muted'>kullanıcı bağlı değil</span>"}
-                 <div class="muted small">${esc(c.user_email || "")}${c.kendi_kaydim ? " · kendi kaydınız" : ""}</div>`}</td>
+            <td>${esc(c.user_name || c.user_email) || "<span class='muted'>kullanıcı bağlı değil</span>"}
+              <div class="muted small">${esc(c.user_email || "")}${c.kendi_kaydim ? " · kendi kaydınız" : ""}</div></td>
             <td>${esc(c.department) || yok}</td>
             <td>${esc(c.position) || yok}</td>
             <td>${(c.roles || []).length
@@ -436,7 +440,8 @@
             <td>${c.annual ? yillikSatir(c.annual) : '<span class="muted">gizli</span>'}</td>
             <td>${esc(c.status_label || c.status)}</td>
             <td><button data-detay="${esc(c.id)}">Detay</button></td></tr>`).join("")}
-        </tbody></table>
+        </tbody></table></div>`
+        : `<div class="bos">Kapsamınızda listelenecek çalışan kaydı yok.</div>`}
         <div id="employee-detail"></div>
       </div>
       ${LOOKUPS.meta.can_manage_positions ? `
@@ -492,7 +497,7 @@
             <div><label>Banka</label><input id="emp-banka" placeholder="Örnek Bankası"></div>
             <div><label>IBAN</label><input id="emp-iban" placeholder="TR00 0000 0000 0000 0000 0000 00"></div>
           </div>` : ""}
-        <div class="row" style="margin-top:10px"><div><button class="primary" id="emp-create">Çalışanı oluştur</button></div></div>
+        <div class="form-alt"><button class="primary" id="emp-create">Çalışanı oluştur</button></div>
       </div>` : ""}`;
 
     const olustur = document.getElementById("emp-create");
@@ -591,7 +596,7 @@
           `/test-ui/api/employees/${calisanId}/personal`);
         piiBolumu = `
           <h3>Kişisel veriler <span class="muted small">(yalnızca yetkili roller görür)</span></h3>
-          ${p ? `<table><tbody>
+          ${p ? `<div class="tablo-kaydir"><table class="kv"><tbody>
             <tr><th>Ad Soyad</th><td>${esc(p.first_name)} ${esc(p.last_name)}</td></tr>
             <tr><th>Doğum tarihi</th><td>${p.birth_date ? tarih(p.birth_date) : yok}</td></tr>
             <tr><th>Banka</th><td>${esc(p.bank_name) || yok}</td></tr>
@@ -605,8 +610,7 @@
             <tr><th>Oturma/çalışma izni</th><td>${esc(p.work_permit_type) || yok}
               ${p.work_permit_valid_until ? " · " + esc(p.work_permit_valid_until) + "'e kadar" : ""}</td></tr>
             <tr><th>Kimlik no</th><td>${esc(p.national_id) || yok}</td></tr>
-            <tr><th>IBAN</th><td>${esc(p.iban) || yok}</td></tr>
-          </tbody></table>
+          </tbody></table></div>
           <button data-pii-guncelle="${esc(calisanId)}">Kişisel verileri güncelle</button>`
           : `<p class="muted">${esc(pm.mesaj)}</p>
              <button data-pii-guncelle="${esc(calisanId)}">Kişisel veri ekle</button>`}
@@ -828,7 +832,7 @@
             submit: true,
           }});
         document.getElementById("lr-out").innerHTML = `
-          <p class="muted" style="margin-top:10px">Sunucunun hesapladığı gün:
+          <p class="ipucu">Sunucunun hesapladığı gün:
              <strong>${esc(t.days_requested)}</strong> · durum: ${durumPill(t.status, t.status_label)}</p>`;
         PERSOPYRO_UI.mesaj("ok", duzenlenenTalep
           ? "Düzenleme kaydedildi: eski talep iptal edildi, yeni talep onaya sunuldu."
@@ -853,14 +857,14 @@
       hedef.innerHTML = "<p class='muted'>Tanımlı izin politikası yok.</p>";
       return;
     }
-    hedef.innerHTML = `<table><thead><tr><th>İzin türü</th><th>Hakediş</th><th>Bakiye
+    hedef.innerHTML = `<div class="tablo-kaydir"><table><thead><tr><th>İzin türü</th><th>Hakediş</th><th>Bakiye
       yetersizse talep açılabilir</th><th>Onaydan sonra iade</th><th></th></tr></thead><tbody>
       ${data.map((p) => `<tr><td>${esc(p.leave_type)}</td>
         <td>${esc(p.accrual_method)}${p.fixed_days ? ` · ${esc(p.fixed_days)} gün` : ""}</td>
         <td><input type="checkbox" id="pol-neg-${esc(p.id)}" ${p.allow_negative_balance ? "checked" : ""}></td>
         <td><input type="checkbox" id="pol-ref-${esc(p.id)}" ${p.allow_refund_after_approval ? "checked" : ""}></td>
         <td><button data-pol="${esc(p.id)}">Kaydet</button></td></tr>`).join("")}
-      </tbody></table>
+      </tbody></table></div>
       <p class="muted small">"Bakiye yetersizse talep açılabilir" kapalıysa kalan gün yetersizken
         talep oluşturulamaz; açıkken talep açılır ve kararı onaylayan verir (onay ekranında
         talep sahibinin bakiyesini görür).</p>`;
@@ -883,7 +887,7 @@
     if (!hedef) return;
     const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-types");
     hedef.innerHTML = `
-      <table><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th>
+      <div class="tablo-kaydir"><table><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th>
         <th>Belge</th><th>Onay</th><th>Durum</th><th></th></tr></thead><tbody>
         ${data.map((t) => `<tr><td><code>${esc(t.code)}</code></td><td>${esc(t.name)}</td>
           <td>${esc(t.category_label)}</td><td>${t.is_paid ? "Evet" : "Hayır"}</td>
@@ -893,7 +897,7 @@
           <td>${meta.can_manage && t.aktif
             ? `<button class="danger" data-tur-kapat="${esc(t.id)}">Devre dışı bırak</button>` : ""}</td>
         </tr>`).join("")}
-      </tbody></table>
+      </tbody></table></div>
       ${meta.can_manage ? `
         <h4>Yeni izin türü</h4>
         <p class="muted small">Kısayol: bir şablon seçip <strong>Uygula</strong> deyin,
@@ -981,10 +985,10 @@
     if (!hedef) return;
     const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests?scope=mine");
     hedef.innerHTML = data.length
-      ? `<table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Gerekçe</th></tr></thead><tbody>
+      ? `<div class="tablo-kaydir"><table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Gerekçe</th></tr></thead><tbody>
          ${data.map((t) => `<tr><td>${esc(t.leave_type)}</td><td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td>
            <td>${esc(t.days_requested)}</td><td>${durumPill(t.status, t.status_label)}</td><td>${esc(t.reason)}</td></tr>`).join("")}
-         </tbody></table>`
+         </tbody></table></div>`
       : `<p class="muted">Kayıt yok.</p>`;
   }
 
@@ -995,7 +999,7 @@
       <div class="card"><h1>Bekleyen izin talepleri</h1>
         <p class="muted">Yalnızca <strong>yetkiniz ve kapsamınız</strong> içindeki talepler listelenir;
           onay/red kararı backend'de <code>izin ∧ kapsam ∧ adım sahipliği ∧ farklı aktör</code> ile doğrulanır.</p>
-        ${data.length ? `<table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
+        ${data.length ? `<div class="tablo-kaydir"><table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
           <th>Gün</th><th>İzin bakiyesi</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>
           ${data.map((t) => `<tr><td>${esc(t.employee_no)}${t.kendi_talebi ? ` <span class="pill">kendi talebim</span>` : ""}</td>
             <td>${esc(t.department)}</td>
@@ -1004,7 +1008,7 @@
             <td>${t.talep_sahibi_bakiye ? `<span class="muted small">${yillikSatir(t.talep_sahibi_bakiye)}</span>` : ""}</td>
             <td>${durumPill(t.status, t.status_label)}${t.requires_document && !t.document_ref ? " <span class='pill rejected'>belge yok</span>" : ""}</td>
             <td>${talepAksiyonlari(t)}</td>
-            </tr>`).join("")}</tbody></table>` : "<p class='muted'>Bekleyen talep yok.</p>"}
+            </tr>`).join("")}</tbody></table></div>` : "<p class='muted'>Bekleyen talep yok.</p>"}
       </div>`;
     document.querySelectorAll("[data-ok]").forEach((d) =>
       d.addEventListener("click", () => karar(d.dataset.ok, "approved")));
@@ -1067,7 +1071,7 @@
           </select></div>
           <div><button class="primary" id="rol-olustur">Rol oluştur</button></div>
         </div>` : ""}
-        ${roller ? `<table><thead><tr><th>Rol</th><th>Kapsam</th><th>İzin</th>
+        ${roller ? `<div class="tablo-kaydir"><table><thead><tr><th>Rol</th><th>Kapsam</th><th>İzin</th>
           <th>Atama</th><th></th></tr></thead><tbody>
           ${roller.data.map((r) => `<tr><td>${esc(r.name)}
               <div class="muted small"><code>${esc(r.code)}</code></div></td>
@@ -1079,7 +1083,7 @@
                  ${r.role_type === "custom" && r.can_edit_meta
                    ? `<button data-rol-duzenle="${esc(r.id)}">Rolü düzenle</button>` : ""}`
               : `<button data-yetki="${esc(r.id)}">Yetkileri görüntüle</button>`}</td>
-          </tr>`).join("")}</tbody></table>` : ""}
+          </tr>`).join("")}</tbody></table></div>` : ""}
         ${yetkili || !roller ? "" : `<p class="muted">Bu ekranda yalnızca
           <strong>görüntüleme</strong> yapabilirsiniz; değişiklik için şirket yöneticisi
           olmanız gerekir.</p>`}
