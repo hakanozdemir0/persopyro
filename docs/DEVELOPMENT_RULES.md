@@ -209,7 +209,7 @@ Kiracı `slug`: `demo`.
 
 `bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki + çıkış +
 bakiye + rol yönetimi + taşıma + kan grubu/K3) ve `bash scripts/verify_fresh_install.sh`
-(**6c-1…6c-8** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
+(**6c-1…6c-9** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
 bakiye/unvan/rol görünürlüğü, taşıma hedefleri, rol atama-kaldırma, yetkisiz 403,
 kişisel veri kapısı, rol oluşturma, gömülü arayüz JS sözdizimi (`node --check`),
 kayıt formu + kan grubunun şifreli saklanması, üretim varsayılanında 404).
@@ -295,3 +295,55 @@ düzenlenmesi **vardır** ama kararı arayüz vermez: yetki kararı servis katma
 6. **Boşaltma:** kan grubu "(bilinmiyor)" seçilip kaydedilirse alan temizlenir
    (`null`); diğer alanlar korunur.
 
+
+### Elle denenecek yeni akışlar (bildirim 9. tur — UX/fonksiyon düzeltmeleri)
+
+1. **Genel yerleşim:** masaüstünde içerik ~1400 px'e kadar genişler; üst sırada
+   **yan yana 3 kart**, altında geniş tablo/detay alanı. %100 zoom'da normal
+   kullanımda **yatay kaydırma çubuğu oluşmaz** (ölçüm: sayfa
+   `scrollWidth - innerWidth <= 0`, kart içi tablolarda `.tablo-kaydir` içi kayma).
+2. **Çalışanlar:** tabloda *Çalışan* (ad + e-posta iki satır), *Çalışan no*,
+   *Unvan*, *Birim*, *Yönetici*, *Rol (yetki)*, *Kalan izin*, *Durum*, *İşlem*
+   kolonları vardır; teknik UUID gösterilmez. Üstteki **filtre** ad/no/birim/unvan/
+   e-postaya göre satırları süzer, `n / m kayıt` yazar.
+3. **Detay çekmecesi:** `Detay` → **sağdan** panel açılır; liste yerleşimi
+   kaymaz. Aynı çalışanın `Detay`ına tekrar basılır → **kapanır**; başka çalışanın
+   `Detay`ı → önceki kapanır (aynı anda tek detay). Buton metni
+   `Detay` ⇄ `Detayı kapat`; Escape ve çekmece başlığındaki **Kapat** düğmesi de
+   kapatır.
+4. **Otomatik çalışan numarası:** Yeni çalışan formunda **numara alanı
+   salt-okunurdur** ("Otomatik (EMP-000001 biçimi)"); kaydettikten sonra mesaj
+   *"verilen numara: EMP-0000NN"* der. Numara **birim değişince değişmez**
+   (OD21 taşıma akışı sonrası listede aynı numara kalır).
+5. **Rol ve Yetkiler (çalışan detayı):** rol adı + teknik kod, kapsam, **kapsam
+   birimi**, verilme tarihi görünür; yeni atamada `UNIT/UNIT_DIRECT` rol
+   seçilirse **kapsam zorunlu**, `TENANT` rolünde kapsam seçicisi **devre dışı**.
+   Unvan (ör. *Finans Uzmanı*) ile yetki rolü (*Departman Yöneticisi*) ayrı
+   gösterilir.
+6. **Yetki Yönetimi:** solda rol kartları (teknik kod küçük yazı), sağda izin
+   **grupları**; her grup `n / m seçili` sayacını taşır, izinler okunabilir ad +
+   küçük teknik kod olarak grid'de listelenir. `Tümünü seç`, `Hiçbirini seçme`,
+   `Değişiklikleri geri al` çalışır.
+7. **İzin türleri:** özellikler **2×2 kart** düzenindedir (onay kutusu başlıkla
+   aynı hizada, açıklama başlığın altında, kartlar eşit yükseklikte); tablo
+   başlıkları *Kod · Ad · Kategori · Ücretli · Bakiye · Belge · Onay · Durum ·
+   İşlem*.
+8. **İzin bakiyesi:** Panel'de **kapsam** bilançosu üretilir (hak / kullanılan /
+   bekleyen / kalan); çalışan kaydı olmayan kullanıcıda üstte "Bu kullanıcının
+   çalışan kaydı yok" bilgisi yer alır ama **kapsamındaki** çalışanların
+   bakiyeleri listelenir. Çalışan (SELF) yalnız kendi bakiyesini görür. Değerler
+   backend bakiye kaydından gelir; arayüz hesap yapmaz.
+9. **Departman taşıma:** sol ağaçtan birim seç → sağdaki kartta **Taşı** →
+   modal; hedef liste **organizasyon ağacından** (kendisi ve alt birimleri hariç)
+   gelir, kullanıcı UUID girmez; onay metni *"… birimini … altına taşımak
+   istediğinize emin misiniz?"*; taşıma sonrası ağaç ve kapsam yenilenir.
+10. **Çıkış:** sağ üst `Çıkış` sunucu tarafında oturumu kapatır; çıkıştan sonra
+    `/test-ui/api/me` **403**, panel adresi **login'e yönlenir**, tarayıcı geri
+    tuşu/refresh paneli geri getirmez.
+
+### Doğrulama betiği tuzağı (6c-9 sonrası not)
+
+`verify_fresh_install.sh` içinde arka planda bir `runserver` çalışırken **çıplak
+`wait`** kullanmak betiği kilitler (bash, o daemon'un bitmesini bekler). Paralel
+işler için PID'ler toplanıp `wait $PID_LISTESI` yazılmalı; bu düzeltme 6c-9
+adımında uygulandı (iki eşzamanlı `curl` süreci yalnız kendileri beklenir).

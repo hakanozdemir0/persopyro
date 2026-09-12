@@ -444,6 +444,8 @@ def _atama_ozeti(atama) -> dict:  # noqa: ANN001
         "scope_type": atama.role.scope_type,
         "scope_type_label": kapsam_tipi_etiketi(atama.role.scope_type),
         "scope_org_unit_id": str(atama.scope_org_unit_id) if atama.scope_org_unit_id else None,
+        # Birim kapsamı adı (UNIT/UNIT_DIRECT): "Kapsam birimi" kolonunda gösterilir.
+        "scope_org_unit_name": atama.scope_org_unit.name if atama.scope_org_unit_id else None,
         "scope_text": kapsam_metni(
             scope_type=atama.role.scope_type,
             birim_adi=atama.scope_org_unit.name if atama.scope_org_unit_id else None,
@@ -1056,7 +1058,10 @@ class EmployeeListView(TestUiView):
                 actor=request.user,
                 tenant=request.user.tenant,
                 department=department,
-                employee_no=str(veri.get("employee_no", "")).strip(),
+                # Numara **istemciden alınmaz**: boş bırakılır ve sunucu üretir
+                # (`next_employee_no`, atomik sequence). Gönderilirse yalnızca
+                # açıkça verilmiş bir sicil numarası olarak kabul edilir.
+                employee_no=str(veri.get("employee_no") or "").strip() or None,
                 hire_date=_tarih(veri.get("hire_date"), "hire_date"),
                 position=position,
                 user=user,

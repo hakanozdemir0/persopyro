@@ -207,6 +207,12 @@ kullanılır. Soft-delete edilmiş kaydın yeniden açılması açık bir `*.res
 denetim kaydı gerektirir (**sessiz yeniden etkinleştirme yasak**). Benzersizlikler
 kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`.
 
+**Numara üretimi (M12/0013):** `employee_no` **sunucuda** üretilir (`EMP-000001`
+biçimi, `hr.employee_no_seq` sequence). Arayüz kullanıcıdan numara istemez ve
+istemcide numara hesaplanmaz; **birim değişikliği numarayı değiştirmez** (numara
+işe alımda bir kez üretilir ve saklanır). Sicil numarası **kimlik değildir** →
+`public_id` ile karıştırılmaz.
+
 **Uygulama (M12 ✅):** durum kümesi DB `CHECK` ile dayatılır
 (`employees_status_valid`: `active`/`suspended`/`terminated`/`archived`);
 `termination_date` boş ya da `hire_date`'ten sonra olmalıdır; çalışan kaydında

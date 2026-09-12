@@ -108,7 +108,7 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/departments` | GET / POST | Birim ağacı / yeni birim (`org.department.manage` ∧ kapsam); `?moves_for=<id>` ile **taşıma hedefleri** (kendisi ve alt ağacı hariç) |
 | `/test-ui/api/departments/<uuid>/move` | POST | Üst birim değiştir (OD24 ağaç guard'ları) |
 | `/test-ui/api/departments/<uuid>/delete` | POST | Soft delete (OD21) |
-| `/test-ui/api/employees` | GET / POST | Kapsamdaki çalışanlar / yeni çalışan (`employee.create` ∧ kapsam) |
+| `/test-ui/api/employees` | GET / POST | Kapsamdaki çalışanlar / yeni çalışan (`employee.create` ∧ kapsam). **`employee_no` istemciden alınmaz**: sunucu üretir (`EMP-000001`) ve yanıtta döner |
 | `/test-ui/api/employees/<uuid>/balances` | GET | Çalışanın dönem bakiyeleri (`leave.balance.read`) |
 | `/test-ui/api/leave-requests?scope=mine\|pending` | GET | Kendi talepleri / onay kuyruğu |
 | `/test-ui/api/leave-requests` | POST | Talep oluştur (gün sayısı **sunucuda** hesaplanır) |

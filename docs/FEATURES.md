@@ -214,7 +214,18 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
 - Departmanlar: ağaç görünümü, oluşturma, üst birim değiştirme, soft delete
   (`org.department.manage` ∧ `OD5` kapsamı).
 - Çalışanlar: kapsamla sınırlı liste/oluşturma; birim + unvan seçimi, yönetici
-  görünürlüğü, dönem bakiyesi. **K2/K3 kişisel veri gösterilmez**.
+  görünürlüğü, dönem bakiyesi. Liste **geniş tablo** olarak çalışır: çalışan (ad +
+  e-posta), çalışan no, unvan, birim, yönetici, rol, kalan izin, durum, işlem
+  kolonları + ad/no/birim/unvan/e-posta **filtresi**. Çalışan no **kullanıcıdan
+  istenmez**: sunucuda üretilir (`EMP-000001`, `hr.employee_no_seq`) ve birim
+  değişince değişmez. Detay **sağ çekmecede** açılır (sayfa yerleşimini bozmaz);
+  aynı çalışanın `Detay`ına tekrar basmak çekmeceyi **kapatır**, aynı anda tek
+  detay açık kalır. **K2/K3 kişisel veri gösterilmez.**
+- **Yerleşim standardı:** `base.html` içinde ortak sınıflar (`page-container`,
+  `grid-2/3`, `split`, `form-grid`, `data-table`, `detail-panel`, `action-bar`,
+  `option-card`, `badge`) — masaüstünde içerik ~1400 px'e kadar genişler, dar
+  ekranda bloklar alt alta düşer, kart içi geniş tablolar kendi içinde kayar
+  (sayfada yatay kaydırma oluşmaz). Yeni bağımlılık eklenmez.
 - İzin: talep oluşturma (gün sayısı sunucuda hesaplanır), kendi talepleri,
   "Bekleyen İzinler" ekranı, Onayla/Reddet (red için gerekçe), iptal.
 - Kapsam testi görünür: Finans müdürü Finans + Muhasebe'yi görür, İnsan Kaynakları

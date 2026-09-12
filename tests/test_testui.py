@@ -2413,3 +2413,262 @@ def test_ui_kullanicisiz_calisan_detayi_bos_listelerle_doner(client, tenant_a, u
     assert veri["permission_overrides"] == []
     assert veri["effective_permissions"] == []
     assert veri["assignable_roles"] == []
+
+
+# =============================================================================
+# Bildirim (9. tur): UX/fonksiyon düzeltmeleri — otomatik çalışan no, detay
+# çekmecesi, liste kolonları, yerleşim standardı, izin türü özellikleri
+# =============================================================================
+
+
+def test_ui_calisan_no_sunucu_tarafindan_otomatik_uretilir(client, tenant_a, user_a) -> None:
+    """Çalışan numarası istemciden İSTENMEZ: sunucu `EMP-000001` biçiminde üretir."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    yanit = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            # `employee_no` GÖNDERİLMEZ (form artık göndermiyor).
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": "2026-04-01",
+            "first_name": "Otomatik",
+            "last_name": "Numara",
+        },
+    )
+    assert yanit.status_code == 201, yanit.content
+    numara = yanit.json()["data"]["employee_no"]
+    assert numara.startswith("EMP-"), numara
+    assert len(numara) == len("EMP-000000")
+    assert numara[4:].isdigit()
+
+    # İkinci kayıt farklı numara alır ve liste ikisini de gösterir.
+    ikinci = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": "2026-04-02",
+            "first_name": "İkinci",
+            "last_name": "Numara",
+        },
+    )
+    assert ikinci.status_code == 201
+    assert ikinci.json()["data"]["employee_no"] != numara
+    numaralar = {c["employee_no"] for c in client.get("/test-ui/api/employees").json()["data"]}
+    assert {numara, ikinci.json()["data"]["employee_no"]} <= numaralar
+
+
+def test_calisan_no_uretiminde_cakisma_olmaz(db) -> None:  # noqa: ANN001, ARG001
+    """
+    Ardışık üretimde aynı numara iki kez verilmez; sıra **atomik sequence**'ten gelir.
+
+    Not: Gerçek **eşzamanlı** ölçüm (iki paralel HTTP kaydı → farklı numara)
+    `scripts/verify_fresh_install.sh` adım **6c-9**'da yapılır; burada mekanizmanın
+    tekilliği ve monotonluğu (çakışmasızlığın temeli) ölçülür.
+    """
+    from apps.organization.services import (
+        EMPLOYEE_NO_DIGITS,
+        EMPLOYEE_NO_PREFIX,
+        _sequence_degeri,
+    )
+
+    numaralar = [
+        f"{EMPLOYEE_NO_PREFIX}-{_sequence_degeri():0{EMPLOYEE_NO_DIGITS}d}" for _ in range(5)
+    ]
+    assert len(set(numaralar)) == 5, numaralar   # çakışma YOK
+    assert numaralar == sorted(numaralar)        # monoton artan
+
+
+def test_ui_calisan_no_birim_tasininca_degismez(client, tenant_a, user_a) -> None:
+    """Birim değişse de çalışan numarası sabit kalır (numara kimlik değildir ama kararlıdır)."""
+    from apps.organization.services import move_employee
+
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    yeni = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": "2026-05-01",
+            "first_name": "Taşıma",
+            "last_name": "Testi",
+        },
+    )
+    assert yeni.status_code == 201
+    veri = yeni.json()["data"]
+    eski_no, calisan_id = veri["employee_no"], veri["id"]
+
+    with tenant_context(tenant_a.id):
+        from apps.organization.models import Employee
+
+        calisan = Employee.objects.get(pk=calisan_id)
+        move_employee(
+            actor=lot["admin"],
+            employee=calisan,
+            department=lot["birimler"]["ik"],
+            reason="numara kararlılığı testi",
+        )
+        calisan.refresh_from_db()
+        assert calisan.employee_no == eski_no
+        assert calisan.department_id == lot["birimler"]["ik"].pk
+
+    liste = {c["employee_no"]: c for c in client.get("/test-ui/api/employees").json()["data"]}
+    assert liste[eski_no]["department"] == "İnsan Kaynakları"
+
+
+def test_ui_detay_cekmecesi_sozlesmesi(client, tenant_a, user_a) -> None:
+    """
+    Detay çekmecesi (drawer) sözleşmesi: sağdan açılan panel + tek çekmece kuralı.
+
+    Arayüz davranışı tarayıcıda JS ile çalışır; burada **şablon sözleşmesi** ölçülür:
+    panel/backdrop düğümleri, "Detay → Detayı kapat" metni, aynı çalışana tekrar
+    tıklamada kapatma kararı ve liste satırında `aria-expanded` taşıyan düğme.
+    """
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    sayfa = client.get("/test-ui/").content.decode()
+
+    # 1) Çekmece düğümleri ve kapatma denetimleri var.
+    assert 'id="detail-panel"' in sayfa
+    assert 'class="detail-panel"' in sayfa
+    assert 'id="detail-backdrop"' in sayfa
+    assert 'id="detail-panel-kapat"' in sayfa
+    # 2) Aynı çalışana tekrar tıklayınca KAPATMA kararı (saf fonksiyon) var.
+    assert "function cekmeceKarari(" in sayfa
+    assert "acikId && acikId === tiklananId ? null : tiklananId" in sayfa
+    # 3) Düğme metni duruma göre değişir.
+    assert "Detayı kapat" in sayfa
+    assert 'b.textContent = secili ? "Detayı kapat" : "Detay";' in sayfa
+    # 4) Satırda erişilebilirlik: aria-expanded + aria-controls.
+    assert 'aria-expanded="false" aria-controls="detail-panel"' in sayfa
+    # 5) Escape ile kapanma (base.html) bağlı.
+    assert "cekmeceKapat" in sayfa
+
+
+def test_ui_calisan_listesi_kolonlari_ve_yerlesim_standardi(client, tenant_a, user_a) -> None:
+    """Liste kolonları (unvan/yönetici/kalan izin) + yerleşim standardı sınıfları."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    sayfa = client.get("/test-ui/").content.decode()
+
+    # Liste kolon başlıkları: unvan ve rol AYRI kavramlar olarak yan yana.
+    for baslik in ("Çalışan", "Çalışan no", "Unvan", "Birim", "Yönetici", "Rol (yetki)",
+                   "Kalan izin", "Durum", "İşlem"):
+        assert f">{baslik}</th>" in sayfa, baslik
+    assert "class=\"sayi\"" in sayfa          # sayısal hizalama
+    assert 'class="aksiyon"' in sayfa         # aksiyonlar sağda
+    # Yerleşim standardı: geniş sayfa kapsayıcı + çok kolonlu grid + tablo kaydırma.
+    assert "--page-max: 1400px" in sayfa
+    assert "main.page-container" in sayfa
+    for sinif in (".grid-2 {", ".grid-3 {", ".split {", ".form-grid {",
+                  ".data-table td.aksiyon", ".detail-panel {", ".action-bar {",
+                  ".tablo-kaydir {", ".card.ic {"):
+        assert sinif in sayfa, sinif
+
+
+def test_ui_izin_turu_ozellikleri_backend_degerlerini_tasir(client, tenant_a, user_a) -> None:
+    """İzin türü özellik kutuları doğru alan adlarını ve değerlerini gönderir."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+
+    # Arayüz açıklamaları ve kutuları hizalı kartlar olarak sunulur.
+    sayfa = client.get("/test-ui/").content.decode()
+    for kutu in ("lt-paid", "lt-balance", "lt-approval", "lt-doc"):
+        assert f'id="{kutu}"' in sayfa, kutu
+    assert 'class="option-card"' in sayfa            # checkbox + açıklama aynı kartta
+    assert 'class="option-grid"' in sayfa
+    # Checkbox'lar backend alan adlarıyla birebir eşlenir.
+    for alan in ("is_paid:", "uses_balance:", "requires_approval:", "requires_document:"):
+        assert alan in sayfa, alan
+
+    # API: gönderilen özellikler kalıcı olur (unpaid + belge zorunlu + onay yok).
+    olustur = _post(
+        client,
+        "/test-ui/api/leave-types",
+        {
+            "code": "ux_test_izni",
+            "name": "UX Test İzni",
+            "category": "other",
+            "is_paid": False,
+            "uses_balance": False,
+            "requires_approval": False,
+            "requires_document": True,
+        },
+    )
+    assert olustur.status_code == 201, olustur.content
+    veri = olustur.json()["data"]
+    assert veri["is_paid"] is False
+    assert veri["uses_balance"] is False
+    assert veri["requires_approval"] is False
+    assert veri["requires_document"] is True
+
+
+def test_ui_yetki_ekrani_rol_listesi_ve_izin_gruplari(client, tenant_a, user_a) -> None:
+    """Yetki Yönetimi: solda rol listesi (unvan/rol ayrımı), sağda izin grupları."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    sayfa = client.get("/test-ui/").content.decode()
+    assert 'class="rol-kart"' in sayfa           # rol listesi kartları
+    assert 'class="split"' in sayfa              # sol liste + sağ editör
+    assert "Yetkileri düzenle" in sayfa
+    assert "Unvan ≠ rol" in sayfa
+    # İzin grupları: accordion + "n/m seçili" sayacı + teknik kod ikinci planda.
+    assert 'class="modul-izinler"' in sayfa
+    assert 'class="modul-sayac"' in sayfa
+    assert 'class="izin-kutu"' in sayfa
+    assert "izin-tumu', " in sayfa or 'id="izin-tumu"' in sayfa
+    assert 'id="izin-hicbiri"' in sayfa
+    assert 'id="izin-geri"' in sayfa
+
+    # İzin grubu ölçümü: modül/izin sayıları API'den gelir ve kod+ad içerir.
+    roller = client.get("/test-ui/api/roles").json()["data"]
+    rol_id = next(r["id"] for r in roller if r["code"] == "tenant_admin")
+    izinler = client.get(f"/test-ui/api/roles/{rol_id}/permissions").json()["data"]
+    assert izinler["modules"], "izin grupları boş"
+    for modul in izinler["modules"]:
+        assert modul["module_label"]
+        for p in modul["permissions"]:
+            assert p["code"] and p["name"]      # insan okunabilir ad + teknik kod
+
+
+def test_ui_calisan_listesinde_kalan_izin_backend_degeri(client, tenant_a, user_a) -> None:
+    """Listedeki 'Kalan izin' değeri backend bakiye kaydından gelir (arayüz hesap yapmaz)."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    kayitlar = {c["employee_no"]: c for c in client.get("/test-ui/api/employees").json()["data"]}
+    kendi = kayitlar[lot["yonetici"].employee_no]
+    assert kendi["annual"]["hakedis_var"] is True
+    # Liste satırında kullanılan alanlar: available_days / entitled_days.
+    bakiye = client.get(f"/test-ui/api/employees/{lot['yonetici'].pk}/balances").json()["data"]
+    assert bakiye, "bakiye kaydı yok"
+    assert str(bakiye[0]["available_days"]) == str(kendi["annual"]["available_days"])
+
+
+def test_ui_scope_disi_bakiye_gorunmez(client, tenant_a, user_a) -> None:
+    """Departman yöneticisi kapsam dışı çalışanın bakiyesini göremez (404/403)."""
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE).status_code == 200
+    # İK çalışanı finans müdürünün kapsamı dışındadır.
+    assert client.get(f"/test-ui/api/employees/{lot['kardes'].pk}").status_code == 404
+    liste = client.get("/test-ui/api/employees").json()["data"]
+    assert lot["kardes"].employee_no not in {c["employee_no"] for c in liste}
+
+
+def test_ui_sablon_yorumu_sayfaya_sizmaz(client, tenant_a, user_a) -> None:
+    """
+    (regresyon) Django şablon yorumları sayfaya **metin olarak** sızmamalı.
+
+    Bildirilen hata: çok satırlı `{# ... #}` yorumu (Django'da `{# #}` yalnızca
+    tek satırdır) çalışan listesinin altında ham metin olarak göründü; aynı
+    şekilde `{% comment %}`/`{% endcomment %}` dışındaki kapanmamış etiketler de
+    sayfada ham kalır.
+    """
+    admin = kadro(tenant_a, user_a)["admin"]
+    assert _giris(client, tenant_a, admin.email, PAROLA_LEAVE).status_code == 200
+    sayfa = client.get("/test-ui/").content.decode()
+    assert "{#" not in sayfa, "ham şablon yorumu sızmış"
+    assert "{%" not in sayfa and "%}" not in sayfa, "ham şablon etiketi sızmış"
+    assert "endcomment" not in sayfa
+    assert admin.email in sayfa  # sayfa gerçekten panel

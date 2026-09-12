@@ -31,6 +31,20 @@
     </div>
   </div>
 </div>
+
+{% comment %}
+Detay çekmecesi: sağdan açılır; sayfa yerleşimini KAYDIRMAZ (satır altı panel
+yerleşimi bozuyordu). Tek çekmece açıktır; aynı çalışanın Detay'ı tekrar
+tıklanınca kapanır.
+{% endcomment %}
+<div id="detail-backdrop" class="drawer-backdrop" hidden></div>
+<aside id="detail-panel" class="detail-panel" hidden aria-label="Çalışan detayı">
+  <div class="detail-panel-head">
+    <h2 id="detail-title">Çalışan detayı</h2>
+    <span class="sag"><button type="button" id="detail-panel-kapat" class="ghost kucuk">Kapat ✕</button></span>
+  </div>
+  <div id="employee-detail" class="detail-panel-body"></div>
+</aside>
 {% endblock %}
 
 {% block script %}
@@ -81,6 +95,61 @@
       .join("");
   }
 
+  // --- Detay çekmecesi (drawer) --------------------------------------------
+  // Tek çekmece kuralı: aynı çalışanın `Detay`ına tekrar basmak KAPATIR; başka
+  // çalışanınki açılırsa önceki kapanır. Buton metni duruma göre değişir.
+  let ACIK_DETAY = null;
+
+  function cekmeceKapat() {
+    const panel = document.getElementById("detail-panel");
+    const kapak = document.getElementById("detail-backdrop");
+    if (panel) panel.hidden = true;
+    if (kapak) kapak.hidden = true;
+    if (panel) panel.setAttribute("aria-hidden", "true");
+    ACIK_DETAY = null;
+    document.querySelectorAll("#tab-employees [data-detay]").forEach((b) => {
+      b.textContent = "Detay";
+      b.setAttribute("aria-expanded", "false");
+      const tr = b.closest("tr");
+      if (tr) tr.classList.remove("secili");
+    });
+  }
+
+  // Saf karar fonksiyonu (test edilebilir): hangi çekmece açık kalmalı?
+  // Aynı çalışana tekrar tıklanırsa **null** (kapat), farklı çalışanda yeni id.
+  function cekmeceKarari(acikId, tiklananId) {
+    return acikId && acikId === tiklananId ? null : tiklananId;
+  }
+
+  async function detayAcKapat(calisanId) {
+    if (cekmeceKarari(ACIK_DETAY, calisanId) === null) { cekmeceKapat(); return; }
+    cekmeceKapat();
+    ACIK_DETAY = calisanId;
+    const panel = document.getElementById("detail-panel");
+    panel.hidden = false;
+    panel.setAttribute("aria-hidden", "false");
+    document.getElementById("detail-backdrop").hidden = false;
+    document.getElementById("employee-detail").innerHTML = '<p class="muted">Detay yükleniyor…</p>';
+    document.querySelectorAll("#tab-employees [data-detay]").forEach((b) => {
+      const secili = b.dataset.detay === calisanId;
+      b.textContent = secili ? "Detayı kapat" : "Detay";
+      b.setAttribute("aria-expanded", secili ? "true" : "false");
+      const tr = b.closest("tr");
+      if (tr) tr.classList.toggle("secili", secili);
+    });
+    await calisanDetay(calisanId);
+  }
+
+  function cekmeceBagla() {
+    const kapat = document.getElementById("detail-panel-kapat");
+    if (kapat) kapat.addEventListener("click", cekmeceKapat);
+    const kapak = document.getElementById("detail-backdrop");
+    if (kapak) kapak.addEventListener("click", cekmeceKapat);
+    document.querySelectorAll("#tab-employees [data-detay]").forEach((b) =>
+      b.addEventListener("click", () => detayAcKapat(b.dataset.detay)));
+    window.PERSOPYRO_UI.cekmeceKapat = cekmeceKapat;
+  }
+
   // Kan grubu seçenekleri: K3 (sağlık) alanı — kapalı küme sunucudan gelir
   // (`lookups.blood_types`); boş değer "bilinmiyor" demektir.
   function kanGrubuSecenekler(secili = "") {
@@ -97,115 +166,168 @@
     const calisan = data.employee;
 
     const bakiyeler = data.balances.length
-      ? `<div class="tablo-kaydir"><table><thead><tr><th>Tür</th><th>Dönem</th><th>Hakediş</th><th>Devreden</th>
-         <th>Düzeltme</th><th>Kullanılan</th><th>Bekleyen</th><th>Kalan</th></tr></thead><tbody>
+      ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Tür</th><th class="sayi">Dönem</th><th class="sayi">Hakediş</th><th class="sayi">Devreden</th>
+         <th class="sayi">Düzeltme</th><th class="sayi">Kullanılan</th><th class="sayi">Bekleyen</th><th class="sayi">Kalan</th></tr></thead><tbody>
          ${data.balances.map((b) => `<tr><td>${esc(b.leave_type)} <span class="muted">(${esc(b.leave_type_code)})</span></td>
-           <td>${esc(b.period_year)}</td><td>${esc(b.entitled_days)}</td><td>${esc(b.carried_forward_days)}</td>
-           <td>${esc(b.adjustment_days)}</td><td>${esc(b.used_days)}</td><td>${esc(b.reserved_days)}</td>
-           <td><strong>${esc(b.available_days)}</strong></td></tr>`).join("")}
+           <td class="sayi">${esc(b.period_year)}</td><td class="sayi">${esc(b.entitled_days)}</td><td class="sayi">${esc(b.carried_forward_days)}</td>
+           <td class="sayi">${esc(b.adjustment_days)}</td><td class="sayi">${esc(b.used_days)}</td><td class="sayi">${esc(b.reserved_days)}</td>
+           <td class="sayi"><strong>${esc(b.available_days)}</strong></td></tr>`).join("")}
          </tbody></table></div>`
       : `<p class="muted">Balans kullanan izin türü için bakiye kaydı yok.</p>`;
 
     const talepler = data.my_requests.length
-      ? `<div class="tablo-kaydir"><table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Aşama</th><th></th></tr></thead><tbody>
+      ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Tür</th><th>Tarih</th><th class="sayi">Gün</th><th>Durum</th><th>Aşama</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
          ${data.my_requests.map((t) => `<tr><td>${esc(t.leave_type)}</td>
-           <td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td><td>${esc(t.days_requested)}</td>
+           <td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td><td class="sayi">${esc(t.days_requested)}</td>
            <td>${durumPill(t.status, t.status_label)}</td>
            <td>${t.current_step_no ? "adım " + esc(t.current_step_no) : "—"}</td>
-           <td>${t.can_cancel ? `<button data-cancel="${esc(t.id)}">İptal et</button>` : ""}</td></tr>`).join("")}
+           <td class="aksiyon">${t.can_cancel ? `<button class="kucuk" data-cancel="${esc(t.id)}">İptal et</button>` : ""}</td></tr>`).join("")}
          </tbody></table></div>`
       : `<p class="muted">Henüz talebiniz yok.</p>`;
 
     document.getElementById("tab-panel").innerHTML = `
-      <div class="card">
-        <h1>Panel</h1>
-        <div class="grid">
-          <div><h3>Kullanıcı</h3>${esc(k.user.name || k.user.email)}<br>
-            <span class="muted">${esc(k.user.email)}</span></div>
-          <div><h3>Kiracı</h3>${esc(k.tenant.name)}</div>
-          <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") || yok}
-            <div class="muted small">${k.roles.map((r) => esc(r.code)).join(", ")}</div></div>
-          <div><h3>Organizasyon kapsamı</h3>
-            ${k.scope.tenant_wide ? "Tüm kiracı" : (k.scope.unit_count ? k.scope.unit_count + " birim + alt birimleri" : "Yalnızca kendi kaydı")}
+      <div class="grid-3">
+        <div class="card">
+          <div class="section-head"><h2>Oturum</h2></div>
+          <div class="grid">
+            <div><h3>Kullanıcı</h3>${esc(k.user.name || k.user.email)}<br>
+              <span class="muted">${esc(k.user.email)}</span></div>
+            <div><h3>Kiracı</h3>${esc(k.tenant.name)}</div>
+            <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") || yok}
+              <div class="muted small">${k.roles.map((r) => esc(r.code)).join(", ")}</div></div>
+            <div><h3>Organizasyon kapsamı</h3>
+              ${k.scope.tenant_wide ? "Tüm kiracı" : (k.scope.unit_count ? k.scope.unit_count + " birim + alt birimleri" : "Yalnızca kendi kaydı")}
+            </div>
           </div>
-          <div><h3>Unvan / Birim</h3>${calisan
-            ? `${esc(calisan.position) || yok}<br><span class="muted">${esc(calisan.department) || ""}</span>`
-            : "<span class='muted'>bağlı çalışan kaydı yok</span>"}</div>
-          <div><h3>Yönetici</h3>${calisan && calisan.manager
-            ? esc(calisan.manager.employee_no) + (calisan.manager.name ? " · " + esc(calisan.manager.name) : "")
-            : yok}</div>
+        </div>
+        <div class="card">
+          <div class="section-head"><h2>Bilgilerim</h2>
+            <span class="sag rozet">${esc(data.profile.employee_no || "çalışan kaydı yok")}</span></div>
+          <div class="grid">
+            <div><h3>Ad Soyad</h3>${esc(data.profile.name)}</div>
+            <div><h3>Kayıtlı e-posta</h3>${esc(data.profile.email)}</div>
+            <div><h3>Şirket</h3>${esc(data.profile.tenant)}</div>
+            <div><h3>Unvan</h3>${esc(data.profile.position) || yok}</div>
+            <div><h3>Birim</h3>${esc(data.profile.department) || yok}</div>
+            <div><h3>Yönetici</h3>${calisan && calisan.manager
+              ? esc(calisan.manager.employee_no) + (calisan.manager.name ? " · " + esc(calisan.manager.name) : "")
+              : yok}</div>
+          </div>
+          <p class="muted small">Kişisel veriler (adres, yakın bilgisi, kimlik) bu panelde
+            gösterilmez; yalnızca yetkili roller çalışan detayından görür.</p>
+        </div>
+        <div class="card">
+          <div class="section-head"><h2>Yıllık izin bakiyem (${esc(data.period_year)})</h2></div>
+          <p class="hakedis-buyuk">${yillikSatir(data.annual)}</p>
+          <p class="muted small">Kalan gün <strong>backend'de üretilen</strong> kolondan gelir; arayüz hesap yapmaz.</p>
+          ${bakiyeler}
         </div>
       </div>
-      <div class="card"><h2>Bilgilerim</h2>
-        <div class="grid">
-          <div><h3>Ad Soyad</h3>${esc(data.profile.name)}</div>
-          <div><h3>Kayıtlı e-posta</h3>${esc(data.profile.email)}</div>
-          <div><h3>Şirket</h3>${esc(data.profile.tenant)}</div>
-          <div><h3>Unvan</h3>${esc(data.profile.position) || yok}</div>
-          <div><h3>Birim</h3>${esc(data.profile.department) || yok}</div>
-          <div><h3>Çalışan no</h3>${esc(data.profile.employee_no) || yok}</div>
-          <div><h3>Yıllık izin</h3>${data.profile.annual.hakedis_var
-            ? `hak <strong>${esc(data.profile.annual.entitled_days)}</strong> ·
-               kullanılan <strong>${esc(data.profile.annual.used_days)}</strong> ·
-               bekleyen <strong>${esc(data.profile.annual.reserved_days)}</strong> ·
-               kalan <strong>${esc(data.profile.annual.available_days)}</strong>`
-            : `<span class="muted">${esc(data.profile.annual.mesaj || "")}</span>`}</div>
-          <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") || yok}</div>
+      <div class="card">
+        <div class="section-head"><h2>İzin bakiyeleri</h2>
+          <span class="sag muted small">hak · kullanılan · bekleyen · kalan — kaynak: backend</span></div>
+        <div id="panel-bakiyeler"><p class="muted">Bakiyeler yükleniyor…</p></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-head"><h2>Onayımı bekleyen talepler</h2>
+            <span class="sag rozet">${esc(data.pending_count)}</span></div>
+          ${data.pending_requests.length ? data.pending_requests.map((t) => `
+            <div class="liste-satir">
+              <div>${esc(t.employee_no)} · ${esc(t.department)}</div>
+              <div>${esc(t.leave_type)}</div>
+              <div>${tarih(t.start_date)} → ${tarih(t.end_date)} (${esc(t.days_requested)} gün)</div>
+              <div>${t.talep_sahibi_bakiye ? `<span class="muted small">bakiye: ${yillikSatir(t.talep_sahibi_bakiye)}</span>` : ""}</div>
+              <div>${durumPill(t.status, t.status_label)}</div>
+              <div class="action-bar">${talepAksiyonlari(t)}</div>
+            </div>`).join("") : "<div class='bos'>Onayınızı bekleyen talep yok.</div>"}
         </div>
-        <p class="muted small">Kişisel veriler (adres, yakın bilgisi, kimlik) bu panelde
-          gösterilmez; yalnızca yetkili roller çalışan detayından görür.</p>
+        <div class="card">
+          <div class="section-head"><h2>Yaklaşan izinler</h2>
+            <span class="sag muted small">kapsamınızdaki onaylı talepler</span></div>
+          ${data.upcoming_requests.length
+            ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Başlangıç</th>
+               <th>Bitiş</th><th class="sayi">Gün</th></tr></thead><tbody>
+               ${data.upcoming_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
+                 <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
+                 <td>${tarih(t.start_date)}</td><td>${tarih(t.end_date)}</td>
+                 <td class="sayi">${esc(t.days_requested)}</td></tr>`).join("")}
+               </tbody></table></div>`
+            : `<div class="bos">Yaklaşan onaylı izin yok.</div>`}
+        </div>
       </div>
-      <div class="card"><h2>Yıllık izin bakiyem (${esc(data.period_year)})</h2>
-        <p class="hakedis-buyuk">${yillikSatir(data.annual)}</p>
-        <p class="muted">Kalan gün <strong>backend'de üretilen</strong> kolondan gelir; arayüz hesap yapmaz.</p>
-        ${bakiyeler}
-      </div>
-      <div class="card"><h2>Yaklaşan izinler (kapsamınızdaki onaylı talepler)</h2>
-        ${data.upcoming_requests.length
-          ? `<div class="tablo-kaydir"><table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Başlangıç</th>
-             <th>Bitiş</th><th>Gün</th></tr></thead><tbody>
-             ${data.upcoming_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
-               <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
-               <td>${tarih(t.start_date)}</td><td>${tarih(t.end_date)}</td>
-               <td>${esc(t.days_requested)}</td></tr>`).join("")}
-             </tbody></table></div>`
-          : `<p class="muted">Yaklaşan onaylı izin yok.</p>`}
-      </div>
-      <div class="card"><h2>Karara bağlanan izinler</h2>
-        <p class="muted">Durum sayıları (kapsamınız içinde): onay bekleyen
-          <strong>${esc(data.status_counts.pending)}</strong> ·
-          onaylanan <strong>${esc(data.status_counts.approved)}</strong> ·
-          reddedilen <strong>${esc(data.status_counts.rejected)}</strong> ·
-          iptal <strong>${esc(data.status_counts.canceled)}</strong></p>
-        ${data.decided_requests.length
-          ? `<div class="tablo-kaydir"><table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
-             <th>Gün</th><th>Durum</th><th>Karar</th></tr></thead><tbody>
-             ${data.decided_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
-               <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
-               <td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td><td>${esc(t.days_requested)}</td>
-               <td>${durumPill(t.status, t.status_label)}</td>
-               <td>${tarih(t.decided_at)}</td></tr>`).join("")}
-             </tbody></table></div>`
-          : `<p class="muted">Henüz karara bağlanmış izin talebi yok.</p>`}
-      </div>
-      <div class="card"><h2>İzin taleplerim</h2>${talepler}</div>
-      <div class="card"><h2>Onayımı bekleyen talepler (${esc(data.pending_count)})</h2>
-        ${data.pending_requests.length ? data.pending_requests.map((t) => `
-          <div class="liste-satir">
-            <div>${esc(t.employee_no)} · ${esc(t.department)}</div>
-            <div>${esc(t.leave_type)}</div>
-            <div>${tarih(t.start_date)} → ${tarih(t.end_date)} (${esc(t.days_requested)} gün)</div>
-            <div>${t.talep_sahibi_bakiye ? `<span class="muted small">bakiye: ${yillikSatir(t.talep_sahibi_bakiye)}</span>` : ""}</div>
-            <div>${durumPill(t.status, t.status_label)}</div>
-            <div>${talepAksiyonlari(t)}</div>
-          </div>`).join("") : "<p class='muted'>Onayınızı bekleyen talep yok.</p>"}
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-head"><h2>İzin taleplerim</h2></div>${talepler}
+        </div>
+        <div class="card">
+          <div class="section-head"><h2>Karara bağlanan izinler</h2></div>
+          <p class="muted">Durum sayıları (kapsamınız içinde): onay bekleyen
+            <strong>${esc(data.status_counts.pending)}</strong> ·
+            onaylanan <strong>${esc(data.status_counts.approved)}</strong> ·
+            reddedilen <strong>${esc(data.status_counts.rejected)}</strong> ·
+            iptal <strong>${esc(data.status_counts.canceled)}</strong></p>
+          ${data.decided_requests.length
+            ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
+               <th class="sayi">Gün</th><th>Durum</th><th>Karar</th></tr></thead><tbody>
+               ${data.decided_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
+                 <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
+                 <td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td><td class="sayi">${esc(t.days_requested)}</td>
+                 <td>${durumPill(t.status, t.status_label)}</td>
+                 <td>${tarih(t.decided_at)}</td></tr>`).join("")}
+               </tbody></table></div>`
+            : `<div class="bos">Henüz karara bağlanmış izin talebi yok.</div>`}
+        </div>
       </div>`;
+    yuklePanelBakiyeleri();
     document.querySelectorAll("[data-duzenle]").forEach((d) =>
       d.addEventListener("click", () => talepDuzenleBaslat(d.dataset.duzenle)));
     document.querySelectorAll("[data-cancel]").forEach((d) =>
       d.addEventListener("click", () => iptalEt(d.dataset.cancel)));
     document.querySelectorAll("[data-approve]").forEach((d) =>
       d.addEventListener("click", () => karar(d.dataset.approve, "approved")));
+  }
+
+  // İzin bakiyesi görünümü (panel): kaynak **backend** bakiye kaydıdır; arayüz
+  // hesap yapmaz. Çalışan kaydı OLMAYAN ama kapsamı (yönetici/İK) bulunan
+  // kullanıcı da kapsamındaki çalışanların hak/kullanılan/bekleyen/kalan
+  // özetini görür; `SELF` kapsamlı çalışan yalnız kendi satırını görür.
+  async function yuklePanelBakiyeleri() {
+    const hedef = document.getElementById("panel-bakiyeler");
+    if (!hedef) return;
+    let veri;
+    try {
+      veri = await PERSOPYRO_UI.cagir("/test-ui/api/employees");
+    } catch (hata) {
+      hedef.innerHTML = `<div class="bos">İzin bakiyeleri görüntülenemiyor: ${esc(hata.message)}</div>`;
+      return;
+    }
+    const kayitlar = veri.data || [];
+    if (!kayitlar.length) {
+      hedef.innerHTML = `<div class="bos">Kapsamınızda çalışan kaydı yok.</div>`;
+      return;
+    }
+    hedef.innerHTML = `
+      <p class="muted small">${veri.meta.self_only
+        ? "Yalnızca kendi izin bakiyeniz gösterilir."
+        : "Kapsamınızdaki (birim + alt birimleri) çalışanların izin bakiyesi."}</p>
+      <div class="tablo-kaydir"><table class="data-table"><thead><tr>
+        <th>Çalışan no</th><th>Çalışan</th><th>Unvan</th><th>Birim</th>
+        <th class="sayi">Hak</th><th class="sayi">Kullanılan</th>
+        <th class="sayi">Bekleyen</th><th class="sayi">Kalan</th></tr></thead><tbody>
+        ${kayitlar.map((c) => `<tr>
+          <td>${esc(c.employee_no)}</td>
+          <td>${esc(c.user_name || c.user_email) || yok}</td>
+          <td>${esc(c.position) || yok}</td>
+          <td>${esc(c.department) || yok}</td>
+          ${c.annual && c.annual.hakedis_var
+            ? `<td class="sayi">${esc(c.annual.entitled_days)}</td>
+               <td class="sayi">${esc(c.annual.used_days)}</td>
+               <td class="sayi">${esc(c.annual.reserved_days)}</td>
+               <td class="sayi"><strong>${esc(c.annual.available_days)}</strong></td>`
+            : `<td colspan="4" class="muted">${esc((c.annual && c.annual.mesaj) || "Hakediş kaydı yok")}</td>`}
+        </tr>`).join("")}
+      </tbody></table></div>`;
   }
 
   // Onay ekranı aksiyonları: kendi talebini ONYALAYAMAZ (backend de reddeder);
@@ -268,6 +390,8 @@
   }
 
   // --- Departmanlar --------------------------------------------------------
+  // Split-view: solda organizasyon ağacı, sağda seçili birimin detayı ve
+  // işlemleri (Düzenle / Taşı / Sil). Ağaçtaki ada tıklamak seçim yapar.
   async function yukleDepartmanlar() {
     const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/departments");
     TREE = data;
@@ -276,29 +400,40 @@
       const alt = cocuklar(parentId);
       if (!alt.length) return "";
       return `<ul>${alt.map((d) => `<li>
-        <strong>${esc(d.name)}</strong> <span class="muted">(${esc(d.code)})</span>
+        <span class="birim-sec" role="button" tabindex="0" data-birim="${esc(d.id)}"><strong>${esc(d.name)}</strong></span>
+        <span class="muted">(${esc(d.code)})</span>
         <span class="muted">${esc(d.employee_count)} çalışan${d.manager_employee_no ? " · sorumlu " + esc(d.manager_employee_no) : ""}</span>
-        ${meta.can_manage ? `
-          <button data-adlandir="${esc(d.id)}">Düzenle</button>
-          <button data-move="${esc(d.id)}">Taşı</button>
-          <button class="danger" data-del="${esc(d.id)}">Sil</button>` : ""}
         ${dal(d.id)}</li>`).join("")}</ul>`;
     };
     document.getElementById("tab-departments").innerHTML = `
-      <div class="card"><h1>Departmanlar</h1>
-        <p class="muted">Ağaç <strong>adjacency list</strong> üzerinden gelir (OD24).
-          Yetki kararı servis katmanında, döngü/derinlik/kiracı garantileri veritabanında verilir.</p>
-        <div class="tree"><ul>${dal(null)}</ul></div>
-      </div>
-      ${meta.can_manage ? `
-      <div class="card"><h2>Yeni departman</h2>
-        <div class="row">
-          <div><label>Kod</label><input id="dep-code" placeholder="ORNEK"></div>
-          <div><label>Ad</label><input id="dep-name" placeholder="Örnek Birim"></div>
-          <div><label>Üst birim</label><select id="dep-parent">${lookupSecenekler(data, "")}</select></div>
-          <div><button class="primary" id="dep-create">Oluştur</button></div>
+      <div class="split">
+        <div class="card">
+          <div class="section-head"><h2>Organizasyon ağacı</h2>
+            <span class="sag rozet">${data.length} birim</span></div>
+          <p class="muted small">Ağaç <strong>adjacency list</strong> üzerinden gelir (OD24).
+            Yetki kararı servis katmanında, döngü/derinlik/kiracı garantileri veritabanında verilir.
+            Birime tıklayın: sağda detayı ve işlemleri açılır.</p>
+          <div class="tree"><ul>${dal(null) || `<li class="muted">Kayıtlı birim yok.</li>`}</ul></div>
         </div>
-      </div>` : ""}`;
+        <div>
+          <div class="card">
+            <div class="section-head"><h2>Birim detayı</h2>
+              <span class="sag muted small">seçili birim</span></div>
+            <div id="dep-detay"><div class="bos">Ağaçtan bir birim seçin.</div></div>
+          </div>
+          ${meta.can_manage ? `
+          <div class="card">
+            <div class="section-head"><h2>Yeni departman</h2></div>
+            <div class="form-grid">
+              <div><label>Kod</label><input id="dep-code" placeholder="ORNEK"></div>
+              <div><label>Ad</label><input id="dep-name" placeholder="Örnek Birim"></div>
+              <div><label>Üst birim</label><select id="dep-parent">${lookupSecenekler(data, "")}</select></div>
+            </div>
+            <div class="form-alt"><button class="primary" id="dep-create">Oluştur</button>
+              <span class="muted small">Kod kiracı içinde benzersizdir; kök birim için üst birim boş bırakılır.</span></div>
+          </div>` : ""}
+        </div>
+      </div>`;
 
     const olustur = document.getElementById("dep-create");
     if (olustur) olustur.addEventListener("click", async () => {
@@ -313,12 +448,44 @@
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
 
-    document.querySelectorAll("[data-adlandir]").forEach((d) =>
-      d.addEventListener("click", () => adlandirmaEkrani(d.dataset.adlandir)));
-    document.querySelectorAll("[data-move]").forEach((d) =>
-      d.addEventListener("click", () => tasimaEkrani(d.dataset.move)));
-    document.querySelectorAll("[data-del]").forEach((d) =>
-      d.addEventListener("click", () => silmeEkrani(d.dataset.del)));
+    document.querySelectorAll(".birim-sec").forEach((a) =>
+      a.addEventListener("click", (olay) => {
+        olay.preventDefault();
+        departmanSec(a.dataset.birim, meta.can_manage);
+      }));
+  }
+
+  // Seçili birim detayı (sağ kolon): özet bilgi + işlemler. Kart her seçimde
+  // yeniden basıldığı için düğme dinleyicileri burada bağlanır.
+  function departmanSec(birimId, canManage) {
+    const birim = TREE.find((d) => d.id === birimId);
+    const hedef = document.getElementById("dep-detay");
+    if (!birim || !hedef) return;
+    document.querySelectorAll(".birim-sec").forEach((s) =>
+      s.classList.toggle("secili", s.dataset.birim === birimId));
+    const altSayi = TREE.filter((d) => d.parent_id === birimId).length;
+    const ust = birim.parent_id ? (TREE.find((d) => d.id === birim.parent_id) || {}).name : null;
+    hedef.innerHTML = `
+      <table class="kv"><tbody>
+        <tr><th>Birim</th><td><strong>${esc(birim.name)}</strong></td></tr>
+        <tr><th>Kod</th><td><code>${esc(birim.code)}</code></td></tr>
+        <tr><th>Üst birim</th><td>${ust ? esc(ust) : "<span class='muted'>kök (en üst seviye)</span>"}</td></tr>
+        <tr><th>Birim sorumlusu</th><td>${birim.manager_employee_no ? esc(birim.manager_employee_no) : yok}</td></tr>
+        <tr><th>Çalışan</th><td>${esc(birim.employee_count)} kişi</td></tr>
+        <tr><th>Alt birim</th><td>${esc(altSayi)} birim</td></tr>
+      </tbody></table>
+      <div class="action-bar" style="margin-top:12px">
+        ${canManage ? `<button data-adlandir="${esc(birim.id)}">Düzenle</button>
+          <button data-move="${esc(birim.id)}">Taşı</button>
+          <button class="danger" data-del="${esc(birim.id)}">Sil</button>`
+          : `<span class="muted small">Bu birimde işlem yapma yetkiniz yok.</span>`}
+      </div>`;
+    document.querySelectorAll("#dep-detay [data-adlandir]").forEach((b) =>
+      b.addEventListener("click", () => adlandirmaEkrani(b.dataset.adlandir)));
+    document.querySelectorAll("#dep-detay [data-move]").forEach((b) =>
+      b.addEventListener("click", () => tasimaEkrani(b.dataset.move)));
+    document.querySelectorAll("#dep-detay [data-del]").forEach((b) =>
+      b.addEventListener("click", () => silmeEkrani(b.dataset.del)));
   }
 
   // Birim adı/kodu değiştirme (OD21: silme değil; `update_department` servisi).
@@ -423,9 +590,9 @@
     const kayitSayisi = data.length;
     document.getElementById("tab-employees").innerHTML = `
       <div class="card">
-        <div class="kart-baslik">
+        <div class="section-head">
           <h1>Çalışanlar</h1>
-          <span class="rozet">${kayitSayisi} kayıt</span>
+          <span class="rozet" id="calisan-sayac">${kayitSayisi} kayıt</span>
           <span class="sag muted small">${meta.self_only
             ? "yalnız kendi kaydınız"
             : "kapsamınızdaki birimler + alt birimleri"}</span>
@@ -434,86 +601,129 @@
           ? `Bu görünümde <strong>yalnız kendi kaydınız</strong> listelenir; başka çalışanların
              kaydı ve numarası gösterilmez.`
           : `Yalnızca <strong>kapsamınızdaki</strong> çalışanlar listelenir (tüm kiracı /
-             birim + alt birimleri). Kişisel veri (K2/K3) gösterilmez.`}</p>
-        ${kayitSayisi ? `<div class="tablo-kaydir"><table><thead><tr><th>No</th><th>Çalışan</th><th>Birim</th><th>Unvan</th>
-          <th>Rol</th><th>Yıllık izin (hak / kullanılan / bekleyen / kalan)</th><th>Durum</th><th></th></tr></thead><tbody>
-          ${data.map((c) => `<tr>
+             birim + alt birimleri). Kişisel veri (K2/K3) listelenmez; detay yetkiyle açılır.`}</p>
+        <div class="filtre-bar">
+          <div style="flex:1 1 300px"><label>Ara / filtrele (ad, e-posta, no, birim, unvan, rol)</label>
+            <input id="calisan-filtre" placeholder="Örn. Muhasebe veya EMP-000004"></div>
+          <div><button type="button" id="calisan-filtre-temizle">Filtreyi temizle</button></div>
+          <div class="muted small" id="calisan-filtre-sonuc"></div>
+        </div>
+      </div>
+      <div class="card">
+        ${kayitSayisi ? `<div class="tablo-kaydir"><table class="data-table" id="calisan-tablosu"><thead><tr>
+          <th>Çalışan</th><th>Çalışan no</th><th>Unvan</th><th>Birim</th><th>Yönetici</th>
+          <th>Rol (yetki)</th><th class="sayi">Kalan izin</th><th>Durum</th><th class="aksiyon">İşlem</th>
+        </tr></thead><tbody>
+          ${data.map((c) => `<tr data-arama="${esc([c.employee_no, c.user_name, c.user_email,
+              c.department, c.position, (c.roles || []).map((r) => r.name).join(" ")]
+              .filter(Boolean).join(" ").toLowerCase())}">
+            <td><div class="hucre-iki">
+              <span>${esc(c.user_name || c.user_email) || "<span class='muted'>kullanıcı bağlı değil</span>"}${c.kendi_kaydim ? " <span class='muted small'>· kendi kaydınız</span>" : ""}</span>
+              <span class="alt">${esc(c.user_email || "")}</span></div></td>
             <td>${esc(c.employee_no)}${izinNoktasi(c.izin_durumu)}</td>
-            <td>${esc(c.user_name || c.user_email) || "<span class='muted'>kullanıcı bağlı değil</span>"}
-              <div class="muted small">${esc(c.user_email || "")}${c.kendi_kaydim ? " · kendi kaydınız" : ""}</div></td>
-            <td>${esc(c.department) || yok}</td>
             <td>${esc(c.position) || yok}</td>
+            <td>${esc(c.department) || yok}</td>
+            <td>${c.manager ? esc(c.manager.employee_no) : yok}</td>
             <td>${(c.roles || []).length
               ? c.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ")
               : yok}</td>
-            <td>${c.annual ? yillikSatir(c.annual) : '<span class="muted">gizli</span>'}</td>
+            <td class="sayi">${c.annual && c.annual.hakedis_var
+              ? `<strong>${esc(c.annual.available_days)}</strong> <span class="muted small">/ ${esc(c.annual.entitled_days)} gün</span>`
+              : '<span class="muted">—</span>'}</td>
             <td>${esc(c.status_label || c.status)}</td>
-            <td><button data-detay="${esc(c.id)}">Detay</button></td></tr>`).join("")}
+            <td class="aksiyon"><button class="kucuk" data-detay="${esc(c.id)}"
+              aria-expanded="false" aria-controls="detail-panel">Detay</button></td></tr>`).join("")}
         </tbody></table></div>`
         : `<div class="bos">Kapsamınızda listelenecek çalışan kaydı yok.</div>`}
-        <div id="employee-detail"></div>
       </div>
-      ${LOOKUPS.meta.can_manage_positions ? `
-      <div class="card"><h2>Yeni unvan (pozisyon)</h2>
-        <p class="muted small">Unvan (pozisyon) birimi tanımlar; çalışan eklerken bu listeden
-          seçilir. Yeni çalışan formundan <strong>bağımsızdır</strong>.</p>
-        <div class="row">
-          <div><label>Kod</label><input id="pos-code" placeholder="MUH-UZ"></div>
-          <div><label>Unvan adı</label><input id="pos-name" placeholder="Muhasebe Uzmanı"></div>
-          <div><button id="pos-create">Unvan ekle</button></div>
-        </div>
-      </div>` : ""}
-      ${meta.can_create ? `
-      <div class="card"><h2>Yeni çalışan</h2>
-        <h4>1) Görev bilgileri</h4>
-        <div class="row">
-          <div><label>Çalışan no</label><input id="emp-no" placeholder="MUH-2"></div>
-          <div><label>Birim</label><select id="emp-dep">${lookupSecenekler(LOOKUPS.data.departments)}</select></div>
-          <div><label>Unvan</label><select id="emp-pos">${lookupSecenekler(LOOKUPS.data.positions)}</select></div>
-          <div><label>İşe giriş</label><input id="emp-hire" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
-          ${(LOOKUPS.data.employees || []).length ? `<div><label>Bağlı olduğu yönetici</label>
-            <select id="emp-manager"><option value="">(yönetici seçilmedi)</option>
-              ${LOOKUPS.data.employees.map((e) => `<option value="${esc(e.id)}">${esc(e.label)} — ${esc(e.employee_no)}</option>`).join("")}
-            </select></div>` : ""}
-        </div>
-        ${LOOKUPS.meta.can_create_users ? `
-        <h4>2) Giriş hesabı</h4>
-          <p class="muted small">Hesap açmak için e-posta ve parola verin. Parola arayüzde
-            üretilir, sunucuya yazılır ve <strong>bir daha gösterilmez</strong>; hesabı
-            sonradan rol atayarak yetkilendirebilirsiniz (Yetki Yönetimi / Detay).</p>
-          <div class="row">
-            <div><label>E-posta</label><input id="emp-email" placeholder="ad.soyad@sirket.com"></div>
-            <div><label>Parola</label><input id="emp-pass" placeholder="En az 8 karakter"></div>
-            <div><label>&nbsp;</label><button type="button" id="emp-pass-uret">Parola üret</button></div>
-          </div>` : ""}
-        ${LOOKUPS.meta.can_see_pii ? `
-        <h4>${LOOKUPS.meta.can_create_users ? "3" : "2"}) Kişisel veriler
-          <span class="muted small">— K2/K3, yalnızca <code>employee.sensitive.read</code></span></h4>
-          <p class="muted small">Zorunlu olan yalnızca <strong>ad</strong> ve <strong>soyad</strong>dır;
-            diğer alanlar boş bırakılabilir (sonradan <em>Detay → Kişisel verileri güncelle</em> ile
-            tamamlanır).</p>
-          <div class="row">
-            <div><label>Ad <span class="zorunlu">*</span></label><input id="emp-ad" placeholder="Ayşe"></div>
-            <div><label>Soyad <span class="zorunlu">*</span></label><input id="emp-soyad" placeholder="Demir"></div>
-            <div><label>Kimlik no (TCKN / uyruk no)</label><input id="emp-kimlik" placeholder="12345678901"></div>
-            <div><label>Doğum tarihi</label><input id="emp-dogum" type="date"></div>
-            <div><label>Kan grubu <span class="muted small">(şifreli saklanır)</span></label>
-              <select id="emp-kan">${kanGrubuSecenekler()}</select></div>
-            <div><label>Kişisel e-posta</label><input id="emp-pmail" placeholder="ayse@ornek.com"></div>
-            <div><label>Kişisel telefon</label><input id="emp-ptel" placeholder="05xx xxx xx xx"></div>
-            <div><label>Adres</label><input id="emp-adres" placeholder="İlçe / İl"></div>
-            <div><label>Yakın kişi telefonu</label><input id="emp-yakin-tel" placeholder="05xx xxx xx xx"></div>
-            <div><label>Yakınlık derecesi</label><input id="emp-yakin-derece" placeholder="Eş, anne, kardeş…"></div>
-            <div><label>Vatandaşlık</label><input id="emp-uyruk" placeholder="TR" value="TR"></div>
-            <div><label>Oturma/çalışma izni (TR değilse zorunlu)</label>
-              <input id="emp-izin" placeholder="Çalışma izni"></div>
-            <div><label>İzin geçerlilik tarihi</label><input id="emp-izin-tarih" type="date"></div>
-            <div><label>Banka</label><input id="emp-banka" placeholder="Örnek Bankası"></div>
-            <div><label>IBAN</label><input id="emp-iban" placeholder="TR00 0000 0000 0000 0000 0000 00"></div>
+      <div class="grid-2">
+        ${LOOKUPS.meta.can_manage_positions ? `
+        <div class="card">
+          <div class="section-head"><h2>Yeni unvan (pozisyon)</h2></div>
+          <p class="muted small">Unvan <strong>işi</strong> tanımlar ve çalışan eklerken seçilir;
+            <strong>yetki rolü değildir</strong> — rol ataması çalışan detayından yapılır.</p>
+          <div class="form-grid">
+            <div><label>Kod</label><input id="pos-code" placeholder="MUH-UZ"></div>
+            <div><label>Unvan adı</label><input id="pos-name" placeholder="Muhasebe Uzmanı"></div>
           </div>
-          <p class="muted small">Kan grubu <strong>K3 (özel nitelikli: sağlık)</strong> verisidir;
-            veritabanında <strong>Fernet ile şifreli</strong> saklanır ve yalnız yetkili roller görür.</p>` : ""}
-        <div class="form-alt"><button class="primary" id="emp-create">Çalışanı oluştur</button></div>
+          <div class="form-alt"><button id="pos-create">Unvan ekle</button></div>
+        </div>` : ""}
+        ${meta.can_create ? `
+        <div class="card">
+          <div class="section-head"><h2>Giriş hesabı</h2>
+            <span class="sag muted small">hesap açma <code>user.manage</code> izniyle</span></div>
+          ${LOOKUPS.meta.can_create_users ? `
+            <p class="muted small">Hesap açmak için e-posta ve parola verin. Parola arayüzde
+              üretilir, sunucuya yazılır ve <strong>bir daha gösterilmez</strong>; hesabı
+              sonradan rol atayarak yetkilendirin (çalışan detayı).</p>
+            <div class="form-grid">
+              <div><label>E-posta</label><input id="emp-email" placeholder="ad.soyad@sirket.com"></div>
+              <div><label>Parola</label><input id="emp-pass" placeholder="En az 8 karakter"></div>
+            </div>
+            <div class="form-alt"><button type="button" id="emp-pass-uret">Parola üret</button>
+              <span class="muted small">Boş bırakılırsa çalışan yalnız iş kaydı olarak açılır.</span></div>`
+            : `<p class="muted small">Hesap açma yetkiniz yok (<code>user.manage</code> gerekir);
+                 çalışan yalnızca iş kaydı olarak oluşturulur.</p>`}
+        </div>` : ""}
+      </div>
+      ${meta.can_create ? `
+      <div class="card">
+        <div class="section-head"><h2>Yeni çalışan</h2>
+          <span class="sag rozet">çalışan no sunucuda otomatik üretilir</span></div>
+        <div class="grid-2">
+          <div class="card ic">
+            <h4>İş bilgileri</h4>
+            <div class="form-grid">
+              <div><label>Birim <span class="zorunlu">*</span></label>
+                <select id="emp-dep">${lookupSecenekler(LOOKUPS.data.departments)}</select></div>
+              <div><label>Unvan</label><select id="emp-pos">${lookupSecenekler(LOOKUPS.data.positions)}</select></div>
+              <div><label>İşe giriş <span class="zorunlu">*</span></label>
+                <input id="emp-hire" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+              <div><label>Bağlı olduğu yönetici</label>
+                <select id="emp-manager"><option value="">(yönetici seçilmedi)</option>
+                  ${(LOOKUPS.data.employees || []).map((e) => `<option value="${esc(e.id)}">${esc(e.label)} — ${esc(e.employee_no)}</option>`).join("")}
+                </select></div>
+              <div><label>Çalışan no</label>
+                <input id="emp-no" value="Otomatik (EMP-000001 biçimi)" disabled>
+                <span class="muted small">Numara sunucuda üretilir; birim değişse de değişmez.</span></div>
+            </div>
+          </div>
+          <div class="card ic">
+            <h4>Özet</h4>
+            <p class="muted small">Soldaki iş bilgileri <strong>zorunlu</strong> alanları taşır
+              (birim, işe giriş). Kişisel bilgiler aşağıdadır ve yetkiniz varsa doldurulur;
+              boş bırakılan alanlar sonradan <em>Detay → Kişisel verileri güncelle</em> ile
+              tamamlanır.</p>
+            <p class="muted small">Çalışan numarası kullanıcıdan <strong>istenmez</strong> ve
+              istemcide hesaplanmaz: kayıt anında veritabanı sequence'inden üretilir.</p>
+          </div>
+        </div>
+        ${LOOKUPS.meta.can_see_pii ? `
+        <h4>Kişisel bilgiler <span class="muted small">— K2/K3, yalnızca <code>employee.sensitive.read</code></span></h4>
+        <p class="muted small">Zorunlu olan yalnızca <strong>ad</strong> ve <strong>soyad</strong>dır.</p>
+        <div class="form-grid uc">
+          <div><label>Ad <span class="zorunlu">*</span></label><input id="emp-ad" placeholder="Ayşe"></div>
+          <div><label>Soyad <span class="zorunlu">*</span></label><input id="emp-soyad" placeholder="Demir"></div>
+          <div><label>Doğum tarihi</label><input id="emp-dogum" type="date"></div>
+          <div><label>Kimlik no (TCKN / uyruk no)</label><input id="emp-kimlik" placeholder="12345678901"></div>
+          <div><label>Vatandaşlık</label><input id="emp-uyruk" placeholder="TR" value="TR"></div>
+          <div><label>Oturma/çalışma izni (TR değilse zorunlu)</label>
+            <input id="emp-izin" placeholder="Çalışma izni"></div>
+          <div><label>İzin geçerlilik tarihi</label><input id="emp-izin-tarih" type="date"></div>
+          <div><label>Kişisel e-posta</label><input id="emp-pmail" placeholder="ayse@ornek.com"></div>
+          <div><label>Kişisel telefon</label><input id="emp-ptel" placeholder="05xx xxx xx xx"></div>
+          <div><label>Adres</label><input id="emp-adres" placeholder="İlçe / İl"></div>
+          <div><label>Yakın kişi telefonu</label><input id="emp-yakin-tel" placeholder="05xx xxx xx xx"></div>
+          <div><label>Yakınlık derecesi</label><input id="emp-yakin-derece" placeholder="Eş, anne, kardeş…"></div>
+          <div><label>Banka</label><input id="emp-banka" placeholder="Örnek Bankası"></div>
+          <div><label>IBAN</label><input id="emp-iban" placeholder="TR00 0000 0000 0000 0000 0000 00"></div>
+          <div><label>Kan grubu <span class="muted small">(K3 — şifreli)</span></label>
+            <select id="emp-kan">${kanGrubuSecenekler()}</select></div>
+        </div>
+        <p class="muted small">Kan grubu <strong>K3 (özel nitelikli: sağlık)</strong> verisidir;
+          veritabanında <strong>Fernet ile şifreli</strong> saklanır ve yalnız yetkili roller görür.</p>` : ""}
+        <div class="form-alt"><button class="primary" id="emp-create">Çalışanı oluştur</button>
+          <span class="muted small">Numara kaydedince üretilir ve listede görünür.</span></div>
       </div>` : ""}`;
 
     const olustur = document.getElementById("emp-create");
@@ -524,7 +734,7 @@
           return el ? el.value.trim() : "";
         };
         const govde = {
-          employee_no: deger("emp-no"),
+          // Çalışan numarası GÖNDERİLMEZ: sunucu üretir (`next_employee_no`).
           department_id: document.getElementById("emp-dep").value,
           position_id: document.getElementById("emp-pos").value || null,
           hire_date: document.getElementById("emp-hire").value,
@@ -554,13 +764,31 @@
             iban: deger("emp-iban"),
           });
         }
-        await PERSOPYRO_UI.cagir("/test-ui/api/employees", { method: "POST", body: govde });
-        PERSOPYRO_UI.mesaj("ok", "Çalışan oluşturuldu.");
-        await yukleCalisanlar();
+        const { data: yeniCalisan } = await PERSOPYRO_UI.cagir("/test-ui/api/employees", { method: "POST", body: govde });
+        PERSOPYRO_UI.mesaj("ok", `Çalışan oluşturuldu — verilen numara: ${yeniCalisan.employee_no}`);
+        await Promise.all([yukleCalisanlar(), yukleLookups()]);
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
-    document.querySelectorAll("[data-detay]").forEach((d) =>
-      d.addEventListener("click", () => calisanDetay(d.dataset.detay)));
+    // Detay çekmecesi (aç/kapat) + liste filtresi.
+    cekmeceBagla();
+    const filtre = document.getElementById("calisan-filtre");
+    if (filtre) {
+      const satirlar = () => [...document.querySelectorAll("#calisan-tablosu tbody tr")];
+      const uygula = () => {
+        const q = filtre.value.trim().toLowerCase();
+        let gorunen = 0;
+        satirlar().forEach((tr) => {
+          const uygun = !q || (tr.dataset.arama || "").includes(q);
+          tr.hidden = !uygun;
+          if (uygun) gorunen += 1;
+        });
+        const bilgi = document.getElementById("calisan-filtre-sonuc");
+        if (bilgi) bilgi.textContent = q ? `${gorunen} / ${satirlar().length} kayıt` : "";
+      };
+      filtre.addEventListener("input", uygula);
+      const temizle = document.getElementById("calisan-filtre-temizle");
+      if (temizle) temizle.addEventListener("click", () => { filtre.value = ""; uygula(); });
+    }
 
     const parolaUret = document.getElementById("emp-pass-uret");
     if (parolaUret) parolaUret.addEventListener("click", () => {
@@ -652,13 +880,14 @@
       const izinListe = c.effective_permissions || [];
       const rolSatirlari = c.roles.length
         ? c.roles.map((r) => `<tr>
-            <td>${esc(r.name)} <div class="muted small"><code>${esc(r.code)}</code></div></td>
-            <td>${esc(r.scope_text)}</td>
+            <td>${esc(r.name)} <span class="teknik">${esc(r.code)}</span></td>
+            <td>${esc(r.scope_type_label || r.scope_text)}</td>
+            <td>${esc(r.scope_org_unit_name || "—")}</td>
             <td>${tarih(r.granted_at)}</td>
-            <td>${c.is_self ? "<span class='muted'>kendi atamanız</span>"
-              : `<button class="danger" data-revoke="${esc(r.id)}">Rolü kaldır</button>`}</td>
+            <td class="aksiyon">${c.is_self ? "<span class='muted'>kendi atamanız</span>"
+              : `<button class="danger kucuk" data-revoke="${esc(r.id)}">Kaldır</button>`}</td>
           </tr>`).join("")
-        : `<tr><td colspan="4" class="muted">Etkin rol ataması yok.</td></tr>`;
+        : `<tr><td colspan="5" class="muted">Etkin rol ataması yok.</td></tr>`;
       const kaldirilanlar = kaldirilanListe.length
         ? `<h4>Kaldırılmış atamalar</h4><table><thead><tr><th>Rol</th><th>Kapsam</th><th>Kaldırılma</th><th></th></tr></thead><tbody>
            ${kaldirilanListe.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.scope_text)}</td>
@@ -674,21 +903,25 @@
         ? `<option value="${esc(r.id)}" data-kapsam="${r.kapsam_gerekli ? "1" : "0"}">${esc(r.name)} — ${esc(r.scope_type_label)}</option>`
         : `<option value="${esc(r.id)}" disabled>${esc(r.name)} — atanamaz (${esc(r.gerekce)})</option>`).join("");
       yetkiBolumu = `
-        <h3>Rol ve Yetkiler</h3>
+        <h3>Rol ve Yetkiler <span class="muted small">(yetki rolleri — unvandan ayrıdır)</span></h3>
+        <p class="muted small">Unvan <strong>işi</strong> tanımlar (ör. <em>Finans Uzmanı</em>);
+          buradaki roller <strong>yetkiyi</strong> belirler (ör. <em>Departman Yöneticisi</em>).
+          İkisi farklı kavramlardır ve birbirini otomatik etkilemez.</p>
         ${c.is_self ? `<p class="muted">Kendi rol atamalarınızı değiştiremezsiniz (self-elevation yasağı).</p>` : ""}
-        <table><thead><tr><th>Rol</th><th>Kapsam</th><th>Verilme</th><th></th></tr></thead>
-          <tbody>${rolSatirlari}</tbody></table>
+        <div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Rol</th><th>Kapsam</th>
+          <th>Kapsam birimi</th><th>Verilme</th><th class="aksiyon">İşlem</th></tr></thead>
+          <tbody>${rolSatirlari}</tbody></table></div>
         ${c.user_email ? `
           <h4>Rol ata</h4>
-          <div class="row">
+          <div class="form-grid">
             <div><label>Rol</label><select id="rol-secim">${rolSecenekleri || '<option value="">(atanabilir rol yok)</option>'}</select></div>
-            <div><label>Birim kapsamı (UNIT roller için zorunlu)</label>
+            <div id="rol-kapsam-kutu"><label>Birim kapsamı <span class="muted small">(UNIT roller için zorunlu)</span></label>
               <select id="rol-kapsam">${lookupSecenekler(TREE, "")}</select></div>
             <div><label>Gerekçe</label><input id="rol-gerekce" placeholder="Örn. Finans müdürlüğü"></div>
-            <div><button class="primary" id="rol-ata">Rolü ata</button></div>
           </div>
-          <p class="muted small">Kapsam zorunluluğu role göre sunucuda dayatılır; kullanıcı kendi rolünü
-            yükseltemez, sahip olmadığı yetkiyi dağıtamaz.</p>` : `<p class="muted">Bu çalışana bağlı kullanıcı hesabı yok.</p>`}
+          <div class="form-alt"><button class="primary" id="rol-ata">Rolü ata</button>
+            <span class="muted small">Kapsam zorunluluğu sunucuda dayatılır; kiracı geneli (TENANT)
+              rollerde birim kapsamı istenmez. Platform rolleri burada yönetilmez.</span></div>` : `<p class="muted">Bu çalışana bağlı kullanıcı hesabı yok.</p>`}
         ${kaldirilanlar}
         <h4>Etkin izinler (${izinListe.length})</h4>
         <p class="muted small">${izinListe.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>
@@ -723,10 +956,26 @@
     const ata = document.getElementById("rol-ata");
     if (ata) ata.addEventListener("click", () => rolAta(calisanId));
     const secim = document.getElementById("rol-secim");
-    if (secim) secim.addEventListener("change", () => {
-      const opt = secim.selectedOptions[0];
-      document.getElementById("rol-kapsam").disabled = !(opt && opt.dataset.kapsam === "1");
-    });
+    if (secim) {
+      // UNIT/UNIT_DIRECT rollerde birim kapsamı ZORUNLU; TENANT rollerde alan
+      // gizlenir (sunucu da kapsam zorunluluğunu role göre dayatır).
+      const kapsamAyarla = () => {
+        const opt = secim.selectedOptions[0];
+        const gerekli = Boolean(opt && opt.dataset.kapsam === "1");
+        const kutu = document.getElementById("rol-kapsam-kutu");
+        const kapsam = document.getElementById("rol-kapsam");
+        if (kutu) kutu.hidden = !gerekli;
+        if (kapsam) {
+          kapsam.disabled = !gerekli;
+          kapsam.required = gerekli;
+        }
+      };
+      secim.addEventListener("change", kapsamAyarla);
+      kapsamAyarla();
+    }
+    // Detay başlığı çekmecede gösterilir (liste akışını bozmaz).
+    const baslik = document.getElementById("detail-title");
+    if (baslik) baslik.textContent = `Çalışan detayı — ${c.user_name || c.employee_no}`;
   }
 
   async function piiFormu(calisanId) {
@@ -826,28 +1075,51 @@
   async function yukleIzin() {
     const turler = LOOKUPS.data.leave_types;
     const bugun = new Date().toISOString().slice(0, 10);
+    // Talep formu kapsamdaki çalışanları listeler; sekme doğrudan açıldıysa
+    // liste henüz yüklenmemiş olabilir → boş select kalmasın diye burada çekilir.
+    if (!EMPLOYEES.length) {
+      try {
+        const { data: calisanlar } = await PERSOPYRO_UI.cagir("/test-ui/api/employees");
+        EMPLOYEES = calisanlar;
+      } catch (hata) { /* yetki/kapsam yoksa liste boş kalır (form yine çalışır) */ }
+    }
     document.getElementById("tab-leave").innerHTML = `
-      <div class="card"><h1>İzin talebi</h1>
-        <p class="muted">Gün sayısı <strong>sunucuda</strong> hesaplanır (takvim günü);
-          istemci değeri gönderilmez. Durum adları backend kapalı kümesindendir.</p>
-        <div class="row">
-          <div><label>Çalışan</label><select id="lr-emp">${[
-            ...(ME.data.employee ? [`<option value="${esc(ME.data.employee.id)}">kendim — ${esc(ME.data.employee.employee_no)}</option>`] : []),
-            ...EMPLOYEES.map((c) => `<option value="${esc(c.id)}">${esc(c.employee_no)} · ${esc(c.department)}</option>`),
-          ].join("")}</select></div>
-          <div><label>İzin türü</label><select id="lr-type">${turler.map((t) =>
-            `<option value="${esc(t.id)}">${esc(t.name)}${t.requires_document ? " (belge zorunlu)" : ""}</option>`).join("")}</select></div>
-          <div><label>Başlangıç</label><input id="lr-start" type="date" value="${bugun}"></div>
-          <div><label>Bitiş</label><input id="lr-end" type="date" value="${bugun}"></div>
-          <div><label>Gerekçe</label><input id="lr-reason" placeholder="Yıllık izin"></div>
-          <div><button class="primary" id="lr-create">Talep oluştur ve onaya sun</button></div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-head"><h1>İzin talebi</h1>
+            <span class="sag muted small">gün sayısı sunucuda hesaplanır</span></div>
+          <p class="muted">Gün sayısı <strong>sunucuda</strong> hesaplanır (takvim günü);
+            istemci değeri gönderilmez. Durum adları backend kapalı kümesindendir.</p>
+          <div class="form-grid">
+            <div><label>Çalışan</label><select id="lr-emp">${[
+              ...(ME.data.employee ? [`<option value="${esc(ME.data.employee.id)}">kendim — ${esc(ME.data.employee.employee_no)}</option>`] : []),
+              ...EMPLOYEES.map((c) => `<option value="${esc(c.id)}">${esc(c.employee_no)} · ${esc(c.department)}</option>`),
+            ].join("")}</select></div>
+            <div><label>İzin türü</label><select id="lr-type">${turler.map((t) =>
+              `<option value="${esc(t.id)}">${esc(t.name)}${t.requires_document ? " (belge zorunlu)" : ""}</option>`).join("")}</select></div>
+            <div><label>Başlangıç</label><input id="lr-start" type="date" value="${bugun}"></div>
+            <div><label>Bitiş</label><input id="lr-end" type="date" value="${bugun}"></div>
+            <div><label>Gerekçe</label><input id="lr-reason" placeholder="Yıllık izin"></div>
+          </div>
+          <div class="form-alt"><button class="primary" id="lr-create">Talep oluştur ve onaya sun</button></div>
+          <div id="lr-out"></div>
         </div>
-        <div id="lr-out"></div>
+        <div class="card">
+          <div class="section-head"><h2>Taleplerim</h2></div>
+          <div id="lr-mine"></div>
+        </div>
       </div>
-      <div class="card"><h2>Taleplerim</h2><div id="lr-mine"></div></div>
-      ${LOOKUPS.meta.can_manage_policy ? `<div class="card"><h2>İzin politikası</h2>
-        <div id="lr-policy"></div></div>` : ""}
-      <div class="card"><h2>İzin türleri</h2><div id="lr-types"></div></div>`;
+      ${LOOKUPS.meta.can_manage_policy ? `
+      <div class="card">
+        <div class="section-head"><h2>İzin politikası</h2>
+          <span class="sag muted small"><code>leave.type.manage</code></span></div>
+        <div id="lr-policy"></div>
+      </div>` : ""}
+      <div class="card">
+        <div class="section-head"><h2>İzin türleri</h2>
+          <span class="sag muted small">tanımlar + yeni tür</span></div>
+        <div id="lr-types"></div>
+      </div>`;
     document.getElementById("lr-create").addEventListener("click", async () => {
       try {
         // Düzenleme: eski talep iptal edilir, yeni talep onaya sunulur.
@@ -890,13 +1162,13 @@
       hedef.innerHTML = "<p class='muted'>Tanımlı izin politikası yok.</p>";
       return;
     }
-    hedef.innerHTML = `<div class="tablo-kaydir"><table><thead><tr><th>İzin türü</th><th>Hakediş</th><th>Bakiye
-      yetersizse talep açılabilir</th><th>Onaydan sonra iade</th><th></th></tr></thead><tbody>
+    hedef.innerHTML = `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>İzin türü</th><th>Hakediş</th><th>Bakiye
+      yetersizse talep açılabilir</th><th>Onaydan sonra iade</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
       ${data.map((p) => `<tr><td>${esc(p.leave_type)}</td>
         <td>${esc(p.accrual_method)}${p.fixed_days ? ` · ${esc(p.fixed_days)} gün` : ""}</td>
         <td><input type="checkbox" id="pol-neg-${esc(p.id)}" ${p.allow_negative_balance ? "checked" : ""}></td>
         <td><input type="checkbox" id="pol-ref-${esc(p.id)}" ${p.allow_refund_after_approval ? "checked" : ""}></td>
-        <td><button data-pol="${esc(p.id)}">Kaydet</button></td></tr>`).join("")}
+        <td class="aksiyon"><button class="kucuk" data-pol="${esc(p.id)}">Kaydet</button></td></tr>`).join("")}
       </tbody></table></div>
       <p class="muted small">"Bakiye yetersizse talep açılabilir" kapalıysa kalan gün yetersizken
         talep oluşturulamaz; açıkken talep açılır ve kararı onaylayan verir (onay ekranında
@@ -920,15 +1192,15 @@
     if (!hedef) return;
     const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-types");
     hedef.innerHTML = `
-      <div class="tablo-kaydir"><table><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th>
-        <th>Belge</th><th>Onay</th><th>Durum</th><th></th></tr></thead><tbody>
-        ${data.map((t) => `<tr><td><code>${esc(t.code)}</code></td><td>${esc(t.name)}</td>
+      <div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th>
+        <th>Belge</th><th>Onay</th><th>Durum</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
+        ${data.map((t) => `<tr><td><span class="badge teknik">${esc(t.code)}</span></td><td>${esc(t.name)}</td>
           <td>${esc(t.category_label)}</td><td>${t.is_paid ? "Evet" : "Hayır"}</td>
           <td>${t.uses_balance ? "Evet" : "Hayır"}</td><td>${t.requires_document ? "Evet" : "Hayır"}</td>
           <td>${t.requires_approval ? "Evet" : "Hayır"}</td>
-          <td>${esc(t.status_label)}${t.is_system ? " <span class='muted small'>sistem</span>" : ""}</td>
-          <td>${meta.can_manage && t.aktif
-            ? `<button class="danger" data-tur-kapat="${esc(t.id)}">Devre dışı bırak</button>` : ""}</td>
+          <td>${esc(t.status_label)}${t.is_system ? " <span class='badge teknik'>sistem</span>" : ""}</td>
+          <td class="aksiyon">${meta.can_manage && t.aktif
+            ? `<button class="danger kucuk" data-tur-kapat="${esc(t.id)}">Devre dışı bırak</button>` : ""}</td>
         </tr>`).join("")}
       </tbody></table></div>
       ${meta.can_manage ? `
@@ -936,14 +1208,14 @@
         <p class="muted small">Kısayol: bir şablon seçip <strong>Uygula</strong> deyin,
           alanlar dolar; sonra istediğinizi değiştirin. Kod <strong>sistem kodlarıyla
           çakışamaz</strong>.</p>
-        <div class="row">
+        <div class="form-grid">
           <div><label>Hazır şablon</label><select id="lt-preset">
             ${(LOOKUPS.data.leave_type_presets || []).map((p, i) =>
               `<option value="${i}">${esc(p.ad)}</option>`).join("")}
           </select></div>
           <div><label>&nbsp;</label><button type="button" id="lt-preset-uygula">Uygula</button></div>
         </div>
-        <div class="row">
+        <div class="form-grid">
           <div><label>Ad</label><input id="lt-name" placeholder="Evlilik İzni"></div>
           <div><label>Kod (küçük harf, boşluksuz)</label><input id="lt-code" placeholder="evlilik_izni"></div>
           <div><label>Kategori</label><select id="lt-cat">
@@ -952,16 +1224,30 @@
         </div>
         <fieldset class="ozellikler">
           <legend>Özellikler</legend>
-          <label><input type="checkbox" id="lt-paid" checked>
-            <span><strong>Ücretli</strong> <span class="muted small">— izin günlerinde maaş kesintisi olmaz</span></span></label>
-          <label><input type="checkbox" id="lt-balance">
-            <span><strong>Bakiye kullanır</strong> <span class="muted small">— yıllık hakedişten düşer (ör. yıllık izin)</span></span></label>
-          <label><input type="checkbox" id="lt-approval" checked>
-            <span><strong>Onay gerekir</strong> <span class="muted small">— yönetici onayı olmadan geçerli olmaz</span></span></label>
-          <label><input type="checkbox" id="lt-doc">
-            <span><strong>Belge gerekir</strong> <span class="muted small">— belge eklenmeden onaylanamaz (ör. rapor)</span></span></label>
+          <div class="option-grid">
+            <label class="option-card">
+              <input type="checkbox" id="lt-paid" checked>
+              <span><span class="baslik">Ücretli</span>
+                <span class="aciklama">İzin günlerinde maaş kesintisi olmaz.</span></span>
+            </label>
+            <label class="option-card">
+              <input type="checkbox" id="lt-balance">
+              <span><span class="baslik">Bakiye kullanır</span>
+                <span class="aciklama">Yıllık hakedişten düşer (ör. yıllık izin).</span></span>
+            </label>
+            <label class="option-card">
+              <input type="checkbox" id="lt-approval" checked>
+              <span><span class="baslik">Onay gerekir</span>
+                <span class="aciklama">Yönetici onayı olmadan geçerli olmaz.</span></span>
+            </label>
+            <label class="option-card">
+              <input type="checkbox" id="lt-doc">
+              <span><span class="baslik">Belge gerekir</span>
+                <span class="aciklama">Sağlık raporu vb. belge zorunludur.</span></span>
+            </label>
+          </div>
         </fieldset>
-        <div class="row"><div><button class="primary" id="lt-create">İzin türünü ekle</button></div></div>` : ""}`;
+        <div class="form-alt"><button class="primary" id="lt-create">İzin türünü ekle</button></div>` : ""}`;
 
     const sablonUygula = document.getElementById("lt-preset-uygula");
     if (sablonUygula) sablonUygula.addEventListener("click", () => {
@@ -1018,29 +1304,31 @@
     if (!hedef) return;
     const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests?scope=mine");
     hedef.innerHTML = data.length
-      ? `<div class="tablo-kaydir"><table><thead><tr><th>Tür</th><th>Tarih</th><th>Gün</th><th>Durum</th><th>Gerekçe</th></tr></thead><tbody>
+      ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Tür</th><th>Tarih</th><th class="sayi">Gün</th><th>Durum</th><th>Gerekçe</th></tr></thead><tbody>
          ${data.map((t) => `<tr><td>${esc(t.leave_type)}</td><td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td>
-           <td>${esc(t.days_requested)}</td><td>${durumPill(t.status, t.status_label)}</td><td>${esc(t.reason)}</td></tr>`).join("")}
+           <td class="sayi">${esc(t.days_requested)}</td><td>${durumPill(t.status, t.status_label)}</td><td>${esc(t.reason)}</td></tr>`).join("")}
          </tbody></table></div>`
-      : `<p class="muted">Kayıt yok.</p>`;
+      : `<div class="bos">Kayıt yok.</div>`;
   }
 
   // --- Onaylar -------------------------------------------------------------
   async function yukleOnaylar() {
     const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests?scope=pending");
     document.getElementById("tab-approvals").innerHTML = `
-      <div class="card"><h1>Bekleyen izin talepleri</h1>
+      <div class="card">
+        <div class="section-head"><h1>Bekleyen izin talepleri</h1>
+          <span class="sag rozet">${data.length}</span></div>
         <p class="muted">Yalnızca <strong>yetkiniz ve kapsamınız</strong> içindeki talepler listelenir;
           onay/red kararı backend'de <code>izin ∧ kapsam ∧ adım sahipliği ∧ farklı aktör</code> ile doğrulanır.</p>
-        ${data.length ? `<div class="tablo-kaydir"><table><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
-          <th>Gün</th><th>İzin bakiyesi</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>
+        ${data.length ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
+          <th class="sayi">Gün</th><th>İzin bakiyesi</th><th>Durum</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
           ${data.map((t) => `<tr><td>${esc(t.employee_no)}${t.kendi_talebi ? ` <span class="pill">kendi talebim</span>` : ""}</td>
             <td>${esc(t.department)}</td>
             <td>${esc(t.leave_type)}</td><td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td>
-            <td>${esc(t.days_requested)}</td>
+            <td class="sayi">${esc(t.days_requested)}</td>
             <td>${t.talep_sahibi_bakiye ? `<span class="muted small">${yillikSatir(t.talep_sahibi_bakiye)}</span>` : ""}</td>
             <td>${durumPill(t.status, t.status_label)}${t.requires_document && !t.document_ref ? " <span class='pill rejected'>belge yok</span>" : ""}</td>
-            <td>${talepAksiyonlari(t)}</td>
+            <td class="aksiyon">${talepAksiyonlari(t)}</td>
             </tr>`).join("")}</tbody></table></div>` : "<p class='muted'>Bekleyen talep yok.</p>"}
       </div>`;
     document.querySelectorAll("[data-ok]").forEach((d) =>
@@ -1082,47 +1370,59 @@
     const k = ME.data;
     const yetkili = roller && roller.meta.can_manage;
     hedef.innerHTML = `
-      <div class="card"><h1>Yetki Yönetimi</h1>
+      <div class="card">
+        <div class="section-head">
+          <h1>Yetki Yönetimi</h1>
+          <span class="sag muted small">rol atama: Çalışanlar → Detay → Rol ve Yetkiler</span>
+        </div>
         <p class="muted">
           <strong>Rol atama</strong> (kim hangi rolü taşır): <em>Çalışanlar → Detay →
           Rol ve Yetkiler</em>.<br>
-          <strong>Yetki düzenleme</strong> (bir rol neleri yapabilir): aşağıdan rolü
-          seçin. Yalnızca şirket yöneticisi (<code>role.manage</code>) düzenleyebilir;
+          <strong>Yetki düzenleme</strong> (bir rol neleri yapabilir): soldan rolü seçin.
+          Yalnızca şirket yöneticisi (<code>role.manage</code>) düzenleyebilir;
           değişiklik <strong>anında</strong> geçerli olur ve denetim kaydına yazılır.
+          <strong>Unvan ≠ rol</strong>: unvan işi, rol yetkiyi tanımlar.
         </p>
         ${hata ? `<p class="muted"><strong>Rolleri gösteremiyorum:</strong> ${esc(hata)}</p>` : ""}
         ${yetkili ? `
         <h4>Yeni rol oluştur</h4>
-        <p class="muted small">Rol boş doğar; izinlerini aşağıdan "Yetkileri düzenle" ile verirsiniz.
+        <p class="muted small">Rol boş doğar; izinlerini sağdan "Yetkileri düzenle" ile verirsiniz.
           Kapsam tipi, rolün izinlerinin ulaşabileceği <strong>azami</strong> alandır
           (izin vermez, daraltır).</p>
-        <div class="row">
+        <div class="form-grid">
           <div><label>Rol adı</label><input id="rol-ad" placeholder="Vardiya Sorumlusu"></div>
           <div><label>Kod</label><input id="rol-kod" placeholder="vardiya_sorumlusu"></div>
           <div><label>Kapsam tipi</label><select id="rol-kapsam-tipi">
             ${(roller.meta.scope_types || []).map((k) => `<option value="${esc(k.value)}">${esc(k.label)}</option>`).join("")}
           </select></div>
-          <div><button class="primary" id="rol-olustur">Rol oluştur</button></div>
-        </div>` : ""}
-        ${roller ? `<div class="tablo-kaydir"><table><thead><tr><th>Rol</th><th>Kapsam</th><th>İzin</th>
-          <th>Atama</th><th></th></tr></thead><tbody>
-          ${roller.data.map((r) => `<tr><td>${esc(r.name)}
-              <div class="muted small"><code>${esc(r.code)}</code></div></td>
-            <td>${esc(r.scope_type_label)}</td>
-            <td>${esc(r.permission_count)}</td>
-            <td>${esc(r.user_count)}</td>
-            <td>${yetkili
-              ? `<button class="primary" data-yetki="${esc(r.id)}">Yetkileri düzenle</button>
-                 ${r.role_type === "custom" && r.can_edit_meta
-                   ? `<button data-rol-duzenle="${esc(r.id)}">Rolü düzenle</button>` : ""}`
-              : `<button data-yetki="${esc(r.id)}">Yetkileri görüntüle</button>`}</td>
-          </tr>`).join("")}</tbody></table></div>` : ""}
-        ${yetkili || !roller ? "" : `<p class="muted">Bu ekranda yalnızca
-          <strong>görüntüleme</strong> yapabilirsiniz; değişiklik için şirket yöneticisi
-          olmanız gerekir.</p>`}
+        </div>
+        <div class="form-alt"><button class="primary" id="rol-olustur">Rol oluştur</button></div>` : ""}
       </div>
-      <div id="yetki-editor"></div>
-    `;
+      <div class="split">
+        <div class="card">
+          <div class="section-head"><h2>Roller</h2>
+            <span class="sag rozet">${roller ? roller.data.length : 0}</span></div>
+          ${roller ? (roller.data.length ? roller.data.map((r) => `
+            <div class="rol-kart">
+              <div class="ust"><strong>${esc(r.name)}</strong>
+                <span class="badge teknik">${esc(r.code)}</span></div>
+              <div class="alt">${esc(r.scope_type_label)} · ${esc(r.permission_count)} izin ·
+                ${esc(r.user_count)} atama</div>
+              <div class="action-bar">
+                ${yetkili
+                  ? `<button class="primary kucuk" data-yetki="${esc(r.id)}">Yetkileri düzenle</button>
+                     ${r.role_type === "custom" && r.can_edit_meta
+                       ? `<button class="kucuk" data-rol-duzenle="${esc(r.id)}">Rolü düzenle</button>` : ""}`
+                  : `<button class="kucuk" data-yetki="${esc(r.id)}">Yetkileri görüntüle</button>`}
+              </div>
+            </div>`).join("") : `<div class="bos">Tanımlı rol yok.</div>`)
+            : `<div class="bos">Roller yüklenemedi.</div>`}
+          ${yetkili || !roller ? "" : `<p class="muted small">Bu ekranda yalnızca
+            <strong>görüntüleme</strong> yapabilirsiniz; değişiklik için şirket yöneticisi
+            olmanız gerekir.</p>`}
+        </div>
+        <div id="yetki-editor"></div>
+      </div>`;
     document.querySelectorAll("[data-yetki]").forEach((d) =>
       d.addEventListener("click", () => yetkiEditoru(d.dataset.yetki)));
     document.querySelectorAll("[data-rol-duzenle]").forEach((d) =>

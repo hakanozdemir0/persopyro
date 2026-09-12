@@ -35,7 +35,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, connection, transaction
 from django.utils import timezone
 
 from apps.audit.services import log_action
@@ -383,6 +383,46 @@ def create_position(*, actor, tenant, code: str, name: str, level: str = "") -> 
 
 # --- Çalışan servisleri -----------------------------------------------------
 
+#: Çalışan numarası biçimi (sicil numarası): `EMP-000001`.
+#: **`public_id` DEĞİLDİR** (OD2/OD25): kimlik değil, kiracı içi sicil numarasıdır;
+#: tahmin edilebilir olması güvenlik açısından kritik değildir.
+EMPLOYEE_NO_PREFIX = "EMP"
+EMPLOYEE_NO_DIGITS = 6
+#: Aynı numara veritabanında varsa kaç kez yeni sıra değeri denenecek (bounded).
+_EMPLOYEE_NO_DENEME = 5
+
+
+def _sequence_degeri() -> int:
+    """`hr.employee_no_seq` üzerinden atomik sıra değeri üretir."""
+    with connection.cursor() as cur:
+        cur.execute("SELECT nextval('hr.employee_no_seq')")
+        return int(cur.fetchone()[0])
+
+
+def next_employee_no(tenant) -> str:  # noqa: ANN001
+    """
+    Sıradaki **çalışan numarasını** üretir (sunucu tarafı, concurrency-safe).
+
+    Kaynak: PostgreSQL `sequence` (`hr.employee_no_seq`, migration 0013).
+    `nextval` atomiktir: iki eşzamanlı istek **aynı değeri alamaz** ve kilit
+    beklemesi oluşmaz. Numara istemciden **kabul edilmez**; frontend hesaplamaz.
+
+    * Format: `EMP-000001` (prefix + 6 hane).
+    * **Birimden bağımsızdır:** çalışan başka birime taşınsa da numara değişmez.
+    * İşlem geri alınsa bile tüketilen sıra değeri geri gelmez (boşluk olabilir);
+      bu bilinçlidir — numara **benzersizlik** garantisi için vardır, ardışıklık
+      garantisi vermez.
+    * Elle girilmiş bir numarayla çakışma olursa (nadir) sıradaki değer denenir;
+      ısrarcı çakışmada işlem hata verir (fail-closed).
+    """
+    for _ in range(_EMPLOYEE_NO_DENEME):
+        numara = f"{EMPLOYEE_NO_PREFIX}-{_sequence_degeri():0{EMPLOYEE_NO_DIGITS}d}"
+        if not Employee.objects.filter(tenant=tenant, employee_no=numara).exists():
+            return numara
+    raise OrganizationError(
+        "Çalışan numarası üretilemedi: benzersiz bir sicil numarası bulunamadı."
+    )
+
 
 @transaction.atomic
 def create_employee(  # noqa: PLR0913
@@ -390,8 +430,8 @@ def create_employee(  # noqa: PLR0913
     actor,  # noqa: ANN001
     tenant,  # noqa: ANN001
     department: Department,
-    employee_no: str,
     hire_date: dt.date,
+    employee_no: str | None = None,
     position: Position | None = None,
     user=None,  # noqa: ANN001
     status: str = "active",
@@ -399,7 +439,9 @@ def create_employee(  # noqa: PLR0913
     """
     Çalışan (iş) kaydı oluşturur — **PII yazmaz** (kişisel veri ayrı tabloda).
 
-    İzin `employee.create` + hedef birim aktörün kapsamında olmalıdır.
+    `employee_no` **boş bırakılırsa sunucu üretir** (`next_employee_no`);
+    istemci numara uydurmaz/hesaplamaz. İzin `employee.create` + hedef birim
+    aktörün kapsamında olmalıdır.
     """
     _aktoru_dogrula(actor, "employee.create")
     _ayni_kiracili_mi(actor, department, "Çalışan oluşturma")
@@ -409,12 +451,13 @@ def create_employee(  # noqa: PLR0913
     if user is not None:
         _ayni_kiracili_mi(actor, user, "Çalışan oluşturma")
 
+    numara = (employee_no or "").strip() or next_employee_no(tenant)
     calisan = Employee.objects.create(
         tenant=tenant,
         department=department,
         position=position,
         user=user,
-        employee_no=employee_no,
+        employee_no=numara,
         hire_date=hire_date,
         status=status,
     )
@@ -425,7 +468,8 @@ def create_employee(  # noqa: PLR0913
         table_name="employees",
         record_id=calisan.pk,
         changes={
-            "employee_no": employee_no,
+            "employee_no": numara,
+            "employee_no_auto": not (employee_no or "").strip(),
             "department_id": str(department.pk),
             "position_id": str(position.pk) if position is not None else None,
             "hire_date": hire_date.isoformat(),

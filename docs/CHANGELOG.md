@@ -3,6 +3,87 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.33.0] — 2026-09-12 — Test arayüzü UX turu: geniş yerleşim, detay çekmecesi, otomatik çalışan no
+
+**Baseline (son commit `1a10e8c`):** çalışma ağacı temiz, tam test suite **450 passed**,
+`verify_fresh_install.sh` **VERIFY_EXIT=0**. Kullanıcı bildirimi: *gerçek kullanıcı testinde
+tespit edilen UX ve fonksiyon sorunlarını düzelt; yeni büyük HR modülü ekleme, mevcut
+backend/RBAC/RLS/tenant isolation/leave/organization/employee/role-permission mimarisini koru.*
+
+### Yerleşim ve tasarım standardı
+
+- `base.html` içinde ortak yerleşim katmanı: `--page-max: 1400px`, `.page-container`,
+  `.grid-2`, `.grid-3`, `.split`, `.form-grid`, `.data-table`, `.detail-panel`,
+  `.action-bar`, `.badge/.teknik`, `.option-card`, `.rol-kart`, `.card.ic`.
+  Ana içerik masaüstünde **1400 px**'e kadar genişler; `≤980px`'de bloklar alt alta
+  düşer. **Yeni bağımlılık yok** (npm/Vite/Tailwind/React/Bootstrap eklenmedi).
+- Sayfa başına yerleşim: Panel = 3 kart üst sıra + geniş tablolar; Departmanlar =
+  ağaç/detay **split-view**; Çalışanlar = filtre + geniş tablo + sağ çekmece;
+  Onaylar = geniş tablo; Yetki Yönetimi = rol listesi/permission **split-view**.
+
+### Fonksiyonel düzeltmeler
+
+- **Çalışan detayı** artık **sağ çekmece** (`#detail-panel`): satır altı açılan panel
+  sayfa yerleşimini bozmuyor. Aynı çalışanın `Detay`ı tekrar tıklanınca **kapanıyor**;
+  başka çalışanda önceki kapanıp yenisi açılıyor (tek çekmece); buton metni
+  `Detay` ⇄ `Detayı kapat`; Escape/Kapat da kapatıyor.
+- **Çalışan numarası sunucuda otomatik üretiliyor** (`EMP-000001`; `hr.employee_no_seq`,
+  migration **0013**). Form numara istemiyor (salt-okunur bilgi alanı), istemci numara
+  hesaplamıyor; `nextval` atomik olduğu için eşzamanlı kayıtlarda çakışma yok ve numara
+  **birim değişince değişmiyor**. `public_id` ile karıştırılmıyor (OD2/OD25).
+- **Çalışan listesi** kolonları: Çalışan (ad + e-posta), Çalışan no, Unvan, Birim,
+  Yönetici, Rol (yetki), Kalan izin (backend bakiyesi), Durum, İşlem + üstte
+  ad/no/birim/unvan/e-posta **filtresi** (`n / m kayıt`).
+- **İzin bakiyesi görünümü:** Panel'de kapsam bilançosu (hak/kullanılan/bekleyen/kalan)
+  backend'den geliyor; çalışan kaydı olmayan kullanıcı boş panel yerine kapsamındaki
+  çalışanların bakiyesini görüyor, çalışan yalnız kendi bakiyesini görüyor.
+- **İzin türü özellikleri** 2×2 kart düzeni (onay kutusu başlıkla hizalı, açıklama
+  altında, eşit yükseklik); izin türü tablosu başlıkları kullanıcı dostu
+  (Kod/Ad/Kategori/Ücretli/Bakiye/Belge/Onay/Durum/İşlem) ve tablo tam genişlik.
+- **İzin Talebi** sekmesi doğrudan açıldığında çalışan listesi boş kalmıyor (liste
+  sekme açılışında çekiliyor).
+- **Unvan ≠ rol** ayrımı arayüzde açık: çalışan detayında ve Yetki Yönetimi'nde
+  unvanın işi, rolün yetkiyi tanımladığı yazıyor.
+
+### Sonuç ve doğrulama
+
+- `tests/test_testui.py`: **+10 test** (otomatik çalışan no, numara çakışmaması, taşıma
+  sonrası numaranın sabit kalması, çekmece toggle kuralları, liste kolonları, yerleşim
+  sözleşmesi, izin türü özellikleri, yetki ekranı rol listesi, kalan izin kolonu,
+  şablon yorumu sızması regresyonu). Tam suite: **450 → 460 passed** (EXIT=0).
+- Kapılar: `RUFF_EXIT=0`, `BANDIT_EXIT=0`, `CHECK_EXIT=0`, `MAKEMIG_EXIT=0`,
+  `TEST_EXIT=0`.
+- Canlı tarayıcı (gerçek `runserver`, %100 zoom): giriş, Panel (3 kart + bakiye
+  tablosu), Departmanlar split-view + taşıma modalı, Çalışanlar kolonları + filtre +
+  çekmece aç/kapat/çoklu-tık/başka çalışan/Escape, numarasız çalışan oluşturma
+  (`EMP-000004`), Yetki Yönetimi split-view + gruplar, İzin Talebi + 2×2 özellik
+  kartları, çıkışın sunucu tarafında oturumu kapatması doğrulandı.
+
+### Notlar / açık noktalar
+
+- Eşzamanlı üretim doğrulaması: atomik `nextval` + ardışık üretim testi
+  (`tests/test_testui.py`) ve `verify_fresh_install.sh` adım **6c-9**'da paralel HTTP
+  oluşturma ölçümü (iki eşzamanlı istek → farklı numaralar).
+- `hr.employee_no_seq` **kiracıdan bağımsızdır** (global sıra): kiracı içi benzersizlik
+  bunun alt kümesidir; numara hassas veri değildir (OD31 kapsamı dışı).
+- Bu tur **yeni HR modülü eklemedi**; M15 (vardiya/devam) ve M16 (evrak) hâlâ sırada.
+
+### Değişen dosyalar (bu sürüm)
+
+- `apps/testui/templates/testui/base.html` — yerleşim/tasarım standardı (genişlik,
+  grid'ler, çekmece, tablo, rozet, kart içi bölüm, dar ekran kuralları)
+- `apps/testui/templates/testui/app.html` — sayfa yerleşimleri, çalışan listesi +
+  filtre + çekmece, numarasız kayıt formu, rol/izin ekranları, izin türü kartları
+- `apps/organization/services.py` — `next_employee_no()` (sequence) +
+  `create_employee(employee_no=None)`
+- `apps/organization/migrations/0013_m12_employee_no_sequence.py` — **YENİ**
+- `apps/testui/api.py` — çalışan oluşturmada numara istemciden alınmaz; rol atama
+  özetine `scope_org_unit_name`
+- `tests/test_testui.py` — +10 test
+- `scripts/verify_fresh_install.sh` — adım 6c-9
+- `docs/CHANGELOG.md`, `docs/DEVELOPMENT_RULES.md`, `docs/FEATURES.md`,
+  `docs/API.md`, `docs/DATABASE.md`, `docs/ORGANIZATION.md`
+
 ## [0.32.0] — 2026-09-12 — Çalışan kaydı bütün bilgileri ister: **kan grubu** (K3, şifreli) dahil
 
 **Baseline (son commit `911bb42`):** çalışma ağacı temiz, tam test suite **444 passed**.

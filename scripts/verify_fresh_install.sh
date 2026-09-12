@@ -748,6 +748,74 @@ bekle "geçersiz kan grubu → 400 (6c-8)" \
         -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
         -d '{"blood_type":"XY"}')" "400"
 
+# --- 6c-9) Otomatik çalışan no (eşzamanlı) + detay çekmecesi kuralları ---------
+# Ölçülen: (1) çalışan numarası istemciden gönderilmeden üretilir, (2) **iki
+# PARALEL** kayıt farklı numara alır (concurrency), (3) arayüzde sağdan açılan
+# detay çekmecesi ve "aynı çalışana tekrar tıkla → kapat" kararı bulunur,
+# (4) karar fonksiyonunun anlamı node ile doğrulanır.
+bilgi "otomatik çalışan no + detay çekmecesi (6c-9)"
+TMPD="$(mktemp -d)"
+PARALEL_PID=""
+DEP_ID="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments" |
+    "$PYTHON" -c 'import json,sys; print(json.loads(sys.stdin.read())["data"][0]["id"])')"
+for n in 1 2; do
+    curl -s -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d "{\"department_id\":\"$DEP_ID\",\"hire_date\":\"2026-06-01\",\"first_name\":\"Paralel$n\",\"last_name\":\"Kayit\"}" \
+        >"$TMPD/paralel_$n.json" &
+    PARALEL_PID="$PARALEL_PID $!"
+done
+# Yalnız bu iki curl beklenir: çıplak `wait`, arka plandaki runserver'ı da
+# bekleyip betiği kilitler.
+wait $PARALEL_PID
+NO1="$("$PYTHON" -c 'import json,sys; print(json.loads(open(sys.argv[1]).read())["data"]["employee_no"])' "$TMPD/paralel_1.json" 2>/dev/null || echo "")"
+NO2="$("$PYTHON" -c 'import json,sys; print(json.loads(open(sys.argv[1]).read())["data"]["employee_no"])' "$TMPD/paralel_2.json" 2>/dev/null || echo "")"
+case "$NO1$NO2" in
+    EMP-*EMP-*)
+        if [ "$NO1" != "$NO2" ]; then
+            bilgi "OK   paralel kayıtlar farklı numara aldı ($NO1 / $NO2)"
+        else
+            bilgi "FAIL paralel kayıtlar AYNI numarayı aldı: $NO1"; HATA_VAR=1
+        fi
+        ;;
+    *) bilgi "FAIL otomatik çalışan numarası üretilemedi: '$NO1' / '$NO2'"; HATA_VAR=1 ;;
+esac
+SAYFA_CEK="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/")"
+kontrol_metni "detay çekmecesi düğümü (6c-9)" "$SAYFA_CEK" 'id="detail-panel"'
+kontrol_metni "detay kapatma kuralı (6c-9)" "$SAYFA_CEK" 'function cekmeceKarari('
+kontrol_metni "kalan izin kolonu (6c-9)" "$SAYFA_CEK" '>Kalan izin</th>'
+if command -v node >/dev/null 2>&1; then
+    CEK_JS="$TMPD/cekmece.js"
+    "$PYTHON" - "$CEK_JS" "$ROOT/apps/testui/templates/testui/app.html" <<'PYCEK'
+import pathlib
+import re
+import sys
+
+hedef, kaynak = sys.argv[1], sys.argv[2]
+html = pathlib.Path(kaynak).read_text(encoding="utf-8")
+eslesme = re.search(r"function cekmeceKarari\([^)]*\)\s*\{[^}]*\}", html)
+if not eslesme:
+    raise SystemExit("cekmeceKarari bulunamadi")
+test = """
+const sonuc = [cekmeceKarari(null, "a"), cekmeceKarari("a", "a"), cekmeceKarari("a", "b")];
+const beklenen = ["a", null, "b"];
+if (JSON.stringify(sonuc) !== JSON.stringify(beklenen)) {
+  console.error("BEKLENMEYEN", sonuc);
+  process.exit(1);
+}
+"""
+pathlib.Path(hedef).write_text(eslesme.group(0) + test, encoding="utf-8")
+PYCEK
+    if node "$CEK_JS" >/dev/null 2>&1; then
+        bilgi "OK   detay çekmecesi kuralı: aynı çalışan kapatır, farklı çalışan değiştirir"
+    else
+        bilgi "FAIL detay çekmecesi kuralı (node)"; HATA_VAR=1
+    fi
+else
+    bilgi "ATLA detay çekmecesi kuralı (node kurulu değil)"
+fi
+rm -rf "$TMPD"
+
 oturum_kapat
 
 bekle "POST /auth/login (departman yöneticisi)" "$(oturum_ac "finans.mudur@persopyro.test")" "200"

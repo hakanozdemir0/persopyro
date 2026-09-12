@@ -501,6 +501,7 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 - **PRIMARY KEY:** `id` · **UNIQUE (kısmi):** `(tenant_id, employee_no) WHERE deleted_at IS NULL`
 - **FOREIGN KEYS:** `tenant_id`, `user_id → users.id` (nullable), `department_id → departments.id` (**NOT NULL** — OD24 §4), `position_id → positions.id` (nullable)
 - **Kolonlar:** `id, created_at, updated_at, deleted_at, tenant_id, user_id, department_id, position_id, employee_no, hire_date, termination_date, status`
+- **`employee_no` (sicil numarası):** **sunucu üretir** (`EMP-000001`; kaynak: `hr.employee_no_seq` sequence, migration **0013**). İstemci numara göndermek zorunda değildir/uydurmaz; **birim değişse de numara değişmez**. Bu bir **sicil** numarasıdır, `public_id` **değildir** (OD2/OD25). `nextval` atomiktir → eşzamanlı kayıtlarda çakışma olmaz; işlem geri alınsa da tüketilen sıra değeri geri gelmez (numara boşluğu olabilir, benzersizlik esastır).
 - **Doğrulanan tasarım:** `status` kapalı küme `CHECK` (`active`/`suspended`/`terminated`/`archived`); `CHECK (termination_date IS NULL OR termination_date >= hire_date)`; `department_id` **zorunlu**
 - **TENANT ISOLATION:** `tenant_id` RLS + `user_id`/`department_id`/`position_id` kiracı guard'ı · **PERSONAL DATA LEVEL:** **K0/K1** — bilinçli olarak PII **içermez**
 - **RLS:** ✅ + FORCE · **AUDIT:** yüksek (`employee.create`, `employee.department_change`)
