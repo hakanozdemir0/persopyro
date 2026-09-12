@@ -710,29 +710,14 @@ bekle "POST /test-ui/api/roles/create (yönetici → 201)" \
     "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/roles/create" \
         -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
         -d '{"name":"Doğrulama Rolü","code":"vrf_rol","scope_type":"UNIT"}')" "201"
-oturum_kapat
-
-bekle "POST /auth/login (departman yöneticisi)" "$(oturum_ac "finans.mudur@persopyro.test")" "200"
-bekle "GET  /employees/<id>/personal (dept_manager → 403)" \
-    "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/employees/$CALISAN_ID/personal")" "403"
-bekle "POST /test-ui/api/roles/create (dept_manager → 403)" \
-    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/roles/create" \
-        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
-        -d '{"name":"Yasak","code":"vrf_yasak","scope_type":"UNIT"}')" "403"
-oturum_kapat
-
-bekle "POST /auth/login (çalışan)" "$(oturum_ac "personel@persopyro.test")" "200"
-CALISAN_ME="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/me")"
-kontrol_metni "çalışan menüsü: yetki yönetimi kapalı" "$CALISAN_ME" '"roles_manage":false'
-kontrol_metni "çalışan menüsü: kişisel veri kapalı" "$CALISAN_ME" '"pii_gorunur":false'
-oturum_kapat
 
 # --- 6c-8) Kayıt formu: bütün kişisel veriler + kan grubu (K3, şifreli) ---------
 # Ölçülen: (1) kayıt formu K2 alanlarının tamamını + kan grubunu sorar,
 # (2) çalışan + bütün kişisel veri TEK istekte yazılır, (3) kan grubu okunabilir,
 # (4) veritabanında ŞİFRELİ durur (Fernet), (5) geçersiz değer 400 (fail-closed).
+# NOT: Bu adım **açık olan kiracı yöneticisi oturumunu** kullanır; ayrı giriş
+# yapılmaz (`/auth/login` hız sınırı nedeniyle ek oturum 429 üretiyordu).
 bilgi "kayıt formu + kan grubu (6c-8): bütün bilgiler, K3 şifreli saklanır"
-bekle "POST /auth/login (kiracı yöneticisi)" "$(oturum_ac "demo@persopyro.test")" "200"
 FORM_SAYFA="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/")"
 kontrol_metni "kayıt formu: kan grubu alanı (6c-8)" "$FORM_SAYFA" 'id="emp-kan"'
 kontrol_metni "kayıt formu: kimlik no alanı (6c-8)" "$FORM_SAYFA" 'id="emp-kimlik"'
@@ -762,6 +747,22 @@ bekle "geçersiz kan grubu → 400 (6c-8)" \
     "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees/$YENI_ID/personal" \
         -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
         -d '{"blood_type":"XY"}')" "400"
+
+oturum_kapat
+
+bekle "POST /auth/login (departman yöneticisi)" "$(oturum_ac "finans.mudur@persopyro.test")" "200"
+bekle "GET  /employees/<id>/personal (dept_manager → 403)" \
+    "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/employees/$CALISAN_ID/personal")" "403"
+bekle "POST /test-ui/api/roles/create (dept_manager → 403)" \
+    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/roles/create" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d '{"name":"Yasak","code":"vrf_yasak","scope_type":"UNIT"}')" "403"
+oturum_kapat
+
+bekle "POST /auth/login (çalışan)" "$(oturum_ac "personel@persopyro.test")" "200"
+CALISAN_ME="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/me")"
+kontrol_metni "çalışan menüsü: yetki yönetimi kapalı" "$CALISAN_ME" '"roles_manage":false'
+kontrol_metni "çalışan menüsü: kişisel veri kapalı" "$CALISAN_ME" '"pii_gorunur":false'
 oturum_kapat
 
 rm -f "$CEREZ"
