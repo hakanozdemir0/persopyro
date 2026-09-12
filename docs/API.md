@@ -123,6 +123,11 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/leave-types` | GET / POST | İzin türleri (tümü, pasifler dahil) / kiracıya özel tür ekleme (`leave.type.manage`; sistem kodları rezerve) |
 | `/test-ui/api/leave-types/<uuid>/deactivate` | POST | İzin türünü pasifleştirir (silmez; mevcut talepler korunur) |
 | `/test-ui/api/departments/<uuid>/update` | POST | Birimin adı/kodunu değiştirir (`org.department.manage` ∧ kapsam) |
+| `/test-ui/api/employees?scope=...` | GET | Kapsamdaki çalışanlar; `SELF` kapsamında **yalnız kendi kaydı** (`meta.self_only`), her satırda `izin_durumu` (yeşil/sarı nokta verisi) |
+| `/test-ui/api/employees` | POST | `manager_employee_id` verilirse birincil yönetici atanır (`employee.update` + kapsam; yazmadan önce doğrulanır) |
+| `/test-ui/api/leave-requests?scope=pending` | GET | Onay kuyruğu: satırlarda `talep_sahibi_bakiye` (hak/kullanılan/bekleyen/kalan) ve `kendi_talebi` bayrağı |
+| `/test-ui/api/leave-policies` | GET | İzin politikaları (`leave.type.manage`; yetkisizde `404`) |
+| `/test-ui/api/leave-policies/<uuid>/update` | POST | `allow_negative_balance` / `allow_refund_after_approval` / `fixed_days` günceller (`update_leave_policy`; karar serviste, `leave.type.manage`) |
 | `/test-ui/api/employees/<uuid>/personal` | GET / POST | Kişisel veriler (K2) — okuma **ve** yazma `employee.sensitive.read` ∧ kapsam; izinsiz `403`, kapsam dışı `404`; `citizenship ≠ TR` iken izin türü zorunlu (`400`) |
 | `/test-ui/api/users` | POST | Giriş hesabı açar (`user.manage`): `email` + `password` (+ ad/soyad). Zayıf parola/çakışan e-posta `400`; parola yanıtta **dönmez**, denetimde yalnız e-posta yazılır |
 | `/test-ui/api/roles/create` | POST | Kiracıya özel rol oluşturur (`role.manage`, `create_custom_role`): `name`, `code`, `scope_type` (TENANT/UNIT/UNIT_DIRECT/SELF). Varsayılan/var olan kod veya platform kapsamı `400` |

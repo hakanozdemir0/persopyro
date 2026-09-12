@@ -31,6 +31,7 @@ from apps.leave.services import (
     create_default_leave_types,
     create_leave_policy,
     create_leave_request,
+    update_leave_policy,
 )
 from apps.rbac.models import Role, UserRole
 from apps.rbac.services import create_default_roles
@@ -182,12 +183,26 @@ with tenant_context(TENANT_ID):
     # İzin türleri, yıllık hakediş politikası ve dönem hakedişi (idempotent).
     create_default_leave_types(actor=kullanıcı, tenant=kiracı)
     yillik_tur = LeaveType.objects.get(tenant=kiracı, code="annual_leave", deleted_at__isnull=True)
-    if not LeavePolicy.objects.filter(leave_type=yillik_tur, deleted_at__isnull=True).exists():
-        create_leave_policy(
+    # NOT: `allow_negative_balance=True` → bakiye yetersiz (hatta 0) olsa bile
+    # talep oluşturulabilir; kararı onaylayan verir ve onay ekranında talep
+    # sahibinin güncel bakiyesini görür (ürün kararı).
+    yillik_politika = LeavePolicy.objects.filter(
+        leave_type=yillik_tur, deleted_at__isnull=True
+    ).first()
+    if yillik_politika is None:
+        yillik_politika = create_leave_policy(
             actor=kullanıcı,
             leave_type=yillik_tur,
             accrual_method="fixed",
             fixed_days=Decimal("14.0"),
+            allow_negative_balance=True,
+        )
+    elif not yillik_politika.allow_negative_balance:
+        update_leave_policy(
+            actor=kullanıcı,
+            policy=yillik_politika,
+            allow_negative_balance=True,
+            reason="Demo: bakiye yetersizse de talep açılabilsin",
         )
     accrue_leave_entitlements(
         actor=kullanıcı, tenant=kiracı, period_year=timezone.localdate().year

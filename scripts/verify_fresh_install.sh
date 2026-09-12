@@ -686,14 +686,13 @@ bilgi "yetki sınırları (6c-5): çalışan ne rol listesini görür ne yetki d
 bekle "POST /auth/login (çalışan rolü)" "$(oturum_ac "personel@persopyro.test")" "200"
 bekle "GET  /test-ui/api/roles (çalışan → 403)" \
     "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/roles")" "403"
-kontrol_metni "çalışan şirket dizinini görür" \
-    "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")" '"dizin":true'
-DIZIN_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")"
-BASKASI_ID="$("$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; print(next(x["id"] for x in d if x.get("dizin")))' "$DIZIN_JSON")"
-DETAY_JSON="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees/$BASKASI_ID")"
-kontrol_metni "başka çalışanın detayı dizin kaydı" "$DETAY_JSON" '"dizin":true'
-kontrol_yok "dizinde izin/bakiye detayı yok" "$DETAY_JSON" '"annual"'
-kontrol_yok "dizinde e-posta/ad yok" "$DETAY_JSON" "persopyro.test"
+CALISAN_LISTE="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")"
+kontrol_metni "çalışan yalnız kendi kaydını görür" "$CALISAN_LISTE" '"self_only":true'
+kontrol_metni "çalışan listesinde tek kayıt (kendisi)" "$CALISAN_LISTE" '"kendi_kaydim":true'
+kontrol_yok "başka çalışan kaydı dönmez" "$CALISAN_LISTE" 'DEMO-003'
+BASKASI_ID="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["data"][0]["id"])' "$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/employees")")"
+kontrol_metni "kendi bakiye ucu açık" \
+    "$(kod -b "$CEREZ" "$TABAN2/test-ui/api/employees/$BASKASI_ID/balances")" "200"
 oturum_kapat
 
 # --- 6c-3d) Hesap/kişisel veri/rol (bildirim 5. tur) --------------------------
@@ -733,6 +732,36 @@ rm -f "$CEREZ"
 kill "$SUNUCU_PID" 2>/dev/null || true
 wait "$SUNUCU_PID" 2>/dev/null || true
 SUNUCU_PID=""
+
+# --- 6c-7) Arayüz JS sözdizimi (node varsa) -----------------------------------
+# Neden: şablon içindeki gömülü JS yalnız tarayıcıda çalışır; bozuk bir şablon
+# dizesi panelin sessizce boş kalmasına yol açar (yaşandı). `node --check` bunu
+# kurulum doğrulamasında yakalar. Node yoksa adım atlanır (bilgi verilir).
+if command -v node >/dev/null 2>&1; then
+    bilgi "arayüz JS sözdizimi (6c-7): gömülü betik node ile denetleniyor"
+    # NOT: `node --check` uzantısız dosyayı reddeder (ERR_UNKNOWN_FILE_EXTENSION) →
+    # geçici dosya `.js` uzantısıyla oluşturulur.
+    JS_GECICI="$(mktemp)".js
+    "$PYTHON" - "$JS_GECICI" "$ROOT/apps/testui/templates/testui/app.html" <<'PYJS'
+import pathlib
+import re
+import sys
+
+hedef, kaynak = sys.argv[1], sys.argv[2]
+html = pathlib.Path(kaynak).read_text(encoding="utf-8")
+bloklar = re.findall(r"<script>(.*?)</script>", html, re.S)
+pathlib.Path(hedef).write_text(bloklar[-1] if bloklar else "", encoding="utf-8")
+PYJS
+    if node --check "$JS_GECICI" >/dev/null 2>&1; then
+        bilgi "OK   arayüz JS sözdizimi geçerli"
+    else
+        bilgi "FAIL arayüz JS sözdizimi bozuk (node --check)"
+        HATA_VAR=1
+    fi
+    rm -f "$JS_GECICI"
+else
+    bilgi "ATLA arayüz JS sözdizimi (node kurulu değil)"
+fi
 
 # --- 6c-4) Üretim varsayılanı: arayüz KAPALI (DJANGO_DEBUG=0) ---------------------
 bilgi "üretim varsayılanı (6c-4): /test-ui/* kapalı olmalı"

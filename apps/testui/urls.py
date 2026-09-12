@@ -49,6 +49,12 @@ urlpatterns = [
     ),
     path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
     path("api/roles/create", api.RoleCreateView.as_view(), name="test-ui-role-create"),
+    path("api/leave-policies", api.LeavePolicyListView.as_view(), name="test-ui-leave-policies"),
+    path(
+        "api/leave-policies/<str:policy_id>/update",
+        api.LeavePolicyUpdateView.as_view(),
+        name="test-ui-leave-policy-update",
+    ),
     path(
         "api/roles/<str:role_id>/update",
         api.RoleUpdateView.as_view(),

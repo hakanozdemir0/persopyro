@@ -35,6 +35,7 @@ from apps.leave.models import (
     ApprovalStep,
     ApprovalStepStatus,
     LeaveBalance,
+    LeavePolicy,
     LeaveRequest,
     LeaveRequestStatus,
     LeaveType,
@@ -57,6 +58,7 @@ from apps.leave.services import (
     current_step,
     deactivate_leave_type,
     decide_approval_step,
+    update_leave_policy,
     user_employee,
 )
 from apps.leave.services.balances import get_or_create_balance, period_year_for
@@ -70,6 +72,7 @@ from apps.organization.services import (
     create_position,
     move_department,
     move_employee,
+    set_primary_manager,
     soft_delete_department,
     sub_tree_department_ids,
     update_department,
@@ -267,8 +270,12 @@ def _kapsam_ozeti(user) -> dict:  # noqa: ANN001
     }
 
 
-def _calisan_ozeti(employee: Employee) -> dict:  # noqa: ANN001
+def _calisan_ozeti(employee: Employee, izin_durumu: dict | None = None) -> dict:  # noqa: ANN001
     """Çalışan özeti — **K2/K3 alanları dahil edilmez**."""
+    if izin_durumu is None:
+        izin_durumu = _izin_durumu_haritasi([employee]).get(
+            employee.pk, {"izinde": False, "kalan_gun": None, "isaret": "yok", "bitis": None}
+        )
     iliski = (
         employee.manager_relations.filter(
             relation_type="primary", effective_to__isnull=True, deleted_at__isnull=True
@@ -296,6 +303,7 @@ def _calisan_ozeti(employee: Employee) -> dict:  # noqa: ANN001
             else None
         ),
         "roles": _kullanicinin_rolleri(employee.user) if employee.user_id else [],
+        "izin_durumu": izin_durumu,
         "annual": _yillik_ozet(employee),
         "manager": (
             {
@@ -312,8 +320,57 @@ def _calisan_ozeti(employee: Employee) -> dict:  # noqa: ANN001
     }
 
 
-def _talep_ozeti(talep, user) -> dict:  # noqa: ANN001
+def _kapsamda_mi(user, employee: Employee) -> bool:  # noqa: ANN001
+    """Çalışan, aktörün organizasyon kapsamında mı? (hedef doğrulama)"""
+    kapsam = user_org_scope(user)
+    if kapsam.tenant_wide:
+        return True
+    if employee.department_id is None:
+        return False
+    return employee.department_id in kapsam.unit_ids
+
+
+def _izin_durumu_haritasi(employees) -> dict:  # noqa: ANN001
+    """
+    Çalışan bazında **mevcut izin durumu** (bildirim: "izinde olanların yanında
+    yeşil nokta, 7 günden az süre kalanlarda sarı").
+
+    * `yesil` → bugün onaylı izin aralığının içinde, bitişe 7+ gün var.
+    * `sari`  → izinde ve bitişe **7 günden az** kaldı.
+    * `yok`   → bugün izinde değil.
+
+    Kaynak: onaylı `leave_requests` satırları (kişisel veri içermez, yalnız tarih).
+    """
+    bugun = timezone.localdate()
+    idler = [e.pk for e in employees]
+    if not idler:
+        return {}
+    satirlar = LeaveRequest.objects.filter(
+        deleted_at__isnull=True,
+        status=LeaveRequestStatus.APPROVED,
+        employee_id__in=idler,
+        start_date__lte=bugun,
+        end_date__gte=bugun,
+    ).order_by("employee_id", "end_date").values_list("employee_id", "end_date")
+    harita: dict = {}
+    for employee_id, bitis in satirlar:
+        # Birden fazla örtüşen izin varsa **en yakın bitiş** belirleyicidir
+        # ("7 günden az kaldı" uyarısı en erken biten izne göre verilir).
+        if employee_id in harita:
+            continue
+        kalan = (bitis - bugun).days
+        harita[employee_id] = {
+            "izinde": True,
+            "kalan_gun": kalan,
+            "isaret": "sari" if kalan < 7 else "yesil",
+            "bitis": bitis.isoformat(),
+        }
+    return harita
+
+
+def _talep_ozeti(talep, user, bakiye_dahil: bool = False) -> dict:  # noqa: ANN001
     adim = current_step(talep)
+    kendi_employee_id = getattr(user_employee(user), "pk", None)
     return {
         "id": str(talep.pk),
         "employee_no": talep.employee.employee_no,
@@ -333,9 +390,15 @@ def _talep_ozeti(talep, user) -> dict:  # noqa: ANN001
         "requires_document": talep.leave_type.requires_document,
         "document_ref": str(talep.document_ref) if talep.document_ref else None,
         "current_step_no": adim.step_no if adim is not None else None,
+        "kendi_talebi": kendi_employee_id is not None
+        and talep.employee_id == kendi_employee_id,
         "can_approve": can_approve_step(user, adim, talep),
         "can_cancel": can_cancel_leave_request(user, talep),
         "can_view": can_view_leave_request(user, talep),
+        # Onay ekranı: onaylayan, talep sahibinin güncel bakiyesini görür
+        # (bildirim: "onaylayan kişi talep gönderen kullanıcının mevcut izin
+        # bakiyesini onaylama ekranında görebilmeli").
+        "talep_sahibi_bakiye": _yillik_ozet(talep.employee) if bakiye_dahil else None,
     }
 
 
@@ -563,7 +626,8 @@ class DashboardView(TestUiView):
             ]
 
         onay_bekleyen = [
-            _talep_ozeti(t, user)
+            # Onay ekranı: talep sahibinin güncel bakiyesi de döner.
+            _talep_ozeti(t, user, bakiye_dahil=True)
             for t in (
                 LeaveRequest.objects.filter(
                     deleted_at__isnull=True, status=LeaveRequestStatus.PENDING
@@ -583,7 +647,10 @@ class DashboardView(TestUiView):
                 LeaveRequest.objects.filter(
                     deleted_at__isnull=True,
                     status=LeaveRequestStatus.APPROVED,
-                    start_date__gte=bugun,
+                    # Aralığı tamamen geçmiş izinler "yaklaşan" olarak gösterilmez
+                    # (bildirim); devam eden izin (başlangıcı geçmiş, bitişi bugün
+                    # veya sonrası) listede kalır.
+                    end_date__gte=bugun,
                 )
                 .select_related("employee__department", "leave_type", "employee")
                 .order_by("start_date")[:20]
@@ -834,35 +901,39 @@ class EmployeeListView(TestUiView):
         # Böylece organizasyon şeması görünür ama başkalarının izin/bakiye detayları
         # görünmez (docs/ORGANIZATION.md §5 "kişisel veri içermez" ilkesi).
         if not kapsam.tenant_wide and not kapsam.unit_ids:
-            if not user_has_permission(request.user, "org.department.read"):
-                raise Http404("dizin_yetkisi_yok")
-            dizin = [_dizin_kaydi(e) for e in Employee.objects.filter(deleted_at__isnull=True)]
-            if kendi is not None:
-                dizin = [d for d in dizin if d["id"] != str(kendi.pk)] + [
-                    {
-                        **_calisan_ozeti(kendi),
-                        "dizin": False,
-                        "kendi_kaydim": True,
-                        "annual": _yillik_ozet(kendi),
-                    }
-                ]
+            # Yalnız kendi kaydı (bildirim: "normal bir çalışan sadece kendini
+            # görsün; diğer çalışanları ve numaralarını görmesine gerek yok").
+            kayitlar = (
+                [{**_calisan_ozeti(kendi), "kendi_kaydim": True}] if kendi is not None else []
+            )
             return Response(
                 {
-                    "data": dizin,
+                    "data": kayitlar,
                     "meta": {
                         "can_create": False,
                         "scope": _kapsam_ozeti(request.user),
-                        "directory_only": True,
+                        "self_only": True,
                     },
                 }
             )
+        calisanlar = list(kapsamdaki_calisanlar(request.user))
+        durumlar = _izin_durumu_haritasi(calisanlar)
         return Response(
             {
-                "data": [_calisan_ozeti(e) for e in kapsamdaki_calisanlar(request.user)],
+                "data": [
+                    _calisan_ozeti(
+                        e,
+                        durumlar.get(
+                            e.pk,
+                            {"izinde": False, "kalan_gun": None, "isaret": "yok", "bitis": None},
+                        ),
+                    )
+                    for e in calisanlar
+                ],
                 "meta": {
                     "can_create": user_has_permission(request.user, "employee.create"),
                     "scope": _kapsam_ozeti(request.user),
-                    "directory_only": False,
+                    "self_only": False,
                 },
             }
         )
@@ -942,6 +1013,26 @@ class EmployeeListView(TestUiView):
                         "Bu e-posta ile kayıtlı kullanıcı yok. Listeden seçin "
                         "(hesap oluşturma kapsam dışıdır)."
                     )
+            # Birincil yönetici (bildirim: "her çalışan girişinde bağlı olduğu
+            # yöneticinin de seçilmesi gerekmeli"): yetki ve kapsam **yazmadan
+            # önce** doğrulanır ki kayıt yarım kalmasın.
+            yonetici = None
+            if veri.get("manager_employee_id"):
+                if not user_has_permission(request.user, "employee.update"):
+                    raise TestUiAuthorizationError(
+                        "Yönetici atamak için 'employee.update' izni gerekir."
+                    )
+                yonetici = Employee.objects.filter(
+                    pk=_uuid(veri["manager_employee_id"], "manager_employee_id"),
+                    tenant_id=request.user.tenant_id,
+                    deleted_at__isnull=True,
+                ).first()
+                if yonetici is None:
+                    raise LeaveError("Seçilen yönetici bulunamadı (veya bu kiracıya ait değil).")
+                if not _kapsamda_mi(request.user, yonetici):
+                    raise TestUiAuthorizationError(
+                        "Seçilen yönetici organizasyon kapsamınız dışında."
+                    )
             calisan = create_employee(
                 actor=request.user,
                 tenant=request.user.tenant,
@@ -951,6 +1042,15 @@ class EmployeeListView(TestUiView):
                 position=position,
                 user=user,
             )
+            if yonetici is not None:
+                if yonetici.pk == calisan.pk:
+                    raise LeaveError("Çalışan kendi yöneticisi olamaz.")
+                set_primary_manager(
+                    actor=request.user,
+                    employee=calisan,
+                    manager_employee=yonetici,
+                    reason="Çalışan oluşturulurken atandı",
+                )
             # Kişisel veriler (yalnız `employee.sensitive.read` sahibi yazabilir).
             pii = {a: veri[a] for a in PII_ALANLARI if a in veri}
             if pii:
@@ -1206,6 +1306,72 @@ class LeaveTypeListView(TestUiView):
         return Response({"data": _izin_turu_ozeti(tur)}, status=status.HTTP_201_CREATED)
 
 
+def _politika_ozeti(policy) -> dict:  # noqa: ANN001
+    """İzin politikası özeti (sunum; karar vermez)."""
+    return {
+        "id": str(policy.pk),
+        "leave_type": policy.leave_type.name,
+        "leave_type_code": policy.leave_type.code,
+        "accrual_method": policy.accrual_method,
+        "fixed_days": str(policy.fixed_days) if policy.fixed_days is not None else None,
+        # "Bakiye yetersizse talep açılabilir" anahtarı (bildirim: bakiye 0 olsa
+        # bile talep oluşturulabilsin → bu bayrak True olmalı).
+        "allow_negative_balance": policy.allow_negative_balance,
+        "allow_refund_after_approval": policy.allow_refund_after_approval,
+        "status": policy.status,
+        "is_active": policy.status == "active",
+        "rules_count": policy.rules.filter(deleted_at__isnull=True).count(),
+    }
+
+
+class LeavePolicyListView(TestUiView):
+    """
+    İzin politikaları — `leave.type.manage` sahibi görür ve düzenler.
+
+    Yetkisi olmayan kullanıcı **403** alır; arayüz kartı hiç göstermez.
+    """
+
+    def get(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "leave.type.manage"):
+            raise Http404("politika_gorunmez")
+        politikalar = LeavePolicy.objects.filter(
+            deleted_at__isnull=True
+        ).select_related("leave_type").order_by("leave_type__code")
+        return Response({"data": [_politika_ozeti(p) for p in politikalar]})
+
+
+class LeavePolicyUpdateView(TestUiView):
+    """Politika kurallarını günceller (kararı `update_leave_policy` verir)."""
+
+    def post(self, request, policy_id: str):  # noqa: ANN001
+        politika = LeavePolicy.objects.filter(
+            pk=_uuid(policy_id, "policy_id"), deleted_at__isnull=True
+        ).first()
+        if politika is None:
+            raise Http404("politika_yok")
+        veri = request.data
+        try:
+            update_leave_policy(
+                actor=request.user,
+                policy=politika,
+                fixed_days=_sayi(veri.get("fixed_days")) if "fixed_days" in veri else None,
+                allow_negative_balance=(
+                    bool(veri.get("allow_negative_balance"))
+                    if "allow_negative_balance" in veri
+                    else None
+                ),
+                allow_refund_after_approval=(
+                    bool(veri.get("allow_refund_after_approval"))
+                    if "allow_refund_after_approval" in veri
+                    else None
+                ),
+                reason=str(veri.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _politika_ozeti(politika)})
+
+
 class LeaveTypeDeactivateView(TestUiView):
     """İzin türünü devre dışı bırakır (silmez; mevcut talepler korunur)."""
 
@@ -1420,6 +1586,22 @@ class LookupView(TestUiView):
                         ).order_by("code")
                     ],
                     "users": _kullanici_secenekleri(request.user),
+                    # Çalışan oluştururken "Yönetici" seçimi için: yalnız
+                    # kapsamdaki çalışanlar (ad/e-posta değil, kimlik + no).
+                    "employees": [
+                        {
+                            "id": str(e.pk),
+                            "employee_no": e.employee_no,
+                            "label": (
+                                f"{e.user.first_name} {e.user.last_name}".strip()
+                                or (e.user.email if e.user_id else e.employee_no)
+                            ),
+                            "department": e.department.name if e.department_id else None,
+                        }
+                        for e in kapsamdaki_calisanlar(request.user)
+                    ]
+                    if user_has_permission(request.user, "employee.update")
+                    else [],
                     "categories": [{"value": k, "label": e} for k, e in LeaveCategory.choices],
                     "leave_type_presets": [
                         {
@@ -1466,6 +1648,7 @@ class LookupView(TestUiView):
                         request.user, "org.position.manage"
                     ),
                     "can_manage_leave_types": can_manage_leave_types(request.user),
+                    "can_manage_policy": user_has_permission(request.user, "leave.type.manage"),
                     "can_create_users": user_has_permission(request.user, "user.manage"),
                     "can_see_pii": user_has_permission(request.user, "employee.sensitive.read"),
                 },
@@ -1488,6 +1671,7 @@ PII_ALANLARI = (
     "work_permit_valid_until",
     "national_id",
     "iban",
+    "bank_name",
 )
 
 
@@ -1509,6 +1693,7 @@ def _pii_ozeti(kayit) -> dict:  # noqa: ANN001
         ),
         "national_id": kayit.national_id,
         "iban": kayit.iban,
+        "bank_name": kayit.bank_name,
     }
 
 
@@ -1666,17 +1851,9 @@ class EmployeeDetailView(TestUiView):
         try:
             calisan = _kapsamdaki_calisan(request.user, employee_id)
         except Http404:
-            # Kapsam dışı ama kiracı içinde: yalnız PII'siz **dizin** bilgisi
-            # (kapsamı SELF olan kullanıcı organizasyon şemasını görebilsin).
-            kapsam = user_org_scope(request.user)
-            if (not kapsam.tenant_wide and not kapsam.unit_ids) and user_has_permission(
-                request.user, "org.department.read"
-            ):
-                dizin = Employee.objects.filter(
-                    pk=_uuid(employee_id, "employee_id"), deleted_at__isnull=True
-                ).first()
-                if dizin is not None:
-                    return Response({"data": {**_dizin_kaydi(dizin), "yetki_gorunur": False}})
+            # Kapsam dışı: kayıt **yokmuş gibi** 404 (bildirim: çalışan
+            # başkalarını ve numaralarını görmesin; "yetkiniz yok" bilgisi de
+            # gösterilmez).
             raise
         yil = period_year_for()
         ozet = _calisan_ozeti(calisan)
@@ -1809,6 +1986,14 @@ class LeaveRequestListView(TestUiView):
         if kapsam == "pending":
             adaylar = temel.filter(status=LeaveRequestStatus.PENDING).order_by("start_date")
             talepler = [t for t in adaylar if can_view_leave_request(user, t)]
+            # Onay kuyruğunda talep sahibinin bakiyesi de döner (yetki zaten
+            # `can_view_leave_request` süzgecinden geçti).
+            return Response(
+                {
+                    "data": [_talep_ozeti(t, user, bakiye_dahil=True) for t in talepler],
+                    "meta": {"scope": kapsam},
+                }
+            )
         else:
             calisan = user_employee(user)
             talepler = (

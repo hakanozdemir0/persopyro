@@ -218,6 +218,28 @@ PII'siz çalışan dizini, kişisel veri kapısı, rol oluşturma, üretim varsa
 6. **Yetki açıp kapatma:** rol izinlerini değiştir → çıkış yapıp o rolle giriş yap →
    etkinin anında görüldüğünü doğrula.
 
+### Elle denenecek yeni akışlar (bildirim 6. tur)
+
+1. **Görünürlük:** yetkisiz rolle gir (ör. `personel@persopyro.test`) → Departmanlar,
+   Çalışanlar, İzin Talebi sekmelerinde oluşturma formları **hiç görünmemeli**
+   ("yetkiniz yok" yazısı da olmamalı).
+2. **Kendi kaydı:** aynı kullanıcıda çalışan listesinde yalnız kendi kaydı görünür.
+3. **İzin durumu noktası:** bugün izinde olan çalışanda yeşil, izni ≤7 gün kalanında
+   sarı nokta (ör. DEMO-001).
+4. **Eksi bakiye:** İzin Talebi → İzin politikası → "bakiye yetersizse talep açılabilir"
+   açıkken, kalan günden uzun talep oluşturulabilir; kapatıp deneyince `409` gelir.
+5. **Kendi talebi:** Onaylar sekmesinde kendi talebinde Onayla/Reddet **yok**;
+   Düzenle/İptal var. Düzenle → tarih değiştir → kaydet: eski talep iptal, yenisi onaya
+   sunulur (mesaj bunu söyler).
+6. **Onaylayan bakiyesi:** yönetici hesabıyla Onaylar sekmesinde satırda talep sahibinin
+   bakiyesi görünür.
+7. **Tarih biçimi:** tüm tarihler `gg.aa.yyyy`.
+8. **Yönetici seçimi:** Yeni çalışan formunda "Bağlı olduğu yönetici" seçilir; detayda
+   yönetici görünür.
+9. **JS sözdizimi:** şablon içi betik değiştiyse `bash scripts/verify_fresh_install.sh`
+   6c-7 adımı `node --check` ile denetler (yerelde de: gömülü betiği çıkarıp
+   `node --check`).
+
 ### Kapsam dışı
 
 Impersonation **yok** (kullanıcı değiştirmek için çıkış + giriş). Üretim UI'ı,

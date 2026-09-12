@@ -282,6 +282,13 @@ class EmployeePersonalData(TimeStampedModel, SoftDeleteModel):
     personal_email = models.EmailField("kişisel e-posta", max_length=190, blank=True)
     personal_phone = models.CharField("kişisel telefon", max_length=30, blank=True)
     iban = models.CharField("IBAN", max_length=34, blank=True)
+    bank_name = models.CharField(
+        "banka",
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Banka adı (IBAN ile birlikte banka bilgisi).",
+    )
     # --- K2 devamı (M12 genişletme, 2026-09-11) ---
     emergency_contact_phone = models.CharField("yakın kişi telefonu", max_length=30, blank=True)
     emergency_contact_relation = models.CharField("yakınlık derecesi", max_length=60, blank=True)

@@ -3,6 +3,91 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.30.0] — 2026-09-11 — Test arayüzü: görünürlük ve izin akışı düzeltmeleri (kendi talebini onaylama, izin durumu noktası, banka bilgileri, tarih biçimi)
+
+**Baseline (son commit `9c81671`):** çalışma ağacı temiz, tam test suite **435 passed**.
+
+Kullanıcı bildirimi: *"yetkisi olmayan çalışanlar yeni çalışan/pozisyon/departman ekle
+gibi yerleri görmesin — 'yetkiniz yok' yazması yerine hiç görmemeli"*, *"izin bakiyesi 0
+olsa bile izin talebi oluşturulabilsin"*, *"onaylayan kişi talep sahibinin mevcut izin
+bakiyesini onaylama ekranında görebilmeli"*, *"yetki yönetimindeki 'Oturumum' kısmı boş
+yere görünüyor"*, *"yeni ünvan ekle ile yeni çalışan ekle iç içe olmamalı"*, *"IBAN
+görünmüyor; banka bilgileri olarak IBAN ve Banka sorulmalı"*, *"tüm tarihler gg.aa.yyyy
+biçiminde"*, *"izin talep eden çalışan kendi iznini onaylamasın ama iptal/düzenleyebilsin"*,
+*"yalnız yetki verilenler izin tanımlaması yapabilsin"*, *"yaklaşan izinlerde tarihi geçmiş
+gösterilmesin"*, *"izinde olanların yanında yeşil nokta, 7 günden az kalanlarda sarı"*,
+*"normal çalışan yalnız kendini görsün; yönetici kendine bağlı çalışanları görsün"*,
+*"her çalışan kaydında bağlı olduğu yönetici seçilebilmeli"*.
+
+### Görünürlük (yetkisi olmayan hiç görmesin)
+
+- Departmanlar, çalışanlar, pozisyon, izin türü ve politika formları artık yetkisiz
+  kullanıcıda **hiç render edilmez** (önceden "Yetkiniz yok: …" notu veya boş kart
+  kabuğu görünüyordu). Backend davranışı değişmedi: yetkisiz istek yine `403`.
+- **Yetki Yönetimi** sekmesi zaten yalnız `role.manage` sahibinde görünür; sekmedeki
+  boş "Oturumum" kartı kaldırıldı.
+
+### İzin akışı
+
+- **Bakiye yetersiz (0) iken talep açılabilir:** anahtar politika bayrağıdır
+  (`allow_negative_balance`). Demo/seed politikası açık; `leave.type.manage` sahibi
+  İzin Talebi sekmesindeki **İzin politikası** kartından açıp kapatabilir. Kapalıyken
+  aşırı talep **409** + "Yetersiz izin bakiyesi" mesajı verir (fail-closed).
+- **Onaylayan, talep sahibinin güncel bakiyesini görür:** onay kuyruğu (panel kartı ve
+  Onaylar sekmesi) satırlarında `talep_sahibi_bakiye` döner (hak/kullanılan/bekleyen/kalan).
+- **Kendi talebini onaylama yasağı:** servis zaten `SEPARATE_ACTOR` ile reddediyordu
+  (`can_approve_step` + adım sahibi kontrolü → `403`); arayüz artık kendi talebinde
+  Onayla/Reddet yerine **Düzenle** ve **İptal** gösteriyor.
+- **Düzenleme akışı:** "Düzenle" talebin tarih/tür/gerekçesini forma taşır; kaydetme
+  eski talebi **iptal** edip yenisini onaya sunar (onay adımları ve rezervasyon yeniden
+  kurulur; geçmiş ve denetim korunur). Arayüz iki adımı tek düğmede yapar ve sonucu
+  açıkça söyler.
+- **İzin durumu noktası:** çalışan listesinde bugün onaylı izin aralığında olan kayıtta
+  **yeşil**, bitişe **7 günden az** kaldıysa **sarı** nokta; örtüşen izinlerde en yakın
+  bitiş belirleyicidir. Veri onaylı taleplerden gelir (kişisel veri içermez).
+- **Yaklaşan izinler:** aralığı tamamen geçmiş izinler listelenmez (`end_date >= bugün`);
+  devam eden izin görünür.
+
+### Çalışan yönetimi
+
+- **Yalnız kendi kaydı:** normal çalışan (`SELF` kapsamı) çalışan listesinde artık
+  YALNIZ kendi kaydını görür; başka çalışanların kaydı ve numarası dönmez, kapsam dışı
+  çalışan detayı **404**. (Bu, önceki "PII'siz şirket dizini" kararını yürürlükten
+  kaldırır — kullanıcı bildirimi: "diğer çalışanları ve nolarını görmesine gerek yok".)
+  Organizasyon şeması (birimler) görünür kalır.
+- **Yönetici seçimi:** yeni çalışan formunda **Bağlı olduğu yönetici** seçilir;
+  `employee.update` + kapsam doğrulanır ve atama yazılmadan **önce** yapılır
+  (`set_primary_manager`, denetimli). Onay akışının ilk adımı bu ilişkiye göre kurulur.
+
+### Kişisel veriler
+
+- **Banka bilgileri:** `hr.employee_personal_data` tablosuna `bank_name` kolonu eklendi
+  (migration **0011**, eklemeli). Form ve detay artık **Banka** + **IBAN** alanlarını
+  birlikte gösterir/sorar; IBAN daha önce kaydedilse de arayüzde gösterilmiyordu.
+
+### Tarih biçimi
+
+- Tüm tarih gösterimleri **gg.aa.yyyy** (`11.09.2026`): biçimlendirme tek bir `tarih()`
+  yardımcısında; ISO değerler saklanır, biçim yalnız sunumda değişir. `html lang="tr"`
+  zaten ayarlı olduğundan tarih girişleri de TR biçiminde görünür.
+
+### Doğrulama ve yeni denetim adımı
+
+- 9 yeni regresyon testi (75 toplam): politika ile eksi bakiye talebi, politika yetkisi,
+  izin durumu işaretleri (yeşil/sarı), onay kuyruğunda bakiye + kendi talebi, kendi
+  talebini onaylayamama, yaklaşan izin süzgeci, yönetici seçimi, banka bilgileri.
+- `verify_fresh_install.sh` **6c-7**: gömülü arayüz JS'i `node --check` ile denetlenir
+  (bozuk şablon dizesi panelin sessizce boş kalmasına yol açıyordu; node yoksa atlanır).
+- Canlı tarayıcı: formlar yetkisizde hiç görünmüyor, çalışan yalnız kendi kaydını görüyor,
+  kendi talebinde Düzenle/İptal var, düzenleme gerçekten iptal+yeni talep üretiyor,
+  onay satırında bakiye görünüyor, tarihler gg.aa.yyyy, sarı/yeşil noktalar çalışıyor.
+
+### Kapsam dışı (bilinçli)
+
+- Talep düzenleme, ayrı bir "güncelle" servisi yerine **iptal + yeni talep** olarak
+  uygulandı (onay adımları/rezervasyon tutarlılığı ve denetim izi için).
+- Rol silme/pasifleştirme yok; impersonation yok; hafta tatili/resmî tatil gün hesabı M15.
+
 ## [0.29.0] — 2026-09-11 — Test arayüzü: yetki yönetimi kapısı, hesap açma, kişisel veriler, rol oluşturma
 
 **Baseline (son commit `f1bd7cf`):** çalışma ağacı temiz, tam test suite **428 passed**.

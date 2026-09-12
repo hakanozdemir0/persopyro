@@ -23,7 +23,8 @@ import pytest
 from django.utils import timezone
 
 from apps.audit.models import AuditLog
-from apps.leave.models import LeaveBalance
+from apps.leave.models import LeaveBalance, LeavePolicy
+from apps.leave.services import create_leave_request, decide_approval_step
 from apps.organization.services import create_position
 from apps.rbac.models import Permission, Role, RolePermission, UserRole
 from apps.rbac.services import (
@@ -1524,30 +1525,26 @@ def test_ui_calisan_rol_listesi_ve_yetki_ekranina_erisemez(client, tenant_a, use
     assert "roles" not in detay or detay.get("roles", []) == [] or detay["yetki_gorunur"] is False
 
 
-def test_ui_calisan_sirket_dizinini_gorur_detaylari_gormez(client, tenant_a, user_a) -> None:  # noqa: ANN001
-    """Çalışan şirket dizinini (PII'siz, bakiyesiz) ve kendi kaydını görür."""
+def test_ui_calisan_yalniz_kendini_gorur(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """
+    Bildirim: "normal bir çalışan sadece kendini görsün; diğer çalışanları ve
+    numaralarını görmesine gerek yok" → liste yalnız kendi kaydını döner,
+    başka çalışanın detayı **404** (dizin kaydı kaldırıldı).
+    """
     lot = kadro(tenant_a, user_a)
     _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     veri = client.get("/test-ui/api/employees").json()
-    assert veri["meta"]["directory_only"] is True
-    kayitlar = {c["employee_no"]: c for c in veri["data"]}
-    assert {"FIN-M1", "MUH-1", "IK-1"} <= set(kayitlar)  # şirket geneli görünür
-
-    # Başkalarının kaydı: PII (ad/e-posta) ve izin/bakiye bilgisi YOK.
-    kardes = kayitlar["IK-1"]
-    assert kardes["dizin"] is True
-    assert kardes.get("user_email") is None and kardes.get("user_name") is None
-    assert "annual" not in kardes and kardes.get("roles") in (None, [])
-    assert kardes["department"] == "İnsan Kaynakları"  # unvan/birim açık
+    assert veri["meta"]["self_only"] is True
+    assert [c["employee_no"] for c in veri["data"]] == ["MUH-1"]  # yalnız kendisi
+    assert len(veri["data"]) == 1  # başka çalışan kaydı dönmez
 
     # Kendi kaydı tam: izin bakiyesi görünür.
-    kendi = next(c for c in veri["data"] if c.get("kendi_kaydim"))
-    assert kendi["employee_no"] == "MUH-1"
+    kendi = veri["data"][0]
+    assert kendi.get("kendi_kaydim") is True
     assert kendi["annual"]["hakedis_var"] is True
 
-    # Başka çalışanın detayı: yalnız dizin bilgisi; bakiye ucu 404.
-    detay = client.get(f"/test-ui/api/employees/{lot['kardes'].pk}").json()["data"]
-    assert detay["dizin"] is True and "annual" not in detay
+    # Başka çalışanın detayı ve bakiyesi: "yok" gibi 404 (yetki mesajı da yok).
+    assert client.get(f"/test-ui/api/employees/{lot['kardes'].pk}").status_code == 404
     assert client.get(f"/test-ui/api/employees/{lot['kardes'].pk}/balances").status_code == 404
 
 
@@ -1583,7 +1580,7 @@ def test_ui_calisan_baskalarinin_izinlerini_gormez(client, tenant_a, user_a) -> 
 
 
 def test_ui_departman_agaci_calisana_acik_ama_detaylar_degil(client, tenant_a, user_a) -> None:  # noqa: ANN001
-    """Çalışan organizasyon şemasını görür; yetki listesi ve bakiye detayları kapalı."""
+    """Çalışan organizasyon şemasını görür; başka çalışanlar, yetki listesi ve bakiyeler kapalı."""
     lot = kadro(tenant_a, user_a)
     _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     agac = client.get("/test-ui/api/departments").json()
@@ -1593,9 +1590,9 @@ def test_ui_departman_agaci_calisana_acik_ama_detaylar_degil(client, tenant_a, u
     panel = client.get("/test-ui/api/dashboard").json()["data"]
     assert panel["employee"]["employee_no"] == "MUH-1"
     assert panel["annual"]["hakedis_var"] is True
-    # Şirket geneli dizin görünür (organizasyon şeması + diğer çalışanlar).
-    no_lar = {c["employee_no"] for c in client.get("/test-ui/api/employees").json()["data"]}
-    assert {"FIN-M1", "IK-1"} <= no_lar
+    # Çalışan listesi yalnız kendi kaydı (bildirim: başkalarını/nolarını görmesin).
+    no_lar = [c["employee_no"] for c in client.get("/test-ui/api/employees").json()["data"]]
+    assert no_lar == ["MUH-1"]
     # Rol kataloğu ve yetki ekranı kapalı (role.read yok).
     assert client.get("/test-ui/api/roles").status_code == 403
 
@@ -1904,3 +1901,281 @@ def test_ui_yetki_sekmesi_gorunurlugu_ve_sablonlar(client, tenant_a, user_a) -> 
     calisan_lookups = client.get("/test-ui/api/lookups").json()["meta"]
     assert calisan_lookups["can_create_users"] is False
     assert calisan_lookups["can_see_pii"] is False
+
+
+# =============================================================================
+# Bildirim (6. tur): izin durumu noktası, yönetici seçimi, onay ekranında bakiye,
+# eksi bakiye politikası, yaklaşan izin süzgeci, banka bilgileri
+# =============================================================================
+
+
+def test_ui_bakiye_yetersizken_talep_politika_ile_acilir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """
+    Bildirim: "izin bakiyesi 0 olsa bile izin talebi oluşturulabilsin".
+    Anahtar politikadır (`allow_negative_balance`): kapalıyken 400, açıkken 201.
+    """
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    politika = client.get("/test-ui/api/leave-policies").json()["data"][0]
+    assert politika["allow_negative_balance"] is False  # kurgu varsayılanı
+
+    baslangic = timezone.localdate() + timedelta(days=30)
+    govde = {
+        "employee_id": str(lot["personel"].pk),
+        "leave_type_id": str(lot["turler"]["annual_leave"].pk),
+        "start_date": baslangic.isoformat(),
+        "end_date": (baslangic + timedelta(days=19)).isoformat(),  # 20 gün > 14 hakediş
+        "reason": "Bakiye üstü talep",
+        "submit": True,
+    }
+    kapali = _post(client, "/test-ui/api/leave-requests", govde)
+    assert kapali.status_code == 409, kapali.content
+    assert "Yetersiz izin bakiyesi" in kapali.json()["error"]["message"]
+
+    # Politikayı aç → talep oluşturulabilir (kararı onaylayan verir).
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/leave-policies/{politika['id']}/update",
+            {"allow_negative_balance": True, "reason": "Test: eksi bakiyeye izin"},
+        ).status_code
+        == 200
+    )
+    assert _post(client, "/test-ui/api/leave-requests", govde).status_code == 201
+
+
+def test_ui_izin_politikasi_yetkisi(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Politika ucu `leave.type.manage` ister; yetkisizde 404 (bölüm hiç görünmez)."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/leave-policies").status_code == 200
+    assert client.get("/test-ui/api/lookups").json()["meta"]["can_manage_policy"] is True
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    assert client.get("/test-ui/api/leave-policies").status_code == 404
+    assert client.get("/test-ui/api/lookups").json()["meta"]["can_manage_policy"] is False
+    # Güncelleme denemesi de reddedilir (izin kararı serviste).
+    politika_id = str(LeavePolicy.objects.filter(deleted_at__isnull=True).first().pk)
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/leave-policies/{politika_id}/update",
+            {"allow_negative_balance": True, "reason": "yetkisiz deneme"},
+        ).status_code
+        in (403, 404)
+    )
+
+
+def test_ui_calisan_izin_durumu_isaretleri(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """İzinde olan çalışanda yeşil, bitişe 7 günden az kalanlarda sarı nokta."""
+    lot = kadro(tenant_a, user_a)
+    bugun = timezone.localdate()
+    with tenant_context(tenant_a.id):
+        istek = create_leave_request(
+            actor=lot["personel_user"],
+            employee=lot["personel"],
+            leave_type=lot["turler"]["annual_leave"],
+            start_date=bugun,
+            end_date=bugun + timedelta(days=9),  # 10 gün: bakiyeye sığar, bitişe 9 gün
+            reason="Yeşil nokta testi",
+            submit=True,
+        )
+        decide_approval_step(
+            actor=lot["admin"], request=istek, decision="approved", override=True,
+            reason="Test: yeşil nokta",
+        )
+
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    durumlar = {
+        c["employee_no"]: c["izin_durumu"]
+        for c in client.get("/test-ui/api/employees").json()["data"]
+    }
+    assert durumlar["MUH-1"]["izinde"] is True
+    assert durumlar["MUH-1"]["isaret"] == "yesil"  # bitişe 20 gün
+    assert durumlar["IK-1"]["izinde"] is False and durumlar["IK-1"]["isaret"] == "yok"
+
+
+def test_ui_izin_durumu_sari_isaret(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Bitişe 7 günden az kaldıysa sarı işaret döner."""
+    lot = kadro(tenant_a, user_a)
+    bugun = timezone.localdate()
+    with tenant_context(tenant_a.id):
+        istek = create_leave_request(
+            actor=lot["personel_user"],
+            employee=lot["personel"],
+            leave_type=lot["turler"]["annual_leave"],
+            start_date=bugun,
+            end_date=bugun + timedelta(days=3),
+            reason="Sarı nokta testi",
+            submit=True,
+        )
+        decide_approval_step(
+            actor=lot["admin"], request=istek, decision="approved", override=True,
+            reason="Test: sarı nokta",
+        )
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    kayit = next(
+        c for c in client.get("/test-ui/api/employees").json()["data"]
+        if c["employee_no"] == "MUH-1"
+    )
+    assert kayit["izin_durumu"]["isaret"] == "sari"
+    assert kayit["izin_durumu"]["kalan_gun"] == 3
+
+
+def test_ui_onay_kuyrugunda_bakiye_ve_kendi_talebi(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """
+    Onay ekranında talep sahibinin bakiyesi görünür; kullanıcı kendi talebini
+    onaylayamaz (`can_approve=false`, `kendi_talebi=true`) ama listede görür.
+    """
+    lot = kadro(tenant_a, user_a)
+    baslangic = timezone.localdate() + timedelta(days=25)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    assert (
+        _post(
+            client,
+            "/test-ui/api/leave-requests",
+            {
+                "employee_id": str(lot["personel"].pk),
+                "leave_type_id": str(lot["turler"]["annual_leave"].pk),
+                "start_date": baslangic.isoformat(),
+                "end_date": (baslangic + timedelta(days=2)).isoformat(),
+                "reason": "Onay kuyruğu testi",
+                "submit": True,
+            },
+        ).status_code
+        == 201
+    )
+    kuyruk = client.get("/test-ui/api/leave-requests?scope=pending").json()["data"]
+    kayit = next(t for t in kuyruk if t["employee_no"] == "MUH-1")
+    assert kayit["talep_sahibi_bakiye"]["hakedis_var"] is True  # onaylayan bakiyeyi görür
+    assert kayit["talep_sahibi_bakiye"]["available_days"] is not None
+    assert kayit["kendi_talebi"] is False  # admin'in kendi talebi değil
+
+    # Kuyrukta bakiye alanı her satırda dolu (talep sahibinin kendi görünümü hariç).
+    assert all("talep_sahibi_bakiye" in t for t in kuyruk)
+
+
+def test_ui_kendi_talebi_onaylanamaz_ama_iptal_edilebilir(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Talep sahibi kendi talebini onaylayamaz; iptal edebilir (backend kararı)."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    istek = _post(
+        client,
+        "/test-ui/api/leave-requests",
+        {
+            "employee_id": str(lot["personel"].pk),
+            "leave_type_id": str(lot["turler"]["annual_leave"].pk),
+            "start_date": (timezone.localdate() + timedelta(days=60)).isoformat(),
+            "end_date": (timezone.localdate() + timedelta(days=61)).isoformat(),
+            "reason": "Kendi talebi testi",
+            "submit": True,
+        },
+    )
+    talep_id = istek.json()["data"]["id"]
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    kuyruk = client.get("/test-ui/api/leave-requests?scope=pending").json()["data"]
+    kendi = next(t for t in kuyruk if t["id"] == talep_id)
+    assert kendi["kendi_talebi"] is True
+    assert kendi["can_approve"] is False  # SEPARATE_ACTOR
+    assert kendi["can_cancel"] is True
+    # Onay denemesi: aynı aktör (izin yok) → 403.
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/leave-requests/{talep_id}/decision",
+            {"decision": "approved"},
+        ).status_code
+        == 403
+    )
+
+
+def test_ui_yaklasan_izinler_gecmisi_gostermez(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Aralığı geçmiş onaylı izin "yaklaşan izinler" kartında listelenmez."""
+    lot = kadro(tenant_a, user_a)
+    bugun = timezone.localdate()
+    with tenant_context(tenant_a.id):
+        gecmis = create_leave_request(
+            actor=lot["personel_user"],
+            employee=lot["personel"],
+            leave_type=lot["turler"]["annual_leave"],
+            start_date=bugun - timedelta(days=30),
+            end_date=bugun - timedelta(days=25),
+            reason="Geçmiş izin testi",
+            submit=True,
+        )
+        decide_approval_step(
+            actor=lot["admin"], request=gecmis, decision="approved", override=True,
+            reason="Test: geçmiş izin",
+        )
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    yaklasan = client.get("/test-ui/api/dashboard").json()["data"]["upcoming_requests"]
+    assert all(t["id"] != str(gecmis.pk) for t in yaklasan)
+
+
+def test_ui_calisan_olusturmada_yonetici_secimi(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Yeni çalışan formunda bağlı olacağı yönetici seçilebilir (bildirim)."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    secenekler = client.get("/test-ui/api/lookups").json()["data"]["employees"]
+    assert any(e["employee_no"] == "FIN-M1" for e in secenekler)
+
+    yanit = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "MUH-2",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": timezone.localdate().isoformat(),
+            "manager_employee_id": str(lot["yonetici"].pk),
+        },
+    )
+    assert yanit.status_code == 201, yanit.content
+    yeni_id = yanit.json()["data"]["id"]
+    detay = client.get(f"/test-ui/api/employees/{yeni_id}").json()["data"]
+    assert detay["manager"]["employee_no"] == "FIN-M1"
+
+    # Bilinmeyen yönetici → 400 (kayıt yarım kalmaz: önce doğrulanır).
+    hatali = _post(
+        client,
+        "/test-ui/api/employees",
+        {
+            "employee_no": "MUH-3",
+            "department_id": str(lot["birimler"]["muhasebe"].pk),
+            "hire_date": timezone.localdate().isoformat(),
+            "manager_employee_id": str(uuid4()),
+        },
+    )
+    assert hatali.status_code == 400
+
+
+def test_ui_kisisel_veri_banka_bilgisi(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Banka bilgileri (banka + IBAN) kişisel veri kapısından geçer."""
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    assert (
+        _post(
+            client,
+            f"/test-ui/api/employees/{lot['personel'].pk}/personal",
+            {
+                "first_name": "Ayşe",
+                "last_name": "Demir",
+                "bank_name": "Örnek Bankası",
+                "iban": "TR33 0006 1005 1978 6457 8413 26",
+            },
+        ).status_code
+        == 200
+    )
+    veri = client.get(f"/test-ui/api/employees/{lot['personel'].pk}/personal").json()["data"]
+    assert veri["bank_name"] == "Örnek Bankası"
+    assert veri["iban"].startswith("TR33")
+    # Denetim: değerler değil, alan adları yazılır.
+    with tenant_context(tenant_a.id):
+        kayit = (
+            AuditLog.objects.filter(action="employee.personal_data.update").first()
+            or AuditLog.objects.filter(action="employee.personal_data.create").first()
+        )
+        assert "Örnek Bankası" not in str(kayit.changes)
+        assert "iban" in kayit.changes["alanlar"]

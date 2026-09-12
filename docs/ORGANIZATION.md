@@ -99,6 +99,11 @@ mesajı için).
 - **Ağaç yetki mirası üretmez.** Bir üst birimin yöneticisi olmak, alt birimlerin
   yetkilerini otomatik **vermez**; kapsam yalnızca *hangi kayıtları görebileceğini*
   belirler. Yetki kararı **her zaman** RBAC'ten gelir (izin kodu + kapsam + koşul).
+- **Çalışan listesi görünürlüğü:** kapsamı yalnız `SELF` olan kullanıcı liste ve detayda
+  **yalnız kendi kaydını** görür; başka çalışanın kaydı/numarası dönmez, kapsam dışı
+  detay `404`'tür. Birim yöneticisi kapsamındaki (birim + alt ağaç) çalışanları,
+  kiracı yöneticisi tüm kiracıyı görür. Organizasyon şeması (birim ağacı) ayrı uçtur ve
+  çalışana açıktır.
 - **Kişisel veri (K2/K3) görünürlüğü:** kapsam **tek başına yetmez**; kişisel veri
   `employee.sensitive.read` izni **ve** kapsam birlikte gerekir (`can_access_employee_personal_data()`).
   Departman yöneticisi kapsamındaki çalışanın **organizasyon kimliğini** görür, kişisel

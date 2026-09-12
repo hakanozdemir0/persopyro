@@ -246,6 +246,24 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   başlığı + modül açıklaması + Türkçe izin adıyla listelenir. **Rol oluşturma** (ad, kod,
   kapsam tipi) ve **rol düzenleme** (ad; etkin ataması yoksa kapsam) desteklenir —
   SYS/platform kapsamı, varsayılan/var olan kod, kendi rolünü düzenleme `400/403`.
+- **Görünürlük:** yetkisi olmayan kullanıcıda departman/çalışan/unvan/izin türü/politika
+  formları **hiç görünmez** ("yetkiniz yok" notu da gösterilmez); karar backend'de verilir.
+- **Çalışan listesi:** normal çalışan yalnız **kendi kaydını** görür; birim yöneticisi
+  kapsamındaki (birim + alt ağaç) çalışanları, kiracı yöneticisi tüm kiracıyı görür.
+  Kapsam dışı çalışan detayı **404**. Organizasyon şeması (birim ağacı) ayrı görünümdür.
+- **İzin durumu noktası:** bugün izinde olan çalışanın numarasının yanında **yeşil**,
+  izni **7 günden az** kaldıysa **sarı** nokta (onaylı taleplerden hesaplanır).
+- **Onay ekranı:** her satırda talep sahibinin güncel bakiyesi (hak/kullanılan/bekleyen/
+  kalan) görünür. Talep sahibi kendi talebini **onaylayamaz** (backend `SEPARATE_ACTOR`
+  ile `403`); satırda **Düzenle** ve **İptal** vardır. Düzenleme, talebi forma taşır ve
+  kaydedince eski talebi iptal edip yenisini onaya sunar.
+- **İzin politikası kartı:** `leave.type.manage` sahibi "bakiye yetersizse talep
+  açılabilir" ve "onaydan sonra iade" anahtarlarını yönetir; kapalıyken aşırı talep
+  `409` ile reddedilir, açıkken talep açılır ve kararı onaylayan verir.
+- **Yeni çalışan:** *Bağlı olduğu yönetici* seçilir (onay akışının ilk adımı bu ilişkiye
+  göre kurulur); kişisel veri bölümünde ad/soyad, doğum tarihi, adres, yakın kişi,
+  vatandaşlık, oturma/çalışma izni ve **Banka + IBAN** sorulur.
+- **Tarih biçimi:** tüm gösterimler **gg.aa.yyyy**.
 - **Self-elevation yasakları arayüzden bağımsız korunur:** kullanıcı kendi rolünü
   atayamaz/yükseltemez, sahip olmadığı yetkiyi dağıtamaz, `role.manage` yoksa
   rol yönetimi kapanır; platform rolleri kiracı arayüzünden yönetilemez.

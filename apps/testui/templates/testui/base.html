@@ -51,6 +51,10 @@ kurulmaz; ek bağımlılık yoktur.
     .row > div { flex: 1 1 160px; }
     .muted { color: var(--muted); }
     .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+    /* İzin durumu noktası: yeşil = izinde, sarı = ≤7 gün kaldı. */
+    .nokta { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; }
+    .nokta.yesil { background: #2e9e5b; box-shadow: 0 0 0 2px #d9f0e2; }
+    .nokta.sari { background: #d9a300; box-shadow: 0 0 0 2px #fbf0d0; }
     .pill.approved { background: #e7f5ec; color: var(--ok); border-color: #bfe3cd; }
     .pill.pending { background: #fdf3e0; color: var(--warn); border-color: #efd9ab; }
     .pill.rejected, .pill.canceled { background: #fdeceb; color: var(--err); border-color: #f0c2bf; }
