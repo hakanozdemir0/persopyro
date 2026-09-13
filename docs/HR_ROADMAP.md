@@ -80,7 +80,8 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 | Kod satırı (migration dahil) | **17.307** |
 | Test satırı | **10.813** (19 test dosyası, **462** `def test_` fonksiyonu → pytest sonucu **473 test**; parametreli testler dahil) |
 | Migration | **49** |
-| Model | **43** (leave 11, organization 9, rbac 8, accounts 7, common 4, audit 2, tenancy 2) |
+| Model sınıfı | **43** `apps/*/models.py` sınıf tanımı → bunlardan **21'i kayıtlı somut proje modeli** (leave 7, organization 5, rbac 5, accounts 2, audit 1, tenancy 1), **4'ü soyut taban** (`apps/common`: UUIDModel, TimeStampedModel, SoftDeleteModel + 1; kayıtlı değil), kalanı model dışı sınıf. Çerçeve modeli 9 (django_q 5, auth 2, contenttypes 1, sessions 1) |
+| Tablo | **28** benzersiz `db_table` adı; canlı DB'de `hr`+`public` şemasında **33 tablo** (migration'la oluşan dizin/M2M tabloları dahil) |
 | İzin kodu | **39** / 12 modül — **33 kiracı** (`leave` 8, `employee` 5, `document` 4, `org` 3, `shift` 3, `tenant` 2, `user` 2, `role` 2, `attendance` 2, `audit` 1, `billing` 1) + **6 platform** (`platform.*`); canlı DB'den doğrulandı: `hr.permissions` = 39 satır (33 kiracı + 6 platform) |
 | Varsayılan rol | **5** (`tenant_admin`, `tenant_officer`, `hr_manager`, `dept_manager`, `employee`) |
 | Doküman | 11 dosya, ~9.400 satır (`AUTHORIZATION` 2.086, `CHANGELOG` 3.158, `DATABASE` 952, `SECURITY` 749, `ARCHITECTURE` 666 …) |
@@ -175,6 +176,19 @@ nesne depolama (S3) · kur dönüşümü · planlı/paylaşımlı raporlar · mi
 | i18n | `LANGUAGE_CODE="tr"`, `USE_I18N=True`, `locale/` **yok** | `settings.py:329-334` |
 | Yedekleme betiği | `scripts/` içinde pg_dump/pg_restore **yok** (yalnız plan) | `docs/ARCHITECTURE.md` yedekleme bölümü |
 | Para birimi ayarı | **YOK** (`billing.manage` izni var, currency alanı/ayarı yok) | grep → 0 |
+
+### 1.4 Ölçüm kanıt işaretçileri (dosya:satır)
+
+| Bulgu | Kanıt (kod) |
+|---|---|
+| İzin gün hesabı **takvim günü**; çalışma takvimi yokluğu kodda açıkça yazılı | `apps/leave/services/requests.py:7-9`, `:90-92`; `apps/leave/models.py:512-513` ("M15, `work_schedules` gelene kadar") |
+| Vardiya/evrak modülleri arayüzde "gelecek" olarak işaretli | `apps/testui/labels.py:87-89` ("M15/M16 ile gelecek") |
+| `approval_steps` tablosu **vardiya düzeltmesi** gibi ileriki onayları taşımak üzere genel tasarlanmış | `apps/leave/models.py:23-25` |
+| Belge erişim izinleri var, **model/tablo yok** | `apps/rbac/permission_catalog.py:51-54` (`document.*`); `LeaveRequest.document_ref` (FK değil, `UUIDField`) `apps/leave/models.py:560-567` |
+| Maaş/ücret verisi yok: tek ücret sinyali izin türü tarafı | `LeaveType.is_paid` (`apps/leave/models.py:67`), `LeaveCategory.UNPAID` (`apps/leave/leave_type_catalog.py:30`) |
+| **Raporlama izin kodu bile yok** (`report.*` / `export.*`) → yeni izin kodları gerekecek | `apps/rbac/permission_catalog.py` (`report` yalnız etiket sözlüğünde) |
+| Ülke bilgisi yalnız veri alanı düzeyinde | `Tenant.country` (`apps/tenancy/models.py:50`), `EmployeePersonalData.citizenship`/`work_permit*` |
+| Fazla mesai / bordro / onboarding / sözleşme / deneme süresi / lokasyon / çalışma modeli: kodda **0 eşleşme** | `apps/` + `config/` anahtar kelime taraması (ölçüm ajanı raporu) |
 
 ## 2. Modül haritası (bounded context'ler)
 

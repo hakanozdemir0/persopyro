@@ -3,6 +3,32 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.35.2] — 2026-09-13 — Doküman düzeltmesi: model/tablo sayımı (kod değişmedi)
+
+**Kapsam:** yine **yalnız doküman** (`docs/`). İkinci envanter ajanının (veri modeli + migration)
+raporuyla yapılan çapraz kontrol, §1'deki model sayımının **yanlış etiketlendiğini** gösterdi.
+
+### DÜZELTİLDİ
+
+- **"43 model" → doğru ayrım:** 43 sayısı `apps/*/models.py` içindeki **tüm sınıf tanımlarıdır**.
+  Django uygulama kaydına göre (`manage.py shell` → `apps.get_models()`) **kayıtlı somut proje
+  modeli 21** (leave 7, organization 5, rbac 5, accounts 2, audit 1, tenancy 1); ayrıca **4 soyut
+  taban** (`apps/common`: UUIDModel, TimeStampedModel, SoftDeleteModel + 1 — kayıtlı değil) ve
+  **9 çerçeve modeli** (django_q 5, auth 2, contenttypes 1, sessions 1).
+- **Tablo sayımı eklendi:** **28** benzersiz `db_table` adı; canlı DB'de `hr`+`public` şemasında
+  **33 tablo** (migration'la oluşan dizin/M2M tabloları dahil). Önceki tek satırlık "43 model"
+  ifadesi bu ikisini karıştırıyordu.
+- **Migration dağılımı doğrulandı:** tenancy 9, accounts 5, rbac 11, organization 13, leave 4,
+  platform 5, audit 2 → **49** (envanter ajanının uygulama bazlı sayımıyla birebir uyuştu).
+- **0.35.0 girdisindeki** ölçüm satırı da (43 model / 38 izin) düzeltildi — aynı oturumda
+  yazıldığı ve yayımlanmadığı için yerinde düzeltildi.
+
+### DOĞRULANAN
+
+- `manage.py shell` + canlı DB okuması (`pg_class`) ile üç bağımsız kaynak uyuştu.
+- Kod/migration/DB değişmedi: `makemigrations --check --dry-run` → `No changes detected`;
+  DB yalnız **okundu**.
+
 ## [0.35.1] — 2026-09-13 — Doküman düzeltmesi: ölçüm sayıları (kod değişmedi)
 
 **Kapsam:** yine **yalnız doküman**. Bağımsız envanter ajanının raporu ile yapılan çapraz
@@ -46,8 +72,8 @@ yeni uç eklenmedi** (kanıt: `git diff --stat` → yalnız `docs/`; `makemigrat
 - **`docs/HR_ROADMAP.md` yeniden yazıldı ve genişletildi (1542 satır, 30 bölüm):** ürün mimarisi,
   modül tasarımları, fazlandırma ve açık karar önerileri için **tek source-of-truth**. Önceki
   taslak sürümün fazla mesai + dinamik form içeriği §4 ve §11 altında bütünleştirildi.
-- **Ölçüm bölümü (kod kaynaklı):** 9 uygulama / 43 model / 49 migration / 38 izin (12 modül) /
-  5 varsayılan rol / 11.896 satır uygulama kodu + 10.813 satır test / 473 test; her yetenek
+- **Ölçüm bölümü (kod kaynaklı):** 9 uygulama / **43 model sınıfı → 21 kayıtlı somut proje modeli** / 49 migration / **39 izin** (33 kiracı + 6 platform; 12 modül) /
+  5 varsayılan kiracı rolü + 2 platform rolü / 11.896 satır uygulama kodu + 10.813 satır test / 473 test; her yetenek
   *tamamen uygulanmış · kısmen · yalnız tasarlanmış · başlanmamış* olarak sınıflandırıldı.
 - **Zaten verilmiş kararların tekrarı önlendi:** django-q2 kuyruk (ARCHITECTURE §10), S3 nesne
   depolama (§9/K7), SMTP e-posta (§11), DB cache + DRF throttling (§6.1), DB tetikleyicili audit
