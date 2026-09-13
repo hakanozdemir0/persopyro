@@ -228,6 +228,25 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   (sayfada yatay kaydırma oluşmaz). Yeni bağımlılık eklenmez.
 - İzin: talep oluşturma (gün sayısı sunucuda hesaplanır), kendi talepleri,
   "Bekleyen İzinler" ekranı, Onayla/Reddet (red için gerekçe), iptal.
+- **Onay beklenen kişi:** onay kuyruğunda satırın **sıradaki onaylayıcısı** adı + unvanıyla
+  gösterilir (`Mehmet Demir — Finans Müdürü`); çok adımlıysa sıralı liste
+  (`1. … — Bekliyor`, `2. … — Sonraki adım`). Kaynak `approval_steps`; arayüz tahmin etmez.
+- **Yaklaşan izinler durumu:** bugün izinde → yeşil «İzinde», 0–7 gün → sarı «N gün sonra»,
+  daha ileri → nötr «N gün sonra» (renk **ve** metin birlikte).
+- **Çalışan oluşturma (giriş hesabı zorunlu):** ad, soyad, kurumsal e-posta, parola, birim ve
+  işe giriş zorunludur; çalışan + kullanıcı **tek atomik işlemde** yazılır (biri başarısızsa
+  hiçbiri). Parola yanıtta/log'da görünmez. Çalışanlar ekranı *Çalışan Ara / Liste* ve
+  *Yeni Çalışan* alt bölümlerine ayrılmıştır.
+- **İzin Hakları / İzin Bakiyeleri ekranı:** çalışan detayında izin türü · yıllık hak ·
+  kullanılan · bekleyen · kalan · **sonraki hakediş** (işe giriş yıl dönümü) görünür; ayrı
+  ana sekmede kapsam süzgeçli bakiye tablosu (filtre: çalışan/birim/izin türü/düşük-tükendi)
+  ve **servis katmanı üzerinden** düzeltme (hak ekle / hak düş / düzeltme / politikadan
+  hakediş) bulunur — gerekçe zorunlu, defter + denetim kaydı yazılır.
+- **Panel operasyonel özeti:** toplam çalışan, bugün izinde, 7 gün içinde izne çıkacak,
+  bekleyen onay kartları; altta bekleyen talepler, yaklaşan izinler ve bakiyesi kritik
+  (kalan ≤ 3 gün) çalışanlar tablosu.
+- **Planlanan (kod yazılmadı):** fazla mesai (overtime) modülü ve tenant tarafından
+  yapılandırılabilen onboarding formu `docs/HR_ROADMAP.md` içinde tasarlanmıştır.
 - Kapsam testi görünür: Finans müdürü Finans + Muhasebe'yi görür, İnsan Kaynakları
   çalışanını/talebini **görmez ve onaylayamaz**.
 - **Yıllık izin görünürlüğü:** çalışan kendi panelinde, yetkili kullanıcı çalışan

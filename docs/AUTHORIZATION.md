@@ -281,6 +281,14 @@ Kurallar:
   **tüm** izinlerine sahip olmalı; `UNIT`/`UNIT_DIRECT` rolünde atama düzeyinde **kapsam
   zorunlu**, diğer tiplerde kapsam verilemez; atama `audit_logs`'a `role.assign` olarak
   yazılır). Rol yönetimi **API/akış** katmanı ileride bu fonksiyonu kullanacaktır.
+- **İzin kümesi düzenleme netleştirmesi ✅ UYGULANDI (2026-09-12):** bir rolün izin
+  kümesinde aktör **sahip olmadığı** izni **veremez** ama **kaldırabilir**
+  (`update_role_permissions`). Arayüzde bu, onay kutusunun yalnız *"sizde olmayan VE
+  seçili olmayan"* izin için kilitlenmesi demektir; önceki kural (`can_edit ∧ aktör
+  sahibi`) **kaldırmayı da** engelliyordu (bildirilen kusur). Kilit nedeni API'de
+  açıkça döner: `ekleme_kilitli`, `kaldirma_kilitli` (her zaman `false`),
+  `kilit_nedeni`, `can_edit_reason`. Platform izinleri (`platform.*`) tenant rolüne
+  **eklenemez**; boş rol reddedilir; self-elevation ve deny-wins kuralları değişmedi.
 
 ### 4.4 Kapsam (scope) kodları
 

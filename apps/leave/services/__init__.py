@@ -31,6 +31,7 @@ from apps.leave.services.balances import (
     accrue_leave_entitlements,
     adjust_leave_balance,
     get_or_create_balance,
+    next_accrual_date,
     period_year_for,
     service_months,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "LeaveStateError",
     "accrue_leave_entitlements",
     "adjust_leave_balance",
+    "next_accrual_date",
     "calculate_requested_days",
     "can_approve_step",
     "can_cancel_leave_request",

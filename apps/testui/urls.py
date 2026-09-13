@@ -47,6 +47,8 @@ urlpatterns = [
         api.EmployeeRoleAssignView.as_view(),
         name="test-ui-employee-role-assign",
     ),
+    path("api/balances", api.BalanceListView.as_view(), name="test-ui-balances"),
+    path("api/balances/adjust", api.BalanceAdjustView.as_view(), name="test-ui-balance-adjust"),
     path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
     path("api/roles/create", api.RoleCreateView.as_view(), name="test-ui-role-create"),
     path("api/leave-policies", api.LeavePolicyListView.as_view(), name="test-ui-leave-policies"),

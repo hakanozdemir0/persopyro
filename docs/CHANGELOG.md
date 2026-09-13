@@ -3,6 +3,81 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.34.0] — 2026-09-12 — Test arayüzü: izin hakları, hakediş yenileme, zorunlu giriş hesabı, bakiye ekranı
+
+**Baseline (son commit `9851cb5`):** çalışma ağacı temiz, tam test suite **460 passed**,
+`verify_fresh_install.sh` VERIFY_EXIT=0. Kullanıcı bildirimi: *test arayüzünü gerçek kullanıcı
+geri bildirimine göre iyileştir; mevcut akışları kullanılabilir hale getir; payroll / overtime
+engine / documents / notifications modüllerini **henüz uygulama**.*
+
+### UYGULANDI
+
+- **Çalışan detayında ham izin listesi kaldırıldı:** `effective_permissions` artık API'den de
+  arayüzden de dönmez (detayda Rol / Kapsam / Kapsam birimi / Verilme tarihi kalır).
+- **İzin Hakları bölümü (çalışan detayı):** izin türü · yıllık hak · kullanılan · bekleyen ·
+  kalan · **sonraki hakediş**; yetkili kullanıcı için *Politikadan hakediş tanımla* (idempotent
+  `accrue_leave_entitlements`) ve *Bakiye düzelt* (`adjust_leave_balance`; **gerekçe zorunlu**,
+  defter + denetim kaydı). Arayüz doğrudan bakiye yazmaz.
+- **Yıllık hakediş yenilemesi:** yeni saf fonksiyon `next_accrual_date(hire_date, as_of)` —
+  işe giriş yıl dönümü (ör. `12.09.2026` → sonraki hakediş `12.09.2027`; 29 Şubat → 28 Şubat).
+  Aynı dönemde tekrar çalıştırma **yeni hak yazmaz** (idempotent; test ölçüyor). UI'da
+  "Sonraki yıllık hakediş: gg.aa.yyyy" gösterilir.
+- **Zorunlu giriş hesabı:** çalışan oluşturmada `email`, `password`, `first_name`, `last_name`,
+  `department_id`, `hire_date` zorunlu; çalışan + kullanıcı **tek işlemde** yazılır (hata
+  durumunda **yarım kayıt kalmaz** — iç `transaction.atomic()` savepoint). Parola hiçbir
+  yanıtta/log'da görünmez.
+- **Çalışan numarası** (önceki tur): sunucu üretir, birim taşımasında değişmez — korundu.
+- **Çalışanlar ekranı alt bölümlere ayrıldı:** *Çalışan Ara / Liste* ve *Yeni Çalışan*
+  (tek sayfada form + liste + detay yığılmıyor).
+- **Detay çekmecesi bölümleri:** İş Bilgileri → İzin Hakları → Rol ve Yetkiler → Kişisel
+  Bilgiler; aynı `Detay` tıklaması (Escape/Kapat) kapatır.
+- **Onay ekranı "Onay beklenen" kolonu:** sıradaki onaylayıcı **adı + unvanı** (çok adımlıysa
+  `1. … — Bekliyor / 2. … — Sonraki adım`); kaynak `approval_steps`, arayüz tahmin etmez.
+- **Yaklaşan izin durumu:** bugün izinde → **yeşil «İzinde»**; 0 < gün ≤ 7 → **sarı «N gün
+  sonra»**; daha ileri → nötr «N gün sonra». Renk tek bilgi kaynağı değil (metin de var).
+- **Yeni "İzin Bakiyeleri" ekranı** (`/test-ui/api/balances`): çalışan · birim · izin türü ·
+  hakediş · kullanılan · bekleyen · kalan · sonraki hakediş · işlem; filtreler (çalışan ara,
+  birim, izin türü, **düşük/tükendi**) **sunucuda** uygulanır; düzenleme modalı yalnızca
+  seçili/hak ekle/hak düş/politikadan hakediş + gerekçe ile çalışır (`leave.balance.manage`).
+- **Panel operasyonel hâle geldi:** 4 özet kartı (toplam çalışan, bugün izinde, 7 gün içinde,
+  bekleyen onay), altında bekleyen talepler / yaklaşan izinler (durum rozetleri) ve
+  **bakiyesi kritik çalışanlar** (kalan ≤ 3 gün) geniş tablosu.
+- **Rol izinleri kusuru düzeltildi:** onay kutusu artık yalnız *"sizde olmayan VE seçili
+  olmayan"* izin için kilitli. Önceki kural (`duzenlenebilir && aktor_sahip`) aktörde olmayan
+  ama rolde seçili izinlerin **kaldırılmasını da** engelliyordu. Kilit nedeni API'de açıkça
+  döner (`ekleme_kilitli`, `kaldirma_kilitli`, `kilit_nedeni`, `can_edit_reason`).
+- **Teknik jargon UI'dan temizlendi** (backend/kapsam açıklamaları, "Unvan ≠ rol", ham izin
+  kodları); `Kapsam ve yetki` özeti de artık kod listesi basmıyor.
+
+### PLANLANDI (kod yazılmadı) — `docs/HR_ROADMAP.md`
+
+- **Fazla mesai (overtime) modülü:** `hr.overtime_rules` / `overtime_requests` / `overtime_entries`,
+  PAY / TIME_OFF karşılığı, mevcut leave ledger'a güvenli aktarım, `overtime.*` izin planı,
+  onay akışı; ücret hesabı **payroll hazır olmadan yazılmaz**.
+- **Yapılandırılabilir çalışan kayıt/onboarding formu:** `hr.form_field_definitions` +
+  `hr.form_field_visibility`, sistem-kilitli alanlar kapatılamaz, K2/K3 sınıflandırması korunur,
+  `tenant_form.*` izin planı.
+- Dokümanda **OD32–OD40 (öneri)** üretildi; bu turda **açılmadı** (karar gerektiğinde açılacak).
+
+### Doğrulama
+
+- `tests/test_testui.py`: **+13 test** (ham izin listesi yok, izin hakları görünür, hakediş
+  idempotent, `next_accrual_date` kuralları, hesapsız kayıt reddi + atomiklik, alt sekmeler,
+  rol izin ekle/kaldır + kilit kuralları, sıradaki onaylayıcı, üç yaklaşan-izin durumu, bakiye
+  ekranı kapsam/filtre, düzeltme gerekçe+denetim, SELF ve departman kapsam sınırları).
+  Tam suite: **460 → 473 passed**.
+- Kapılar: `RUFF_EXIT=0`, `BANDIT_EXIT=0`, `CHECK_EXIT=0`, `MAKEMIG_EXIT=0`, `TEST_EXIT=0`.
+- Canlı tarayıcı (gerçek `runserver`, %100 zoom): Panel özet kartları, İzin Bakiyeleri ekranı
+  (filtre + düzenleme modalı: gerekçesiz reddedildi, gerekçeli uygulandı), Çalışanlar alt
+  sekmeleri, zorunlu hesap alanları, çekmece bölümleri, Onaylar "Onay beklenen" zinciri
+  (`Finans Müdürü — Yönetici — Bekliyor` / `İK Yöneticisi — Bekliyor`), yatay taşma yok.
+
+### Notlar
+
+- **Migration gerekmedi** (model değişikliği yok); `hr.employee_no_seq` (0013) değişmedi.
+- Bu tur **payroll / overtime engine / documents / notifications** modüllerini **uygulamadı**.
+- M15 (vardiya/devam) ve M16 (evrak) hâlâ sırada.
+
 ## [0.33.0] — 2026-09-12 — Test arayüzü UX turu: geniş yerleşim, detay çekmecesi, otomatik çalışan no
 
 **Baseline (son commit `1a10e8c`):** çalışma ağacı temiz, tam test suite **450 passed**,

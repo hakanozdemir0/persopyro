@@ -727,6 +727,7 @@ BIRIM_ID="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments" |
 YENI_CALISAN="$(curl -fsS -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees" \
     -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
     -d "{\"employee_no\":\"VRF-9\",\"department_id\":\"$BIRIM_ID\",\"hire_date\":\"2026-01-05\",
+         \"email\":\"vrfa9@ornek.test\",\"password\":\"Gizli-Parola-123\",
          \"first_name\":\"Doğrulama\",\"last_name\":\"Kişisi\",\"national_id\":\"12345678901\",
          \"blood_type\":\"0+\",\"personal_phone\":\"05550000000\",\"address\":\"Ankara\"}")"
 YENI_ID="$(printf '%s' "$YENI_CALISAN" |
@@ -761,7 +762,7 @@ DEP_ID="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments" |
 for n in 1 2; do
     curl -s -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees" \
         -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
-        -d "{\"department_id\":\"$DEP_ID\",\"hire_date\":\"2026-06-01\",\"first_name\":\"Paralel$n\",\"last_name\":\"Kayit\"}" \
+        -d "{\"department_id\":\"$DEP_ID\",\"hire_date\":\"2026-06-01\",\"email\":\"paralel$n@ornek.test\",\"password\":\"Gizli-Parola-123\",\"first_name\":\"Paralel$n\",\"last_name\":\"Kayit\"}" \
         >"$TMPD/paralel_$n.json" &
     PARALEL_PID="$PARALEL_PID $!"
 done
@@ -814,6 +815,27 @@ PYCEK
 else
     bilgi "ATLA detay çekmecesi kuralı (node kurulu değil)"
 fi
+
+# --- 6c-10) İzin Bakiyeleri ekranı + zorunlu giriş hesabı ---------------------
+# Ölçülen: (1) giriş hesabı olmadan çalışan açılamaz (400), (2) bakiye ekranı
+# türetilen değerleri ve **sonraki hakediş** tarihini döner, (3) gerekçesiz
+# düzeltme reddedilir (servis katmanı kuralı).
+bilgi "izin bakiyeleri + zorunlu giriş hesabı (6c-10)"
+DEP_ID2="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/departments" |
+    "$PYTHON" -c 'import json,sys; print(json.loads(sys.stdin.read())["data"][0]["id"])')"
+bekle "hesapsız çalışan reddi → 400 (6c-10)" \
+    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/employees" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d "{\"department_id\":\"$DEP_ID2\",\"hire_date\":\"2026-06-01\"}")" "400"
+BAKIYE_YANIT="$(curl -fsS -b "$CEREZ" "$TABAN2/test-ui/api/balances")"
+kontrol_metni "bakiye ekranı ucu (6c-10)" "$BAKIYE_YANIT" 'available_days'
+kontrol_metni "sonraki hakediş alanı (6c-10)" "$BAKIYE_YANIT" 'sonraki_hakedis_metin'
+CALISAN_ID2="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.stdin.read())["data"][0]["employee_id"])' <<<"$BAKIYE_YANIT")"
+TUR_ID2="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.stdin.read())["data"][0]["leave_type_id"])' <<<"$BAKIYE_YANIT")"
+bekle "gerekçesiz bakiye düzeltmesi → 400 (6c-10)" \
+    "$(kod -b "$CEREZ" -X POST "$TABAN2/test-ui/api/balances/adjust" \
+        -H 'Content-Type: application/json' -H "X-CSRFToken: $(csrf_basligi)" \
+        -d "{\"employee_id\":\"$CALISAN_ID2\",\"leave_type_id\":\"$TUR_ID2\",\"delta_days\":\"1.0\"}")" "400"
 rm -rf "$TMPD"
 
 oturum_kapat

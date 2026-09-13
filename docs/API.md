@@ -108,7 +108,9 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/departments` | GET / POST | Birim ağacı / yeni birim (`org.department.manage` ∧ kapsam); `?moves_for=<id>` ile **taşıma hedefleri** (kendisi ve alt ağacı hariç) |
 | `/test-ui/api/departments/<uuid>/move` | POST | Üst birim değiştir (OD24 ağaç guard'ları) |
 | `/test-ui/api/departments/<uuid>/delete` | POST | Soft delete (OD21) |
-| `/test-ui/api/employees` | GET / POST | Kapsamdaki çalışanlar / yeni çalışan (`employee.create` ∧ kapsam). **`employee_no` istemciden alınmaz**: sunucu üretir (`EMP-000001`) ve yanıtta döner |
+| `/test-ui/api/employees` | GET / POST | Kapsamdaki çalışanlar / yeni çalışan (`employee.create` ∧ kapsam). **Zorunlu:** `email`, `password`, `first_name`, `last_name`, `department_id`, `hire_date` — hesap + çalışan **tek işlemde**; `employee_no` istemciden alınmaz (sunucu `EMP-000001` üretir) |
+| `/test-ui/api/balances` | GET | **İzin Bakiyeleri** ekranı: kapsamdaki çalışanların dönem bakiyeleri (`leave.balance.read`). Sunucu tarafı filtre: `q`, `department_id`, `leave_type_id`, `durum=dusuk\|tukendi`. Satır: hak/kullanılan/bekleyen/kalan + `sonraki_hakedis` + `can_adjust` |
+| `/test-ui/api/balances/adjust` | POST | Bakiye düzeltmesi / hakediş tanımlama (`leave.balance.manage` ∧ kapsam). Gövde: `employee_id`, `islem=duzeltme\|hakedis`, `leave_type_id`, `delta_days`, **`reason` (zorunlu)** — servis katmanı: `adjust_leave_balance` / `accrue_leave_entitlements` (idempotent) |
 | `/test-ui/api/employees/<uuid>/balances` | GET | Çalışanın dönem bakiyeleri (`leave.balance.read`) |
 | `/test-ui/api/leave-requests?scope=mine\|pending` | GET | Kendi talepleri / onay kuyruğu |
 | `/test-ui/api/leave-requests` | POST | Talep oluştur (gün sayısı **sunucuda** hesaplanır) |

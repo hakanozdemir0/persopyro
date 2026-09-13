@@ -106,6 +106,31 @@ def _defter_yaz(
     )
 
 
+def next_accrual_date(hire_date: date, as_of: date | None = None) -> date:
+    """
+    **Sonraki yıllık hakediş (yenileme) tarihi** — işe giriş yıl dönümü.
+
+    Kural (kullanıcı bildirimi): hak, işe giriş tarihine göre yıllık yenilenir.
+    Örnek: işe giriş `12.09.2026` ise sonraki hakediş `12.09.2027`; bugün
+    `13.09.2027` ise sonraki hakediş `12.09.2028`.
+
+    * Bugün **yıl dönümünün kendisi** ise sonraki tarih gelecek yıldır (bugünün
+      hakkı zaten bu dönemde hesaplanır).
+    * 29 Şubat işe girişi olan çalışanda artık yıl olmayan yıllarda **28 Şubat**
+      kullanılır (takvim taşması olmaz).
+    * Saf fonksiyondur (DB okumaz); arayüz hesabı yapmaz, değer backend'den gelir.
+    """
+    gun = as_of or timezone.localdate()
+    for yil in (gun.year, gun.year + 1):
+        try:
+            aday = hire_date.replace(year=yil)
+        except ValueError:  # 29 Şubat → artık olmayan yıl
+            aday = hire_date.replace(year=yil, day=28)
+        if aday > gun:
+            return aday
+    return aday  # pragma: no cover - döngü her zaman bir değer döner
+
+
 def _aktif_politika(leave_type: LeaveType) -> LeavePolicy | None:
     return (
         LeavePolicy.objects.filter(
@@ -322,6 +347,7 @@ __all__ = [
     "accrue_leave_entitlements",
     "adjust_leave_balance",
     "get_or_create_balance",
+    "next_accrual_date",
     "period_year_for",
     "service_months",
 ]

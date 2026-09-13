@@ -209,7 +209,7 @@ Kiracı `slug`: `demo`.
 
 `bash scripts/run_tests.sh tests/test_testui.py` (arayüz + kapsam + yetki + çıkış +
 bakiye + rol yönetimi + taşıma + kan grubu/K3) ve `bash scripts/verify_fresh_install.sh`
-(**6c-1…6c-9** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
+(**6c-1…6c-10** adımları: giriş, kapsam görünürlüğü, çıkışın oturumu kapatması,
 bakiye/unvan/rol görünürlüğü, taşıma hedefleri, rol atama-kaldırma, yetkisiz 403,
 kişisel veri kapısı, rol oluşturma, gömülü arayüz JS sözdizimi (`node --check`),
 kayıt formu + kan grubunun şifreli saklanması, üretim varsayılanında 404).
@@ -347,3 +347,26 @@ düzenlenmesi **vardır** ama kararı arayüz vermez: yetki kararı servis katma
 `wait`** kullanmak betiği kilitler (bash, o daemon'un bitmesini bekler). Paralel
 işler için PID'ler toplanıp `wait $PID_LISTESI` yazılmalı; bu düzeltme 6c-9
 adımında uygulandı (iki eşzamanlı `curl` süreci yalnız kendileri beklenir).
+
+### Elle denenecek yeni akışlar (bildirim 11. tur — izin hakları, hakediş, bakiyeler)
+
+1. **Çalışan detayı:** bölümler *İş Bilgileri → İzin Hakları → Rol ve Yetkiler →
+   Kişisel Bilgiler*; **ham yetki kodu listesi yok**.
+2. **İzin Hakları:** tabloda yıllık hak/kullanılan/bekleyen/kalan ve üstte
+   *Sonraki yıllık hakediş: gg.aa.yyyy* (işe giriş yıl dönümü). Yetkili kullanıcıda
+   *Politikadan hakediş tanımla* ve satır başına *Düzelt* düğmesi görünür.
+3. **Bakiye düzeltme:** girilen değer doğrudan yazılmaz; gerekçesiz kayıt **reddedilir**
+   ("Manuel düzeltme için anlamlı bir gerekçe zorunludur"), gerekçeli kayıt kalan günü
+   günceller (defter + `leave.balance.adjustment` denetim kaydı).
+4. **İzin Bakiyeleri sekmesi:** kapsam süzgeçli tablo (çalışan/izin türü/hakediş/kullanılan/
+   bekleyen/kalan/sonraki hakediş); filtreler sunucuda çalışır, "Düşük (≤ 3 gün)" ve
+   "Tükendi" seçenekleri vardır. Çalışan (SELF) yalnız kendi satırını görür.
+5. **Yeni Çalışan:** Çalışanlar ekranındaki alt sekmede **yalnız** kayıt formu vardır;
+   ad/soyad/kurumsal e-posta/parola/birim/işe giriş **zorunludur** (eksikse tarayıcıda
+   uyarı, sunucuda 400). Çalışan numarası alanı salt-okunurdur.
+6. **Onaylar:** *Onay beklenen* kolonunda sıradaki onaylayıcı adı + unvanı; iki adımlı
+   akışta sıralı liste görünür.
+7. **Panel:** üstte 4 özet kartı; yaklaşan izinlerde renk **ve** metin (İzinde / N gün
+   sonra); altta "Bakiyesi kritik çalışanlar".
+8. **Yetki Yönetimi:** sizde olmayan izinler **verilemez** ama rolde seçiliyse
+   **kaldırılabilir** (onay kutusu kilitli değildir; kilit nedeni yazılıdır).

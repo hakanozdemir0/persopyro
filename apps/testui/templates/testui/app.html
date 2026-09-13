@@ -7,6 +7,7 @@
   <button data-tab="departments">Departmanlar</button>
   <button data-tab="employees">Çalışanlar</button>
   <button data-tab="leave">İzin Talebi</button>
+  <button data-tab="balances" data-gerekli="leave.balance.read">İzin Bakiyeleri</button>
   <button data-tab="approvals">Onaylar</button>
   <button data-tab="raw" data-gerekli="role.manage">Yetki Yönetimi</button>
 </div>
@@ -18,6 +19,7 @@
 <section id="tab-departments" class="tab" hidden></section>
 <section id="tab-employees" class="tab" hidden></section>
 <section id="tab-leave" class="tab" hidden></section>
+<section id="tab-balances" class="tab" hidden></section>
 <section id="tab-approvals" class="tab" hidden></section>
 <section id="tab-raw" class="tab" hidden></section>
 
@@ -185,7 +187,21 @@ tıklanınca kapanır.
          </tbody></table></div>`
       : `<p class="muted">Henüz talebiniz yok.</p>`;
 
+    const ozet = data.ozet || {};
+    const ozetKarti = (baslik, deger, ipucu) => `
+      <div class="stat">
+        <div class="stat-baslik">${esc(baslik)}</div>
+        <div class="stat-deger">${deger === null || deger === undefined ? "—" : esc(deger)}</div>
+        <div class="stat-ipucu">${esc(ipucu || "")}</div>
+      </div>`;
+
     document.getElementById("tab-panel").innerHTML = `
+      <div class="grid-4">
+        ${ozetKarti("Toplam çalışan", ozet.toplam_calisan, "kapsamınızda")}
+        ${ozetKarti("Bugün izinde", ozet.bugun_izinde, "şu anda izinde")}
+        ${ozetKarti("7 gün içinde", ozet.yaklasan_7g, "izne çıkacak")}
+        ${ozetKarti("Bekleyen onay", ozet.bekleyen_onay, "karar bekliyor")}
+      </div>
       <div class="grid-3">
         <div class="card">
           <div class="section-head"><h2>Oturum</h2></div>
@@ -219,13 +235,12 @@ tıklanınca kapanır.
         <div class="card">
           <div class="section-head"><h2>Yıllık izin bakiyem (${esc(data.period_year)})</h2></div>
           <p class="hakedis-buyuk">${yillikSatir(data.annual)}</p>
-          <p class="muted small">Kalan gün <strong>backend'de üretilen</strong> kolondan gelir; arayüz hesap yapmaz.</p>
           ${bakiyeler}
         </div>
       </div>
       <div class="card">
         <div class="section-head"><h2>İzin bakiyeleri</h2>
-          <span class="sag muted small">hak · kullanılan · bekleyen · kalan — kaynak: backend</span></div>
+          <span class="sag muted small">hak · kullanılan · bekleyen · kalan</span></div>
         <div id="panel-bakiyeler"><p class="muted">Bakiyeler yükleniyor…</p></div>
       </div>
       <div class="grid-2">
@@ -247,14 +262,33 @@ tıklanınca kapanır.
             <span class="sag muted small">kapsamınızdaki onaylı talepler</span></div>
           ${data.upcoming_requests.length
             ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Başlangıç</th>
-               <th>Bitiş</th><th class="sayi">Gün</th></tr></thead><tbody>
-               ${data.upcoming_requests.map((t) => `<tr><td>${esc(t.employee_no)}</td>
-                 <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
-                 <td>${tarih(t.start_date)}</td><td>${tarih(t.end_date)}</td>
-                 <td class="sayi">${esc(t.days_requested)}</td></tr>`).join("")}
-               </tbody></table></div>`
+               <th>Bitiş</th><th class="sayi">Gün</th><th>Durum</th></tr></thead><tbody>
+               ${data.upcoming_requests.map((t) => `<tr><td>${esc(t.employee) || esc(t.employee_no)}</td>
+                <td>${esc(t.department)}</td><td>${esc(t.leave_type)}</td>
+                <td>${tarih(t.start_date)}</td><td>${tarih(t.end_date)}</td>
+                <td class="sayi">${esc(t.days_requested)}</td>
+               <td>${izinDurumPill(t)}</td></tr>`).join("")}
+              </tbody></table></div>`
             : `<div class="bos">Yaklaşan onaylı izin yok.</div>`}
         </div>
+      </div>
+      <div class="card">
+        <div class="section-head"><h2>Bakiyesi kritik çalışanlar</h2>
+          <span class="sag muted small">kalan izin ≤ 3 gün</span>
+          <span class="rozet">${(data.kritik_bakiyeler || []).length}</span></div>
+        ${(data.kritik_bakiyeler || []).length
+          ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Çalışan</th><th>Birim</th>
+              <th class="sayi">Hak</th><th class="sayi">Kullanılan</th><th class="sayi">Bekleyen</th>
+              <th class="sayi">Kalan</th></tr></thead><tbody>
+              ${data.kritik_bakiyeler.map((k) => `<tr>
+                <td><div class="hucre-iki"><span>${esc(k.employee)}</span><span class="alt">${esc(k.employee_no)}</span></div></td>
+                <td>${esc(k.department) || yok}</td>
+                <td class="sayi">${esc(k.entitled_days)}</td>
+                <td class="sayi">${esc(k.used_days)}</td>
+                <td class="sayi">${esc(k.reserved_days)}</td>
+                <td class="sayi"><strong>${esc(k.available_days)}</strong></td></tr>`).join("")}
+              </tbody></table></div>`
+          : `<div class="bos">Kapsamınızda bakiyesi kritik çalışan yok.</div>`}
       </div>
       <div class="grid-2">
         <div class="card">
@@ -589,6 +623,11 @@ tıklanınca kapanır.
     EMPLOYEES = data;
     const kayitSayisi = data.length;
     document.getElementById("tab-employees").innerHTML = `
+      <div class="alt-sekmeler">
+        <button type="button" data-alt="liste" class="active">Çalışan Ara / Liste</button>
+        <button type="button" data-alt="yeni">Yeni Çalışan</button>
+      </div>
+      <section id="calisan-alt-liste" class="alt-bolum">
       <div class="card">
         <div class="section-head">
           <h1>Çalışanlar</h1>
@@ -598,10 +637,9 @@ tıklanınca kapanır.
             : "kapsamınızdaki birimler + alt birimleri"}</span>
         </div>
         <p class="muted">${meta.self_only
-          ? `Bu görünümde <strong>yalnız kendi kaydınız</strong> listelenir; başka çalışanların
-             kaydı ve numarası gösterilmez.`
-          : `Yalnızca <strong>kapsamınızdaki</strong> çalışanlar listelenir (tüm kiracı /
-             birim + alt birimleri). Kişisel veri (K2/K3) listelenmez; detay yetkiyle açılır.`}</p>
+          ? `Bu görünümde <strong>yalnız kendi kaydınız</strong> listelenir.`
+          : `Kapsamınızdaki çalışanlar listelenir. Kişisel veriler yalnızca yetkiniz varsa
+             çalışan detayında görünür.`}</p>
         <div class="filtre-bar">
           <div style="flex:1 1 300px"><label>Ara / filtrele (ad, e-posta, no, birim, unvan, rol)</label>
             <input id="calisan-filtre" placeholder="Örn. Muhasebe veya EMP-000004"></div>
@@ -611,9 +649,9 @@ tıklanınca kapanır.
       </div>
       <div class="card">
         ${kayitSayisi ? `<div class="tablo-kaydir"><table class="data-table" id="calisan-tablosu"><thead><tr>
-          <th>Çalışan</th><th>Çalışan no</th><th>Unvan</th><th>Birim</th><th>Yönetici</th>
-          <th>Rol (yetki)</th><th class="sayi">Kalan izin</th><th>Durum</th><th class="aksiyon">İşlem</th>
-        </tr></thead><tbody>
+            <th>Çalışan</th><th>Çalışan no</th><th>Unvan</th><th>Birim</th><th>Yönetici</th>
+            <th>Rol (yetki)</th><th class="sayi">Kalan izin</th><th>Durum</th><th class="aksiyon">İşlem</th>
+          </tr></thead><tbody>
           ${data.map((c) => `<tr data-arama="${esc([c.employee_no, c.user_name, c.user_email,
               c.department, c.position, (c.roles || []).map((r) => r.name).join(" ")]
               .filter(Boolean).join(" ").toLowerCase())}">
@@ -636,35 +674,31 @@ tıklanınca kapanır.
         </tbody></table></div>`
         : `<div class="bos">Kapsamınızda listelenecek çalışan kaydı yok.</div>`}
       </div>
+      </section>
+      <section id="calisan-alt-yeni" class="alt-bolum" hidden>
       <div class="grid-2">
         ${LOOKUPS.meta.can_manage_positions ? `
         <div class="card">
           <div class="section-head"><h2>Yeni unvan (pozisyon)</h2></div>
           <p class="muted small">Unvan <strong>işi</strong> tanımlar ve çalışan eklerken seçilir;
-            <strong>yetki rolü değildir</strong> — rol ataması çalışan detayından yapılır.</p>
+            yetki rolü değildir — rol ataması çalışan detayından yapılır.</p>
           <div class="form-grid">
             <div><label>Kod</label><input id="pos-code" placeholder="MUH-UZ"></div>
             <div><label>Unvan adı</label><input id="pos-name" placeholder="Muhasebe Uzmanı"></div>
           </div>
           <div class="form-alt"><button id="pos-create">Unvan ekle</button></div>
         </div>` : ""}
-        ${meta.can_create ? `
         <div class="card">
-          <div class="section-head"><h2>Giriş hesabı</h2>
-            <span class="sag muted small">hesap açma <code>user.manage</code> izniyle</span></div>
-          ${LOOKUPS.meta.can_create_users ? `
-            <p class="muted small">Hesap açmak için e-posta ve parola verin. Parola arayüzde
-              üretilir, sunucuya yazılır ve <strong>bir daha gösterilmez</strong>; hesabı
-              sonradan rol atayarak yetkilendirin (çalışan detayı).</p>
-            <div class="form-grid">
-              <div><label>E-posta</label><input id="emp-email" placeholder="ad.soyad@sirket.com"></div>
-              <div><label>Parola</label><input id="emp-pass" placeholder="En az 8 karakter"></div>
-            </div>
-            <div class="form-alt"><button type="button" id="emp-pass-uret">Parola üret</button>
-              <span class="muted small">Boş bırakılırsa çalışan yalnız iş kaydı olarak açılır.</span></div>`
-            : `<p class="muted small">Hesap açma yetkiniz yok (<code>user.manage</code> gerekir);
-                 çalışan yalnızca iş kaydı olarak oluşturulur.</p>`}
-        </div>` : ""}
+          <div class="section-head"><h2>Kayıt kuralları</h2></div>
+          <ul class="muted small">
+            <li><strong>Zorunlu:</strong> ad, soyad, kurumsal e-posta, parola, birim, işe giriş.</li>
+            <li>Giriş hesabı <strong>zorunludur</strong>; çalışan kaydı ve hesap <strong>tek işlemde</strong>
+              oluşturulur (biri başarısız olursa hiçbiri yazılmaz).</li>
+            <li>Çalışan numarası sunucuda üretilir (<code>EMP-000001</code> biçimi) ve birim
+              değişse de değişmez.</li>
+            <li>Kişisel veriler (K2/K3) yalnızca yetkiniz varsa kaydedilir.</li>
+          </ul>
+        </div>
       </div>
       ${meta.can_create ? `
       <div class="card">
@@ -689,21 +723,29 @@ tıklanınca kapanır.
             </div>
           </div>
           <div class="card ic">
-            <h4>Özet</h4>
-            <p class="muted small">Soldaki iş bilgileri <strong>zorunlu</strong> alanları taşır
-              (birim, işe giriş). Kişisel bilgiler aşağıdadır ve yetkiniz varsa doldurulur;
-              boş bırakılan alanlar sonradan <em>Detay → Kişisel verileri güncelle</em> ile
-              tamamlanır.</p>
-            <p class="muted small">Çalışan numarası kullanıcıdan <strong>istenmez</strong> ve
-              istemcide hesaplanmaz: kayıt anında veritabanı sequence'inden üretilir.</p>
+            <h4>Giriş hesabı <span class="zorunlu">*</span></h4>
+            <p class="muted small">Çalışan kaydıyla <strong>aynı işlemde</strong> açılır
+              (biri başarısız olursa hiçbiri yazılmaz). Parola sunucuya yazılır ve
+              bir daha gösterilmez.</p>
+            <div class="form-grid">
+              <div><label>Ad <span class="zorunlu">*</span></label>
+                <input id="emp-ad" placeholder="Ayşe"></div>
+              <div><label>Soyad <span class="zorunlu">*</span></label>
+                <input id="emp-soyad" placeholder="Demir"></div>
+              <div><label>Kurumsal e-posta <span class="zorunlu">*</span></label>
+                <input id="emp-email" placeholder="ad.soyad@sirket.com"></div>
+              <div><label>Parola <span class="zorunlu">*</span></label>
+                <input id="emp-pass" placeholder="En az 8 karakter"></div>
+            </div>
+            <div class="form-alt"><button type="button" id="emp-pass-uret">Parola üret</button>
+              <span class="muted small">Üretilen parolayı çalışana iletin; ekranda bir daha görünmez.</span></div>
           </div>
         </div>
         ${LOOKUPS.meta.can_see_pii ? `
-        <h4>Kişisel bilgiler <span class="muted small">— K2/K3, yalnızca <code>employee.sensitive.read</code></span></h4>
-        <p class="muted small">Zorunlu olan yalnızca <strong>ad</strong> ve <strong>soyad</strong>dır.</p>
+        <h4>Kişisel bilgiler <span class="muted small">— K2/K3, yalnızca yetkiniz varsa</span></h4>
+        <p class="muted small">Ad ve soyad giriş hesabından gelir; buradaki diğer kişisel
+          alanlar <strong>isteğe bağlıdır</strong> ve sonradan da tamamlanabilir.</p>
         <div class="form-grid uc">
-          <div><label>Ad <span class="zorunlu">*</span></label><input id="emp-ad" placeholder="Ayşe"></div>
-          <div><label>Soyad <span class="zorunlu">*</span></label><input id="emp-soyad" placeholder="Demir"></div>
           <div><label>Doğum tarihi</label><input id="emp-dogum" type="date"></div>
           <div><label>Kimlik no (TCKN / uyruk no)</label><input id="emp-kimlik" placeholder="12345678901"></div>
           <div><label>Vatandaşlık</label><input id="emp-uyruk" placeholder="TR" value="TR"></div>
@@ -724,7 +766,18 @@ tıklanınca kapanır.
           veritabanında <strong>Fernet ile şifreli</strong> saklanır ve yalnız yetkili roller görür.</p>` : ""}
         <div class="form-alt"><button class="primary" id="emp-create">Çalışanı oluştur</button>
           <span class="muted small">Numara kaydedince üretilir ve listede görünür.</span></div>
-      </div>` : ""}`;
+      </div>` : ""}
+      </section>`;
+
+    // Çalışanlar alt navigasyonu: Liste | Yeni Çalışan (sayfa yığılmaz).
+    const altSekmeler = document.querySelectorAll("#tab-employees .alt-sekmeler button");
+    altSekmeler.forEach((b) =>
+      b.addEventListener("click", () => {
+        altSekmeler.forEach((x) => x.classList.toggle("active", x === b));
+        document.getElementById("calisan-alt-liste").hidden = b.dataset.alt !== "liste";
+        document.getElementById("calisan-alt-yeni").hidden = b.dataset.alt !== "yeni";
+      })
+    );
 
     const olustur = document.getElementById("emp-create");
     if (olustur) olustur.addEventListener("click", async () => {
@@ -733,6 +786,13 @@ tıklanınca kapanır.
           const el = document.getElementById(id);
           return el ? el.value.trim() : "";
         };
+        const zorunlu = [["emp-ad", "ad"], ["emp-soyad", "soyad"], ["emp-email", "kurumsal e-posta"],
+          ["emp-pass", "parola"], ["emp-dep", "birim"], ["emp-hire", "işe giriş"]];
+        const eksik = zorunlu.filter(([id]) => !deger(id)).map(([, ad]) => ad);
+        if (eksik.length) {
+          PERSOPYRO_UI.mesaj("error", "Zorunlu alanlar eksik: " + eksik.join(", ") + ".");
+          return;
+        }
         const govde = {
           // Çalışan numarası GÖNDERİLMEZ: sunucu üretir (`next_employee_no`).
           department_id: document.getElementById("emp-dep").value,
@@ -740,11 +800,12 @@ tıklanınca kapanır.
           hire_date: document.getElementById("emp-hire").value,
           manager_employee_id: deger("emp-manager") || null,
         };
-        // Hesap açma (e-posta + parola) — parola sunucuya yazılır, geri dönmez.
-        if (deger("emp-email")) {
-          govde.email = deger("emp-email");
-          govde.password = document.getElementById("emp-pass").value;
-        }
+        // Giriş hesabı **zorunludur**: e-posta + parola + ad + soyad her zaman gönderilir
+        // (sunucu da eksikse 400 döner; ikisi aynı işlemde yazılır).
+        govde.email = deger("emp-email");
+        govde.password = document.getElementById("emp-pass").value;
+        govde.first_name = deger("emp-ad");
+        govde.last_name = deger("emp-soyad");
         // Kişisel veriler (yalnız yetkisi olan gönderir): K2 alanlarının tamamı
         // + K3 (kan grubu) — kayıt formu bütün bilgileri tek adımda toplar.
         if (LOOKUPS.meta.can_see_pii) {
@@ -829,12 +890,36 @@ tıklanınca kapanır.
       veri = await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}`);
     } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); return; }
     const c = veri.data;
-    const bakiyeler = (c.balances || []).length
-      ? `<table><thead><tr><th>Tür</th><th>Hakediş</th><th>Kullanılan</th><th>Bekleyen</th><th>Kalan</th></tr></thead><tbody>
-         ${c.balances.map((b) => `<tr><td>${esc(b.leave_type)}</td><td>${esc(b.entitled_days)}</td>
-           <td>${esc(b.used_days)}</td><td>${esc(b.reserved_days)}</td>
-           <td><strong>${esc(b.available_days)}</strong></td></tr>`).join("")}</tbody></table>`
-      : `<p class="muted">Bu dönem için bakiye kaydı yok.</p>`;
+    // --- İzin Hakları bölümü (kaynak: `leave_balances` + hakediş tarihi) -----
+    const bakiyeSatirlari = (c.balances || []).map((b) => `<tr>
+        <td>${esc(b.leave_type)}</td>
+        <td class="sayi">${esc(b.entitled_days)}</td>
+        <td class="sayi">${esc(b.used_days)}</td>
+        <td class="sayi">${esc(b.reserved_days)}</td>
+        <td class="sayi"><strong>${esc(b.available_days)}</strong></td>
+        <td class="aksiyon">${c.bakiye_yonetilebilir
+          ? `<button class="kucuk" data-bakiye="${esc(calisanId)}" data-tur="${esc(b.leave_type_id)}"
+               data-ad="${esc(c.user_name || c.employee_no)}" data-turad="${esc(b.leave_type)}">Düzelt</button>`
+          : ""}</td>
+      </tr>`).join("");
+    const izinHaklariBolumu = `
+      <h3>İzin Hakları</h3>
+      ${c.bakiye_okunabilir ? `
+        <p class="muted small">Sonraki yıllık hakediş:
+          <strong>${esc(c.sonraki_hakedis_metin)}</strong> (işe giriş tarihinin yıl dönümü).
+          Değerler <em>${esc(c.annual ? c.annual.period_year : "")}</em> dönemi bakiye kaydından gelir.</p>
+        ${bakiyeSatirlari
+          ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr>
+              <th>İzin türü</th><th class="sayi">Yıllık hak</th><th class="sayi">Kullanılan</th>
+              <th class="sayi">Bekleyen</th><th class="sayi">Kalan</th>
+              <th class="aksiyon">İşlem</th></tr></thead><tbody>${bakiyeSatirlari}</tbody></table></div>`
+          : `<div class="bos">Bu dönem için bakiye kaydı yok. Hakediş, izin politikasından
+               tanımlanabilir.</div>`}
+        ${c.bakiye_yonetilebilir
+          ? `<div class="action-bar" style="margin-top:10px">
+               <button data-hakedis="${esc(calisanId)}">Politikadan hakediş tanımla</button>
+               <button data-bakiye-yardim="${esc(calisanId)}">Bakiye düzelt</button></div>` : ""}
+      ` : `<p class="muted">İzin bakiyesini görme yetkiniz yok.</p>`}`;
 
     let piiBolumu = "";
     if (ME.data.menu.pii_gorunur) {
@@ -877,7 +962,6 @@ tıklanınca kapanır.
       const kaldirilanListe = c.revoked_assignments || [];
       const istisnaListe = c.permission_overrides || [];
       const atanabilirListe = c.assignable_roles || [];
-      const izinListe = c.effective_permissions || [];
       const rolSatirlari = c.roles.length
         ? c.roles.map((r) => `<tr>
             <td>${esc(r.name)} <span class="teknik">${esc(r.code)}</span></td>
@@ -923,27 +1007,24 @@ tıklanınca kapanır.
             <span class="muted small">Kapsam zorunluluğu sunucuda dayatılır; kiracı geneli (TENANT)
               rollerde birim kapsamı istenmez. Platform rolleri burada yönetilmez.</span></div>` : `<p class="muted">Bu çalışana bağlı kullanıcı hesabı yok.</p>`}
         ${kaldirilanlar}
-        <h4>Etkin izinler (${izinListe.length})</h4>
-        <p class="muted small">${izinListe.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>
         ${istisnalar}`;
     }
 
     document.getElementById("employee-detail").innerHTML = `
       <div class="detail-box">
-        <h2>${esc(c.user_name || c.employee_no)} <span class="muted">(${esc(c.employee_no)})</span></h2>
-        <div class="grid">
-          <div><h3>Birim</h3>${esc(c.department) || yok}</div>
-          <div><h3>Unvan</h3>${esc(c.position) || yok}</div>
-          <div><h3>Yönetici</h3>${c.manager ? esc(c.manager.employee_no) + (c.manager.name ? " · " + esc(c.manager.name) : "") : yok}</div>
-          <div><h3>Durum</h3>${esc(c.status_label || c.status)}</div>
-          <div><h3>İşe giriş</h3>${c.hire_date ? tarih(c.hire_date) : yok}</div>
-        </div>
-        ${piiBolumu}
-        <h3>Yıllık izin</h3><p class="hakedis-buyuk">${c.annual
-          ? yillikSatir(c.annual)
-          : '<span class="muted">Bu kayıt dizin görünümünde: izin bakiyesi gizli.</span>'}</p>
-        ${bakiyeler}
+        <h3>İş Bilgileri</h3>
+        <div class="tablo-kaydir"><table class="kv"><tbody>
+          <tr><th>Çalışan no</th><td><strong>${esc(c.employee_no)}</strong></td></tr>
+          <tr><th>Birim</th><td>${esc(c.department) || yok}</td></tr>
+          <tr><th>Unvan</th><td>${esc(c.position) || yok}</td></tr>
+          <tr><th>Yönetici</th><td>${c.manager
+            ? esc(c.manager.employee_no) + (c.manager.name ? " · " + esc(c.manager.name) : "") : yok}</td></tr>
+          <tr><th>İşe giriş</th><td>${c.hire_date ? tarih(c.hire_date) : yok}</td></tr>
+          <tr><th>Durum</th><td>${esc(c.status_label || c.status)}</td></tr>
+        </tbody></table></div>
+        ${izinHaklariBolumu}
         ${yetkiBolumu}
+        ${piiBolumu}
       </div>`;
 
     document.querySelectorAll("[data-revoke]").forEach((d) =>
@@ -952,6 +1033,23 @@ tıklanınca kapanır.
       d.addEventListener("click", () => rolGeriAl(d.dataset.restore, calisanId)));
     document.querySelectorAll("[data-pii-guncelle]").forEach((d) =>
       d.addEventListener("click", () => piiFormu(d.dataset.piiGuncelle)));
+    // İzin hakları bölümündeki düzenleme düğmeleri (servis katmanına gider).
+    document.querySelectorAll("#employee-detail [data-bakiye]").forEach((b) =>
+      b.addEventListener("click", () => bakiyeDuzenle(b.dataset)));
+    const hakedisBtn = document.querySelector("#employee-detail [data-hakedis]");
+    if (hakedisBtn) hakedisBtn.addEventListener("click", () => {
+      bakiyeDuzenle({ bakiye: hakedisBtn.dataset.hakedis, ad: c.user_name || c.employee_no, tur: "" });
+    });
+    const bakiyeYardim = document.querySelector("#employee-detail [data-bakiye-yardim]");
+    if (bakiyeYardim) bakiyeYardim.addEventListener("click", () => {
+      const turler = LOOKUPS.data.leave_types.filter((t) => t.uses_balance);
+      bakiyeDuzenle({
+        bakiye: bakiyeYardim.dataset.bakiyeYardim,
+        ad: c.user_name || c.employee_no,
+        tur: turler.length ? turler[0].id : "",
+        turad: "",
+      });
+    });
 
     const ata = document.getElementById("rol-ata");
     if (ata) ata.addEventListener("click", () => rolAta(calisanId));
@@ -1311,6 +1409,138 @@ tıklanınca kapanır.
       : `<div class="bos">Kayıt yok.</div>`;
   }
 
+  // --- İzin Bakiyeleri -----------------------------------------------------
+  // Filtreler **sunucuya** gider (kapsam orada uygulanır); düzenleme servis
+  // katmanından geçer (`POST /test-ui/api/balances/adjust`) — arayüz bakiye yazmaz.
+  let BAKIYE_FILTRE = { q: "", department_id: "", leave_type_id: "", durum: "" };
+
+  async function yukleBakiyeler() {
+    const p = new URLSearchParams();
+    Object.keys(BAKIYE_FILTRE).forEach((k) => { if (BAKIYE_FILTRE[k]) p.set(k, BAKIYE_FILTRE[k]); });
+    const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/balances?" + p.toString());
+    const kayitlar = data || [];
+    const turler = LOOKUPS.data.leave_types.filter((t) => t.uses_balance);
+    document.getElementById("tab-balances").innerHTML = `
+      <div class="card">
+        <div class="section-head">
+          <h1>İzin Bakiyeleri</h1>
+          <span class="rozet">${esc(meta.kayit_sayisi)} kayıt</span>
+          <span class="sag muted small">${esc(meta.period_year)} dönemi${
+            meta.self_only ? " · yalnız kendi kaydınız" : ""}</span>
+        </div>
+        <div class="filtre-bar">
+          <div style="flex:1 1 240px"><label>Çalışan ara</label>
+            <input id="bak-arama" placeholder="Ad, çalışan no veya e-posta" value="${esc(BAKIYE_FILTRE.q)}"></div>
+          <div><label>Birim</label>
+            <select id="bak-birim">${lookupSecenekler(LOOKUPS.data.departments, BAKIYE_FILTRE.department_id)}</select></div>
+          <div><label>İzin türü</label>
+            <select id="bak-tur">
+              <option value="">(tümü)</option>
+              ${turler.map((t) => `<option value="${esc(t.id)}"${t.id === BAKIYE_FILTRE.leave_type_id ? " selected" : ""}>${esc(t.name)}</option>`).join("")}
+            </select></div>
+          <div><label>Bakiye</label>
+            <select id="bak-durum">
+              <option value="">(tümü)</option>
+              <option value="dusuk"${BAKIYE_FILTRE.durum === "dusuk" ? " selected" : ""}>Düşük (≤ 3 gün)</option>
+              <option value="tukendi"${BAKIYE_FILTRE.durum === "tukendi" ? " selected" : ""}>Tükendi</option>
+            </select></div>
+          <div><button type="button" id="bak-temizle">Filtreyi temizle</button></div>
+        </div>
+      </div>
+      <div class="card">
+        ${kayitlar ? `<div class="tablo-kaydir"><table class="data-table" id="bak-tablosu"><thead><tr>
+            <th>Çalışan</th><th>Birim</th><th>İzin türü</th>
+            <th class="sayi">Hakediş</th><th class="sayi">Kullanılan</th><th class="sayi">Bekleyen</th>
+            <th class="sayi">Kalan</th><th>Sonraki hakediş</th><th class="aksiyon">İşlem</th>
+          </tr></thead><tbody>
+          ${kayitlar.map((r) => `<tr>
+            <td><div class="hucre-iki"><span>${esc(r.employee)}</span><span class="alt">${esc(r.employee_no)}</span></div></td>
+            <td>${esc(r.department) || yok}</td>
+            <td>${esc(r.leave_type)}</td>
+            <td class="sayi">${esc(r.entitled_days)}</td>
+            <td class="sayi">${esc(r.used_days)}</td>
+            <td class="sayi">${esc(r.reserved_days)}</td>
+            <td class="sayi"><strong>${esc(r.available_days)}</strong></td>
+            <td>${esc(r.sonraki_hakedis_metin) || yok}</td>
+            <td class="aksiyon">${r.can_adjust
+              ? `<button class="kucuk" data-bakiye="${esc(r.employee_id)}" data-tur="${esc(r.leave_type_id)}" data-ad="${esc(r.employee)}" data-turad="${esc(r.leave_type)}">Düzenle</button>`
+              : `<span class="muted small">yetki yok</span>`}</td>
+          </tr>`).join("")}
+        </tbody></table></div>`
+        : `<div class="bos">Bu filtrelerle bakiye kaydı bulunamadı.</div>`}
+      </div>`;
+    const filtreyiUygula = () => {
+      BAKIYE_FILTRE = {
+        q: document.getElementById("bak-arama").value.trim(),
+        department_id: document.getElementById("bak-birim").value,
+        leave_type_id: document.getElementById("bak-tur").value,
+        durum: document.getElementById("bak-durum").value,
+      };
+      yukleBakiyeler().catch((hata) => PERSOPYRO_UI.mesaj("error", hata.message));
+    };
+    ["bak-arama", "bak-birim", "bak-tur", "bak-durum"].forEach((id) => {
+      const alan = document.getElementById(id);
+      alan.addEventListener(id === "bak-arama" ? "input" : "change", filtreyiUygula);
+    });
+    document.getElementById("bak-temizle").addEventListener("click", () => {
+      BAKIYE_FILTRE = { q: "", department_id: "", leave_type_id: "", durum: "" };
+      yukleBakiyeler().catch((hata) => PERSOPYRO_UI.mesaj("error", hata.message));
+    });
+    document.querySelectorAll("[data-bakiye]").forEach((b) =>
+      b.addEventListener("click", () => bakiyeDuzenle(b.dataset)));
+  }
+
+  // Bakiye düzeltme/hakediş modalı: miktar + **zorunlu gerekçe**; kayıt servis
+  // katmanında ledger'a ve denetim kaydına yazılır.
+  async function bakiyeDuzenle(veri) {
+    const turler = LOOKUPS.data.leave_types.filter((t) => t.uses_balance);
+    const onay = await onayModali(
+      "İzin bakiyesi düzenle",
+      `<p class="muted small"><strong>${esc(veri.ad)}</strong> · ${esc(veri.turad)}</p>
+       <div class="form-grid">
+         <div><label>İşlem</label>
+           <select id="bak-islem">
+             <option value="duzeltme">Düzeltme (elle +/-)</option>
+             <option value="ekle">Hak ekle (+)</option>
+             <option value="dus">Hak düş (−)</option>
+             <option value="hakedis">Politikadan hakediş tanımla (idempotent)</option>
+           </select></div>
+         <div><label>İzin türü</label>
+           <select id="bak-tur-secim">${turler.map((t) => `<option value="${esc(t.id)}"${t.id === veri.tur ? " selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
+         <div><label>Miktar (gün)</label><input id="bak-miktar" placeholder="2.0" inputmode="decimal"></div>
+       </div>
+       <div style="margin-top:10px"><label>Gerekçe <span class="zorunlu">*</span></label>
+         <input id="bak-gerekce" placeholder="Örn. 2025 hakediş düzeltmesi"></div>
+       <p class="muted small">Miktar yalnız düzeltme/ekle/düş işlemlerinde kullanılır; hakediş seçilirse tutar politikadan hesaplanır.</p>`,
+      "Kaydet"
+    );
+    if (!onay) return;
+    const islem = document.getElementById("bak-islem").value;
+    const turId = document.getElementById("bak-tur-secim").value;
+    const miktar = document.getElementById("bak-miktar").value.trim().replace(",", ".");
+    const gerekce = document.getElementById("bak-gerekce").value.trim();
+    if (islem !== "hakedis" && !miktar) {
+      PERSOPYRO_UI.mesaj("error", "Miktar girin (ör. 2.0 veya -1.5).");
+      return;
+    }
+    const isaretli = islem === "dus" ? (-Math.abs(parseFloat(miktar))).toString() : miktar;
+    try {
+      const { meta } = await PERSOPYRO_UI.cagir("/test-ui/api/balances/adjust", {
+        method: "POST",
+        body: islem === "hakedis"
+          ? { employee_id: veri.bakiye, islem: "hakedis" }
+          : { employee_id: veri.bakiye, leave_type_id: turId, delta_days: isaretli, reason: gerekce },
+      });
+      PERSOPYRO_UI.mesaj("ok", islem === "hakedis"
+        ? `Hakediş politikadan uygulandı (${esc(meta.employee_no)}).`
+        : `Bakiye güncellendi (${esc(meta.employee_no)}).`);
+      BAKIYE_FILTRE.leave_type_id = "";
+      await yukleBakiyeler();
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+    }
+  }
+
   // --- Onaylar -------------------------------------------------------------
   async function yukleOnaylar() {
     const { data } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests?scope=pending");
@@ -1318,15 +1548,17 @@ tıklanınca kapanır.
       <div class="card">
         <div class="section-head"><h1>Bekleyen izin talepleri</h1>
           <span class="sag rozet">${data.length}</span></div>
-        <p class="muted">Yalnızca <strong>yetkiniz ve kapsamınız</strong> içindeki talepler listelenir;
-          onay/red kararı backend'de <code>izin ∧ kapsam ∧ adım sahipliği ∧ farklı aktör</code> ile doğrulanır.</p>
+        <p class="muted">Karar bekleyen izin talepleri.</p>
         ${data.length ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Çalışan</th><th>Birim</th><th>Tür</th><th>Tarih</th>
-          <th class="sayi">Gün</th><th>İzin bakiyesi</th><th>Durum</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
-          ${data.map((t) => `<tr><td>${esc(t.employee_no)}${t.kendi_talebi ? ` <span class="pill">kendi talebim</span>` : ""}</td>
+          <th class="sayi">Gün</th><th>İzin bakiyesi</th><th>Onay beklenen</th><th>Durum</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
+          ${data.map((t) => `<tr data-talep="${esc(t.id)}"><td><div class="hucre-iki">
+              <span>${esc(t.employee) || esc(t.employee_no)}${t.kendi_talebi ? ` <span class="pill">kendi talebim</span>` : ""}</span>
+              <span class="alt">${esc(t.employee_no)}</span></div></td>
             <td>${esc(t.department)}</td>
             <td>${esc(t.leave_type)}</td><td>${tarih(t.start_date)} → ${tarih(t.end_date)}</td>
             <td class="sayi">${esc(t.days_requested)}</td>
             <td>${t.talep_sahibi_bakiye ? `<span class="muted small">${yillikSatir(t.talep_sahibi_bakiye)}</span>` : ""}</td>
+            <td>${onaylayiciHucre(t)}</td>
             <td>${durumPill(t.status, t.status_label)}${t.requires_document && !t.document_ref ? " <span class='pill rejected'>belge yok</span>" : ""}</td>
             <td class="aksiyon">${talepAksiyonlari(t)}</td>
             </tr>`).join("")}</tbody></table></div>` : "<p class='muted'>Bekleyen talep yok.</p>"}
@@ -1337,6 +1569,28 @@ tıklanınca kapanır.
       d.addEventListener("click", () => karar(d.dataset.no, "rejected")));
     document.querySelectorAll("[data-duzenle]").forEach((d) =>
       d.addEventListener("click", () => talepDuzenleBaslat(d.dataset.duzenle)));
+  }
+
+  // Yaklaşan izin durumu: renk **ve** metin birlikte (renk tek bilgi kaynağı değil).
+  function izinDurumPill(t) {
+    if (!t.durum_kodu) return "";
+    const sinif = t.renk === "yesil" ? "approved" : (t.renk === "sari" ? "pending" : "");
+    return `<span class="pill ${sinif}">${esc(t.durum_etiketi)}</span>`;
+  }
+
+  // Onay beklenen kişi(ler): kaynak **approval_steps** (arayüz onaylayıcı tahmin etmez).
+  function onaylayiciHucre(t) {
+    const adimlar = t.onay_adimlari || [];
+    if (!adimlar.length) return '<span class="muted small">Onay adımı yok</span>';
+    const kisiAdi = (a) => (a.onaylayici && a.onaylayici.etiket) || a.rol_adi || a.roller || "—";
+    if (adimlar.length === 1) {
+      const a = adimlar[0];
+      return `<span>${esc(kisiAdi(a))}</span><br><span class="muted small">${esc(a.status_label)}</span>`;
+    }
+    return `<ol class="onay-zincir">${adimlar.map((a) => {
+      const durum = a.status === "pending" ? (a.guncel ? "Bekliyor" : "Sonraki adım") : a.status_label;
+      return `<li${a.guncel ? ' class="guncel"' : ""}>${esc(kisiAdi(a))} — ${esc(durum)}</li>`;
+    }).join("")}</ol>`;
   }
 
   // Tarihler her yerde **gg.aa.yyyy** gösterilir (bildirim). ISO değerler
@@ -1379,9 +1633,7 @@ tıklanınca kapanır.
           <strong>Rol atama</strong> (kim hangi rolü taşır): <em>Çalışanlar → Detay →
           Rol ve Yetkiler</em>.<br>
           <strong>Yetki düzenleme</strong> (bir rol neleri yapabilir): soldan rolü seçin.
-          Yalnızca şirket yöneticisi (<code>role.manage</code>) düzenleyebilir;
-          değişiklik <strong>anında</strong> geçerli olur ve denetim kaydına yazılır.
-          <strong>Unvan ≠ rol</strong>: unvan işi, rol yetkiyi tanımlar.
+          Değişiklik <strong>anında</strong> geçerli olur; kim neyi değiştirdi denetim kaydına yazılır.
         </p>
         ${hata ? `<p class="muted"><strong>Rolleri gösteremiyorum:</strong> ${esc(hata)}</p>` : ""}
         ${yetkili ? `
@@ -1489,10 +1741,16 @@ tıklanınca kapanır.
       <label class="izin-kutu" data-arama="${esc((p.name + " " + p.code).toLowerCase())}">
         <input type="checkbox" class="izin-secim" value="${esc(p.code)}"
           data-modul="${esc(p.modul)}"${p.secili ? " checked" : ""}
-          ${duzenlenebilir && p.aktor_sahip ? "" : " disabled"}>
+          ${duzenlenebilir && !(p.ekleme_kilitli && !p.secili) ? "" : " disabled"}>
         <span><strong>${esc(p.name)}</strong>
           <code class="small">${esc(p.code)}</code>
-          ${p.aktor_sahip ? "" : '<span class="muted small">(sizde yok — dağıtamazsınız)</span>'}
+          ${!duzenlenebilir
+            ? ""
+            : (p.ekleme_kilitli && !p.secili
+                ? `<span class="muted small">${esc(p.kilit_nedeni || "veremezsiniz")}</span>`
+                : (p.ekleme_kilitli && p.secili
+                    ? '<span class="muted small">sizde yok — kaldırabilirsiniz</span>'
+                    : ""))}
         </span>
       </label>`;
 
@@ -1513,9 +1771,9 @@ tıklanınca kapanır.
     hedef.innerHTML = `
       <div class="card">
         <h2>${esc(r.name)} <span class="muted">yetkileri</span></h2>
-        <p class="muted">${esc(r.name)} (<code>${esc(r.code)}</code>) · kapsam:
-          ${esc(r.scope_type_label)} · başlangıçta <strong>${esc(veri.data.selected_count)}</strong>
-          / ${esc(veri.data.total_count)} izin seçili</p>
+        <p class="muted">${esc(r.name)} · kapsam: ${esc(r.scope_type_label)} ·
+          başlangıçta <strong>${esc(veri.data.selected_count)}</strong> / ${esc(veri.data.total_count)} izin seçili</p>
+        ${duzenlenebilir ? "" : `<p class="muted small">${esc(veri.data.can_edit_reason || "")}</p>`}
         ${duzenlenebilir ? `
           <div class="yetki-arac">
             <input id="izin-ara" placeholder="İzin ara (ad veya kod)">
@@ -1534,8 +1792,8 @@ tıklanınca kapanır.
           <div class="ozet" id="degisiklik-ozeti">Değişiklik yok</div>
           <button class="primary" id="yetki-kaydet">Kaydet</button>
         </div>
-        <p class="muted small">Platform izinleri (OD3) listelenmez; sahip olmadığınız
-          izinler işaretlenemez; rol en az bir izin içermelidir.</p>` : ""}
+        <p class="muted small">Platform izinleri listelenmez; sahip olmadığınız izinleri
+          veremezsiniz, var olanı kaldırabilirsiniz. Rol en az bir izin içermelidir.</p>` : ""}
       </div>`;
 
     const kutular = () => [...hedef.querySelectorAll(".izin-secim")];
@@ -1621,16 +1879,19 @@ tıklanınca kapanır.
   function yukleOzet() {
     const k = ME.data;
     document.getElementById("tab-raw").innerHTML = `
-      <div class="card"><h1>Kapsam ve yetki (oturumdaki kullanıcı)</h1>
+      <div class="card"><h1>Kapsam ve yetki</h1>
         <div class="grid">
           <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") || "—"}
             <div class="muted small">${k.roles.map((r) => esc(r.code)).join(", ")}</div></div>
-          <div><h3>Kapsam</h3><pre>${esc(bos(k.scope))}</pre></div>
-          <div><h3>Çalışan</h3><pre>${esc(bos(k.employee))}</pre></div>
+          <div><h3>Kapsam</h3>${k.scope.tenant_wide
+            ? "Tüm kiracı"
+            : (k.scope.unit_count ? esc(k.scope.unit_count) + " birim + alt birimleri" : "Yalnızca kendi kaydı")}</div>
+          <div><h3>Çalışan</h3>${k.employee
+            ? esc(k.employee.employee_no) + (k.employee.position ? " · " + esc(k.employee.position) : "")
+            : "Bu kullanıcıya bağlı çalışan kaydı yok."}</div>
         </div>
-        <h3>Etkin izinler (${k.permissions.length})</h3>
-        <p>${k.permissions.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>
-        <p class="muted">Bu liste yalnızca arayüz kolaylığı içindir; <strong>tek güvenlik kontrolü değildir</strong>.</p>
+        <p class="muted small">Yetkiler bu ekranda listelenmez; bir rolün neleri
+          yapabildiğini <strong>Yetki Yönetimi</strong> ekranından görebilirsiniz.</p>
       </div>`;
   }
 
@@ -1644,6 +1905,7 @@ tıklanınca kapanır.
     departments: yukleDepartmanlar,
     employees: yukleCalisanlar,
     leave: yukleIzin,
+    balances: yukleBakiyeler,
     approvals: yukleOnaylar,
     raw: yukleYetki,
   };
@@ -1668,7 +1930,16 @@ tıklanınca kapanır.
       // Yetki düzenleyemeyen kullanıcıda "Yetki Yönetimi" sekmesi hiç görünmez.
       document.querySelectorAll(".tabs button[data-gerekli]").forEach((b) => {
         const kod = b.dataset.gerekli;
-        if (!(ME.data.menu[kod === "role.manage" ? "roles_manage" : kod] || false)) {
+        // Sekme görünürlüğü `/api/me` menü bayraklarından gelir; eşleme tabloda
+        // tutulur (yeni sekme eklerken tek yer değişir).
+        const MENU_ANAHTARI = {
+          "role.manage": "roles_manage",
+          "leave.balance.read": "balances_read",
+          "employee.create": "employees_create",
+          "org.department.manage": "departments_manage",
+        };
+        const anahtar = MENU_ANAHTARI[kod] || kod;
+        if (!(ME.data.menu[anahtar] || false)) {
           b.hidden = true;
         }
       });
