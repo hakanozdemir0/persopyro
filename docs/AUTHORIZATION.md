@@ -948,10 +948,21 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1–OD5, OD19–OD28 KAPATILDI** (15 karar); **OD29 AÇIK**.
+**Durum (2026-09-11):** **OD1–OD5, OD19–OD28 KAPATILDI** (15 karar); **OD29–OD31 AÇIK**.
 Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
+
+> **Önerilen yeni kararlar (bu dosyada AÇILMAMIŞTIR):** ürün yol haritası için
+> `docs/HR_ROADMAP.md` **§26**'da **OD32–OD57** numaralı **öneri** listesi vardır
+> (fazla mesai karşılığı, dinamik form, belge limitleri, ihbar dönemi, raporlama,
+> ülke kural motoru vb.). Bunlar **karar değildir**; ilgili faz başlarken bu dosyaya
+> taşınarak kapatılmalıdır.
+>
+> **Doküman tutarsızlığı (kayıt için):** **OD10 (MFA)** hâlâ AÇIK görünmektedir ancak
+> `docs/ARCHITECTURE.md` §7 kararı **vermiş görünüyor** (TOTP, `tenant_admin` +
+> `super_admin` için zorunlu). Kod yok; karar verilmişse OD10 kapatılmalı, verilmemişse
+> ARCHITECTURE.md düzeltilmelidir.
 
 ### OD1 — SUPERADMIN'ın kişisel veriye erişimi — **KAPALI** ✅ (2026-09-11)
 

@@ -563,6 +563,12 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
 
 ## 9. Evrak ve dosya güvenliği
 
+> **Uygulama durumu (2026-09-12 ölçümü):** bu bölümdeki ✅ işaretleri **tasarım kararını**
+> gösterir; **belge modülü henüz kodlanmamıştır** (`hr.documents` / `hr.document_access`
+> `docs/DATABASE.md` M16'da tasarlı, uygulama yok; `apps/` altında belge uygulaması yok).
+> Modülün uygulama planı, yükleme güvenliği kuralları (sistem/tenant MB tavanı, MIME allowlist,
+> uzantı doğrulaması, karantina, kota, retention) ve kabul kriterleri: **`docs/HR_ROADMAP.md` §8**.
+
 - Dosyalar nesne depolamada tutulur; veritabanı yalnızca üst veri saklar ✅.
 - `checksum_sha256` ile bütünlük doğrulanır ✅.
 - Doğrudan genel URL verilmez; **kısa ömürlü imzalı bağlantı** üretilir ✅.

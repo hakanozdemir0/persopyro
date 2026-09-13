@@ -355,3 +355,13 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
 
 Her modül bitmeden sonraki modüle geçilmez; sıra değişikliği gerekçesiyle
 `CHANGELOG.md`'ye yazılır.
+
+> **Güncel sıra (2026-09-12):** yukarıdaki liste ilk ürün sıralamasıdır. **Uçtan uca HR ürün
+> mimarisi ve gerçek kod bağımlılıklarına göre düzeltilmiş faz sırası (P0–P9)** ile birlikte
+> modül tasarımları, izin/audit/job planı ve kabul kriterleri **`docs/HR_ROADMAP.md`** içindedir
+> (bkz. §22 fazlandırma, §20 HR görev matrisi). Bu doküman uygulanmış özellikleri anlatır;
+> plan içeriği burada tekrar edilmez.
+>
+> **Ölçüm notu (2026-09-12):** §5 (vardiya/devam), §6 (evrak), §9 (bordro) başlıkları
+> **tasarlanmış ama kodlanmamıştır** (izin kodları ve DB tasarımı var, uygulama yok);
+> §7 (işe alım) ve §8 (performans) **hiç başlanmamıştır** ve V1 kapsamı dışındadır.

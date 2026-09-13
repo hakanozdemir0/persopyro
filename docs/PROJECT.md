@@ -108,6 +108,7 @@ Kapsam dışı (şimdilik, bilinçli karar):
 | `ORGANIZATION.md` | Şirket/departman/pozisyon/çalışan yapısı |
 | `FEATURES.md` | Özellik listesi ve durumları |
 | `DEVELOPMENT_RULES.md` | Uyulması zorunlu geliştirme kuralları |
+| `HR_ROADMAP.md` | **Uçtan uca HR ürün mimarisi, modül tasarımları, fazlandırma (P0–P9) ve önerilen açık kararlar (OD32–OD57)** — plan; uygulanan şey burada "yapıldı" diye yazılmaz |
 | `CHANGELOG.md` | Sürüm ve değişiklik kaydı |
 
 ## Dil ve terminoloji

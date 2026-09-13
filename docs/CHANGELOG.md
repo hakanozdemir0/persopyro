@@ -3,6 +3,57 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.35.0] — 2026-09-12 — Dokümantasyon: uçtan uca HR ürün mimarisi ve geliştirme yol haritası
+
+**Kapsam:** **yalnız doküman.** Bu sürümde **hiçbir kod, migration, veritabanı değişikliği veya
+yeni uç eklenmedi** (kanıt: `git diff --stat` → yalnız `docs/`; `makemigrations --check` temiz).
+**Baseline:** commit `6b59ebd`, çalışma ağacı temiz, tam test suite **473 passed**,
+`verify_fresh_install.sh` VERIFY_EXIT=0.
+
+### UYGULANDI (doküman)
+
+- **`docs/HR_ROADMAP.md` yeniden yazıldı ve genişletildi (1542 satır, 30 bölüm):** ürün mimarisi,
+  modül tasarımları, fazlandırma ve açık karar önerileri için **tek source-of-truth**. Önceki
+  taslak sürümün fazla mesai + dinamik form içeriği §4 ve §11 altında bütünleştirildi.
+- **Ölçüm bölümü (kod kaynaklı):** 9 uygulama / 43 model / 49 migration / 38 izin (12 modül) /
+  5 varsayılan rol / 11.896 satır uygulama kodu + 10.813 satır test / 473 test; her yetenek
+  *tamamen uygulanmış · kısmen · yalnız tasarlanmış · başlanmamış* olarak sınıflandırıldı.
+- **Zaten verilmiş kararların tekrarı önlendi:** django-q2 kuyruk (ARCHITECTURE §10), S3 nesne
+  depolama (§9/K7), SMTP e-posta (§11), DB cache + DRF throttling (§6.1), DB tetikleyicili audit
+  (§12), vardiya/devam M15 ve belge M16 şemaları referans alındı; bunlar **yeni karar olarak
+  önerilmedi**.
+- **Yeni modül tasarımları:** bildirim outbox (§7), belge yönetimi + yükleme güvenliği (§8),
+  izin takvimi boşluğu (§9), devam/vardiya M15 genişletmesi (§10), fazla mesai (§11), ücret
+  geçmişi (§12), bordro hazırlığı (§13), ülke kural motoru (§14), Türkiye hesaplamaları (§15),
+  raporlama/Excel (§16), dashboard (§17), çalışan/yönetici self service (§18–§19).
+- **HR görev matrisi (§20)** ve **fazlandırma P0–P9 (§22)**; faz sırası kod bağımlılıklarına göre
+  düzeltildi (fazla mesai `PAY` karşılığı P6+P7'ye bağlandı).
+- **OD analizi (§23):** OD6–OD18 için "hangi fazı bloklar / koddan önce kapanmalı mı / obsolete mi
+  / fiilen çözülmüş mü" tablosu. **OD32–OD57** önerileri listelendi (AÇILMADI).
+- **Doküman tutarsızlığı kaydı:** OD10 (MFA) kararı ARCHITECTURE §7'de verilmiş görünüyor ama
+  AUTHORIZATION.md'de hâlâ AÇIK; belge modülüne dair SECURITY.md §9'daki ✅ işaretleri tasarımı
+  gösteriyor, kod yok. İkisi de ilgili dosyalarda notlandı.
+- **Diğer dokümanlara kısa referanslar:** `PROJECT.md` (doküman dizini), `FEATURES.md` (§13
+  güncel sıra + ölçüm notu), `DATABASE.md` (B.3 plan notu), `AUTHORIZATION.md` (§14 OD notu),
+  `ARCHITECTURE.md` (faz tablosu → roadmap), `SECURITY.md` (§9 tasarım/kod ayrımı).
+
+### DOĞRULANAN
+
+- `git diff --stat` **yalnız `docs/`** dosyalarını içerir; `apps/`, `tests/`, `scripts/`,
+  `config/` altında değişiklik **yok** → kod/migration/DB değişmedi.
+- `python3 manage.py makemigrations --check --dry-run` → **model değişikliği yok** ("No changes
+  detected"), yani planlanan tablolar koda sızmadı.
+- Yeni uç eklenmedi: `git diff --name-only` içinde `urls.py`/`views.py`/`api.py` **yok**.
+- Veritabanı **değiştirilmedi**: migration çalıştırılmadı, veri yazılmadı (bu turda `migrate.sh`
+  kullanılmadı).
+
+### KALAN (doküman olarak da açık)
+
+- OD32–OD57 **öneri** durumundadır; hiçbiri karara bağlanmadı.
+- OD29–OD31 ve OD6–OD18 hâlâ açık; hangi fazı blokladıkları §23'te listelendi.
+- Employee lifecycle'ın `notice_period` / `suspended` / `archived` geçişleri için güvenli servis
+  **yok**; karar bekliyor (§3.3).
+
 ## [0.34.0] — 2026-09-12 — Test arayüzü: izin hakları, hakediş yenileme, zorunlu giriş hesabı, bakiye ekranı
 
 **Baseline (son commit `9851cb5`):** çalışma ağacı temiz, tam test suite **460 passed**,

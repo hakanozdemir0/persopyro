@@ -454,6 +454,13 @@ erişim yalnızca `persopyro_platform` rolüyle.
 
 ## B.3 Mevcut tablolara eklenecekler / değişecekler 🔜
 
+> **Plan dışı bırakma notu (2026-09-12):** aşağıdaki tablo **mevcut tabloların**
+> değişikliklerini listeler. **Yeni modüllerin tabloları** (fazla mesai, ücret geçmişi, bordro
+> hazırlığı, ülke kural motoru, bildirim/outbox, raporlama, istihdam koşulları/sözleşme/görev
+> listeleri) bu dokümanda **henüz tanımlanmamıştır**; tasarımları `docs/HR_ROADMAP.md`
+> §3–§16'da planlanmıştır ve **uygulandıkları turda bu dokümana işlenir**. Vardiya/devam
+> (M15) ve evrak (M16) tabloları ise **zaten bu dokümanda tasarlıdır** (bkz. ilgili bölümler).
+
 | Tablo | Değişiklik | Gerekçe |
 |---|---|---|
 | `users` | `public_id varchar(32) NOT NULL` + **global benzersiz** indeks + üretim fonksiyonu (Crockford Base32, 8 karakter, `gen_random_bytes`) | OD2 (kapalı): genel kimlik |

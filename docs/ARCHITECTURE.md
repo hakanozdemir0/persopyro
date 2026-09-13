@@ -650,6 +650,13 @@ oturmuştur. Proje Python 3.13.15 üzerine kurulmuştur; `pyproject.toml` içind
 Her fazın sonunda: `CHANGELOG.md` güncellenir, `DEVELOPMENT_RULES.md` kontrol
 listesi uygulanır.
 
+> **Ürün kapsamı ve faz planı (2026-09-12):** yukarıdaki tablo altyapı/teslim fazlarını
+> gösterir. **Modül bazlı ürün fazlandırması (P0–P9)**, modül sınırları (modular monolith:
+> yeni modüller `apps/<modül>` olarak eklenir, ayrı servis açılmaz), hangi tabloların hangi
+> fazda geleceği ve kabul kriterleri **`docs/HR_ROADMAP.md` §21–§22** içindedir. Bu dokümandaki
+> §9 (dosya saklama), §10 (background jobs → django-q2) ve §11 (e-posta) kararları roadmap'te
+> **uygulama işi** olarak planlanır; yeniden karar verilmez.
+
 ## 23. Özet: neden bu yığın
 
 - **Az sayıda, olgun bileşen**: Django + PostgreSQL + django-q2 + S3 uyumlu
