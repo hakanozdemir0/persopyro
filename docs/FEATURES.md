@@ -365,3 +365,11 @@ Her modül bitmeden sonraki modüle geçilmez; sıra değişikliği gerekçesiyl
 > **Ölçüm notu (2026-09-12):** §5 (vardiya/devam), §6 (evrak), §9 (bordro) başlıkları
 > **tasarlanmış ama kodlanmamıştır** (izin kodları ve DB tasarımı var, uygulama yok);
 > §7 (işe alım) ve §8 (performans) **hiç başlanmamıştır** ve V1 kapsamı dışındadır.
+>
+> **P1 durumu (2026-09-13):** People lifecycle + yapılandırılabilir onboarding formu için
+> tüm blocker kararlar **KAPALI** → **`implementation-ready`**. Kapsam: çalışan oluşturma/güncelleme,
+> departman-pozisyon-yönetici değişikliği **geçmişli**, istihdam tipi/çalışma modeli/işyeri/sözleşme/
+> deneme süresi, durum makinesi (askıya alma/çıkış/arşiv), form alan politikası (A/B/C kilit seviyesi),
+> çalışan↔kullanıcı ilişkisi (hesap zorunlu, atomik). **P1 kapsamı dışı:** ücret (P6), belge (P3),
+> bildirim gönderimi (P2), offboarding checklist ve self-service (P9), custom alan (P9).
+> Ayrıntı: `docs/HR_ROADMAP.md` §28; kararlar: `docs/AUTHORIZATION.md` §16.

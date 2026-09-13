@@ -533,6 +533,32 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 - **RLS:** ✅ + FORCE · **AUDIT:** yüksek (`employee.primary_manager_set`, `employee.manager.close`)
 - **İndeksler:** `(tenant_id, manager_employee_id)` ("ekibim"), `(tenant_id, employee_id)`
 
+### `hr.workplaces` / `hr.employee_employment_terms` / `hr.employee_assignments` / `hr.form_field_definitions` 🔜 **P1 — karar KAPALI (2026-09-13)**
+
+> **Durum:** tasarım **kesinleşti** (kararlar: `docs/AUTHORIZATION.md` §16 / OD58–OD61 ve OD35–OD43;
+> kesin veri modeli: `docs/HR_ROADMAP.md` §28.1). **Kod ve migration yazılmadı.**
+> P1.0 = people lifecycle + form konfigürasyonu; P1.1 = onboarding görev/checklist tabloları (§5).
+
+| Tablo | Kolonlar (özet) | Kısıt | RLS |
+|---|---|---|---|
+| `hr.workplaces` | `id`, `tenant_id`, `code`, `name`, `type` (`office\|branch\|remote\|client_site`), `country_code` (ISO alpha-2, NOT NULL), `city`, `address`, `timezone` (IANA, NOT NULL), `is_active`, audit kolonları | `UNIQUE(tenant_id, code) WHERE deleted_at IS NULL` | ✅ ENABLE+FORCE + `ensure_same_tenant_ref` |
+| `hr.employee_employment_terms` | `id`, `tenant_id`, `employee_id`, `effective_from`, `effective_to`, `employment_type`, `working_model`, `workplace_id`, `contract_type`, `contract_start_date`, `contract_end_date`, `probation_end_date`, `reason`, `created_by`, audit | **tek açık satır:** `UNIQUE(employee_id) WHERE effective_to IS NULL AND deleted_at IS NULL`; tarih CHECK'leri | ✅ |
+| `hr.employee_assignments` | `id`, `tenant_id`, `employee_id`, `department_id`, `position_id` (null), `effective_from`, `effective_to`, `reason`, `created_by`, audit | **tek açık satır** (aynı desen) | ✅ |
+| `hr.form_field_definitions` | `id`, `tenant_id`, `form_code` (`employee_onboarding`), `field_code` (**kod allowlist**), `section_code`, `section_label`, `sort_order`, `is_visible`, `is_required`, `label_override`, `helper_text`, `lock_level` (sunucu hesaplar), `applicability` (JSONB), `created_by`, audit | `UNIQUE(tenant_id, form_code, field_code)`; bilinmeyen `field_code` → 400; A seviyesi gizleme/opsiyonel → 400; K3 `is_required=true` → 400 | ✅ |
+
+**Mevcut tablolarda P1 değişiklikleri:**
+
+| Tablo | Değişiklik | Gerekçe |
+|---|---|---|
+| `hr.employees` | `+ notice_end_date date NULL` (CHECK: `>= termination_date`) | OD41: ihbar dönemi **türetilmiş** etiket |
+| `hr.employees` | `+ termination_reason_code varchar(40) NULL` (kapalı küme: `resignation\|employer_termination\|mutual_agreement\|contract_end\|retirement\|death\|other`), `+ termination_note text NULL` | İşten ayrılış nedeni (item 2); `status='terminated'` ise zorunlu |
+| `hr.employees` | **kısmi benzersizlik:** `UNIQUE(user_id) WHERE deleted_at IS NULL AND status <> 'archived'` | OD59: 1 kullanıcı ↔ en fazla 1 aktif çalışan kaydı |
+| `hr.users` | `+ auth_version integer NOT NULL DEFAULT 0` | OD59: askıya alma/çıkışta mevcut oturumları düşürme |
+
+**Kural:** `employees.department_id` / `position_id` **korunur** ("güncel değer" okuması) ve
+`hr.employee_assignments` ile **aynı servis yolundan** yazılır (çift kaynak ayrışması test edilir).
+`employees` tablosuna ücret (P6), belge (P3) veya ülkeye özgü kolon **eklenmez**.
+
 ### `hr.documents` + `hr.document_access`
 - **`documents`:** `id, tenant_id, owner_employee_id, category, title, storage_key, checksum_sha256, mime_type, size_bytes, classification (public/internal/confidential/restricted), contains_personal_data (yes/no/unsure), personal_data_categories text[], retention_until, version, uploaded_by_id, created_at, deleted_at`
 - **`document_access`:** `id, tenant_id, document_id, grantee_kind (user/role/platform_user), grantee_id, access (read/download), expires_at, granted_by_id, reason`

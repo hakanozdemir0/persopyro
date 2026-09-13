@@ -198,14 +198,34 @@ mesajı için).
 | Durum | Anlamı | Silme davranışı |
 |---|---|---|
 | Aktif (`active`) | Çalışıyor | — |
-| Askıda (`suspended`) | İzinli/ayrılış sürecinde, kısıtlı erişim | — |
-| Ayrıldı (`terminated`) | İlişki bitti (`termination_date` dolu) | Kayıt **arşivde**, kişisel veri saklama politikasına tabi |
-| Arşiv (`archived`) | Uzun süreli saklama, raporlama için okunabilir | — |
+| Askıda (`suspended`) | İdari bekleme; **giriş engelli**, kayıt ve geçmiş korunur | — |
+| Ayrıldı (`terminated`) | İlişki bitti (`termination_date` + `termination_reason_code` dolu) | Kayıt **arşivde**, kişisel veri saklama politikasına tabi |
+| Arşiv (`archived`) | Uzun süreli saklama, raporlama için okunabilir; **listelerde görünmez** | — |
+
+**Durum makinesi — ✅ KESİNLEŞTİ (OD41, 2026-09-13; ayrıntı: `docs/HR_ROADMAP.md` §28.2):**
+
+| Geçiş | İzin | Zorunlu | Yan etki |
+|---|---|---|---|
+| `active → suspended` | `employee.suspend` | gerekçe | `users.status='inactive'`, token iptali, `auth_version++` |
+| `suspended → active` | `employee.restore` | gerekçe | erişim yeniden açılır (yeni giriş gerekir) |
+| `active/suspended → terminated` | `employee.terminate` | `termination_date` + `termination_reason_code` + gerekçe | erişim kesilir (yukarıdaki üç adım) |
+| `terminated → archived` | `employee.delete` (**arşivleme**) | gerekçe | listelerde görünmez |
+| `terminated → active` | `employee.restore` | gerekçe (**hata düzeltme**) | geçmiş korunur |
+| `archived → active` | — | — | **YASAK** (yalnız P9 KVKK/denetimli akış) |
+| `terminated → suspended` | — | — | **YASAK** |
+
+- **İhbar dönemi (`notice_period`) ayrı bir durum DEĞİLDİR** (OD41): `status ∈ {active, suspended}`
+  ∧ `termination_date > bugün` ise UI'da **"ihbar döneminde"** olarak **türetilir**; yeni kolon
+  `notice_end_date` yalnız ihbarın **bitiş** tarihini tutar.
+- İzinsiz geçiş **409** (fail-closed) + deneme audit'e yazılır; aynı duruma yazma **no-op** (200).
+- `suspended` çalışan **izin talebi açamaz** (OD42); askıdan önce açılmış talepler iptal edilmez.
 
 Kurallar (OD21): çalışan kaydı **fiziksel silinmez**; `deleted_at` + `status`
 kullanılır. Soft-delete edilmiş kaydın yeniden açılması açık bir `*.restore` izni ve
 denetim kaydı gerektirir (**sessiz yeniden etkinleştirme yasak**). Benzersizlikler
-kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`.
+kısmidir: `(tenant_id, employee_no) WHERE deleted_at IS NULL`; ayrıca **bir kullanıcıya
+en fazla bir aktif çalışan kaydı** (`UNIQUE(user_id) WHERE deleted_at IS NULL AND
+status <> 'archived'` — OD59).
 
 **Numara üretimi (M12/0013):** `employee_no` **sunucuda** üretilir (`EMP-000001`
 biçimi, `hr.employee_no_seq` sequence). Arayüz kullanıcıdan numara istemez ve
@@ -220,6 +240,21 @@ işe alımda bir kez üretilir ve saklanır). Sicil numarası **kimlik değildir
 `employee_personal_data` içinde, K3 alanları şifreli: `health_notes`,
 `disability_status`, `biometric_ref` ve **kan grubu** — `blood_type`, migration
 0012; sağlık verisi sayıldığı için şifreli, kapalı küme A+/A-/B+/B-/AB+/AB-/0+/0-).
+
+### 7.1 İstihdam koşulları, işyeri ve geçmiş — 🔜 **P1 (karar KAPALI 2026-09-13)**
+
+| Kavram | Nerede | Not |
+|---|---|---|
+| **İşyeri / lokasyon** | `hr.workplaces` (YENİ) — `code`, `name`, `type` (`office\|branch\|remote\|client_site`), **`country_code`**, `timezone`, adres | **Departman ile karıştırılmaz:** departman = organizasyon ekseni ("kim nereye bağlı"), işyeri = fiziksel/mali eksen (ülke, saat dilimi, resmî tatil, bordro) |
+| **İstihdam koşulları** | `hr.employee_employment_terms` (YENİ, **etkili tarihli**, tek açık satır): `employment_type`, `working_model`, `workplace_id`, `contract_type`, `contract_start_date`, `contract_end_date`, `probation_end_date` | Sözleşme yenileme ve model değişikliği **üzerine yazılmaz**; yeni satır açılır (OD60) |
+| **Departman / pozisyon geçmişi** | `hr.employee_assignments` (YENİ, etkili tarihli, tek açık satır) | `move_employee` eski satırı kapatır, yenisini açar; `employees.department_id/position_id` "güncel değer" olarak **korunur** ve aynı servis yolundan yazılır |
+| **Yönetici geçmişi** | mevcut `hr.employee_manager` (etkili tarihli) | **Yeni sistem kurulmaz**; değişimde eski ilişki kapanır, yenisi açılır |
+| **Maaş geçmişi** | P6 `hr.employee_compensation` | P1'de ücret alanı **yok** |
+| **Ülkeye özgü alanlar** | kural setleri (P7) + koşullu form görünürlüğü + belge türleri (P3) | `employees` tablosuna ülke bazlı kolon **eklenmez** |
+
+Kesin şema, durum makinesi, form politikası ve izin seti: `docs/HR_ROADMAP.md` **§28**;
+karar kayıtları: `docs/AUTHORIZATION.md` **§16**.
+
 
 ## 8. Vardiya, devam ve evrak (hedef şema)
 

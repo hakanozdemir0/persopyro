@@ -948,16 +948,19 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-11):** **OD1–OD5, OD19–OD28 KAPATILDI** (15 karar); **OD29–OD31 AÇIK**.
+**Durum (2026-09-13):** **OD1–OD7, OD9, OD16, OD19–OD31, OD35–OD38, OD41–OD43, OD58–OD61 KAPATILDI**; **OD8, OD10, OD12–OD15, OD17, OD18 AÇIK** (P1 LATER); **OD11 OBSOLETE**.
 Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
 
-> **Önerilen yeni kararlar (bu dosyada AÇILMAMIŞTIR):** ürün yol haritası için
-> `docs/HR_ROADMAP.md` **§26**'da **OD32–OD57** numaralı **öneri** listesi vardır
-> (fazla mesai karşılığı, dinamik form, belge limitleri, ihbar dönemi, raporlama,
-> ülke kural motoru vb.). Bunlar **karar değildir**; ilgili faz başlarken bu dosyaya
-> taşınarak kapatılmalıdır.
+> **Önerilen yeni kararlar:** ürün yol haritası `docs/HR_ROADMAP.md` **§26**'da
+> **OD32–OD57** numaralı öneri listesi vardır. **2026-09-13 P1 turunda** bunlardan
+> **OD35, OD36, OD37, OD38, OD41, OD42, OD43 kapatılmış** ve bu dosyanın **§15**'ine
+> işlenmiştir; ayrıca **OD58–OD61** bu turda açılıp kapatılmıştır.
+> **Hâlâ öneri olanlar:** OD32–OD34, OD39–OD40, OD44–OD57 (ilgili faz başlarken kapatılır).
+> **Durum (2026-09-13):** OD6, OD7, OD9, OD16, OD29, OD30, OD31, OD35–OD38, OD41–OD43,
+> OD58–OD61 **KAPALI**; OD8, OD10, OD12, OD13, OD14, OD15, OD17, OD18 **AÇIK (LATER —
+> P1'i bloklamaz)**; OD11 **OBSOLETE** (fiilen çözülmüş). Ayrıntılı sınıflandırma: §16.1.
 >
 > **Doküman tutarsızlığı (kayıt için):** **OD10 (MFA)** hâlâ AÇIK görünmektedir ancak
 > `docs/ARCHITECTURE.md` §7 kararı **vermiş görünüyor** (TOTP, `tenant_admin` +
@@ -1246,7 +1249,31 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
 - **Etki:** kapsam çözümlemesi, vardiya/izin onayı testleri, matris satırları
   (§6.2/A ve §6.4 satırlarındaki `UNIT` kapsamı artık tanımlıdır).
 
-### OD6 — Silme mi, arşivleme mi
+### OD6 — Silme mi, arşivleme mi — **KAPALI** ✅ (2026-09-13, P1 blocker)
+
+- **Soru:** Hangi kayıtlar gerçekten silinir? (çalışan, evrak, departman, izin
+  kaydı). Hukuki saklama süreleri nelerdir?
+- **Öneri:** Varsayılan mantıksal silme + arşiv; gerçek silme yalnızca KVKK
+  talebi veya saklama süresi sonunda, kayıtlı bir iş akışıyla.
+- **Etki:** Evrak silme yetkileri (§9.2), `employee.delete`, denetim kayıtları.
+- **KARAR (2026-09-13):**
+  1. Varsayılan **mantıksal silme** (`deleted_at`) + **`archived` durumu**; **P1'de hiçbir uç
+     fiziksel silme yapmaz**.
+  2. **`employee.delete` izni = ARŞİVLEME** yetkisi (fiziksel silme değil). İsim korunur
+     (katalog uyumu), anlam bu kararla sabitlenir.
+  3. Fiziksel silme yalnızca **KVKK başvurusu + platform onayı** ile yapılır (P9); P1'de
+     silme ucu **yoktur**.
+  4. **Saklama:** çalışan iş kaydı + `audit_logs` → ilişki bitiminden itibaren **10 yıl**
+     (OD13 önerisiyle uyumlu); süre sonunda kişisel veri **maskelenir** (OD57), denetim/bordro
+     kayıtları korunur.
+- **Gerekçe:** geri alınamaz silme, denetim izini ve yasal saklama yükümlülüğünü bozar; kiracı
+  veri sorumlusu olsa da silmenin gerçekten yapılması platform doğrulaması gerektirir (OD7).
+- **DB etkisi:** yeni kolon/tablo **yok** (mevcut `deleted_at`, `status` kullanılır).
+- **Authorization etkisi:** `employee.delete` semantiği "arşivle" olarak sabitlendi.
+- **Migration etkisi:** yok.
+- **UI etkisi:** çalışan ekranında **"Arşivle"** ( "Sil" butonu yok).
+- **Sonraki fazlara etkisi:** P3 (belge saklama/retention), P9 (KVKK akışı, arşiv otomasyonu).
+
 
 - **Soru:** Hangi kayıtlar gerçekten silinir? (çalışan, evrak, departman, izin
   kaydı). Hukuki saklama süreleri nelerdir?
@@ -1254,7 +1281,22 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
   talebi veya saklama süresi sonunda, kayıtlı bir iş akışıyla.
 - **Etki:** Evrak silme yetkileri (§9.2), `employee.delete`, denetim kayıtları.
 
-### OD7 — Şirket yöneticisinin kendi çalışan verisini silme yetkisi
+### OD7 — Şirket yöneticisinin kendi çalışan verisini silme yetkisi — **KAPALI** ✅ (2026-09-13, P1 blocker)
+
+- **Çelişki:** Kiracı veri sorumlusudur ama silme işlemi geri alınamaz.
+- **Öneri:** Şirket yöneticisi silme **talebi** açar; gerçek silme platform
+  tarafından doğrulanır ve kayda geçer. Ara çözüm: yönetici arşivler, silme
+  onay gerektirir.
+- **KARAR (2026-09-13):** Kiracı yöneticisi **arşivler** (`employee.delete`); **fiziksel silme
+  talebi** açar ve uygulama **platform tarafında iki onayla** (OD4) yapılır → **P9**.
+  P1'de kiracı tarafında silme ucu **yoktur**; yetki arşivleme ile sınırlıdır.
+- **Gerekçe:** geri alınamaz işlemi veri sorumlusunun tek başına yapması denetim ve KVKK
+  hesap verebilirliği ile çelişir.
+- **DB / migration etkisi:** yok (talep akışı P9'da kendi tablosuyla gelir).
+- **Authorization etkisi:** kiracı tarafında silme izni yok; yalnız arşivleme.
+- **UI etkisi:** "Arşivle" + (P9) "Silme talebi".
+- **Sonraki fazlara etkisi:** P9 KVKK/offboarding akışı; platform talep kataloğu (OD8).
+
 
 - **Çelişki:** Kiracı veri sorumlusudur ama silme işlemi geri alınamaz.
 - **Öneri:** Şirket yöneticisi silme **talebi** açar; gerçek silme platform
@@ -1271,7 +1313,31 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
   bağlanır.
 - **Etki:** Platform modülü izin listesi, arayüz, denetim.
 
-### OD9 — ŞİRKET YETKİLİSİ'nin yetki sınırı
+### OD9 — ŞİRKET YETKİLİSİ'nin yetki sınırı — **KAPALI** ✅ (2026-09-13, P1 blocker)
+
+- **Soru:** Yöneticinin verdiği yetkiler hangi izin kodlarından oluşabilir?
+  Gizli evrak, kullanıcı oluşturma, izin onayı verebilir mi?
+- **Öneri:** Kiracı yöneticisi tarafından atanabilen izinleri **iki gruba** ayır.
+- **KARAR (2026-09-13) — iki grup kesinleşti:**
+  1. **Devredilemez** (hiçbir **özel** role verilemez; yalnız sistem rol şablonlarında bulunur):
+     `role.manage`, `tenant.manage`, `user.manage`, `employee.delete`, `employee.suspend`,
+     `employee.terminate`, `employee.restore`, `employee.sensitive.read`,
+     `employee.sensitive.write`, `employee.form.manage`, `leave.balance.manage`, `audit.read`.
+  2. **Devredilebilir** (özel role verilebilir): `employee.read`, `employee.create`,
+     `employee.update`, `employee.history.read`, `org.*`, `leave.*` (onay/atlatma dahil),
+     `document.*`, `shift.*`, `attendance.*`.
+  - **Servis kuralı:** devredilemez kod özel role eklenmeye çalışılırsa **400** (fail-closed,
+    mevcut self-elevation guard'ının genişletilmesi). Sistem rol şablonları bu listeden muaf.
+- **Gerekçe:** kiracı içinde yetki büyümesini engeller; yüksek etkili işlemler (arşivleme,
+  işten çıkış, PII, form konfigürasyonu, bakiye) sistem rollerinde kalır.
+- **DB etkisi:** yok (kural **servis katmanında**; katalog rollerinde `is_system` bayrağı zaten var).
+- **Authorization etkisi:** §6.2 matrisine "devredilemez" kolonu/notu eklenir; rol düzenleme
+  ekranı devredilemez kodları seçilemez gösterir.
+- **Migration etkisi:** yok.
+- **UI etkisi:** rol izin düzenleme ekranında devredilemez kodlar kilitli + gerekçe metni.
+- **Sonraki fazlara etkisi:** P6 `compensation.*` (OD45) ve P7 kural yönetimi kodları da bu
+  listeye göre sınıflandırılır.
+
 
 - **Soru:** Yöneticinin verdiği yetkiler hangi izin kodlarından oluşabilir?
   Gizli evrak, kullanıcı oluşturma, izin onayı verebilir mi?
@@ -1324,7 +1390,32 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
   KVKK hesap verebilirliği.
 - **Etki:** Platform erişim kaydının kiracı denetim ekranında görünmesi.
 
-### OD16 — Özel rol sınırı ve katalog evrimi
+### OD16 — Özel rol sınırı ve katalog evrimi — **KAPALI** ✅ (2026-09-13, P1 blocker)
+
+- **Soru:** Kiracı başına özel rol sayısı sınırlanmalı mı? Katalogdan bir izin
+  kaldırıldığında mevcut roller ne olur?
+- **Öneri:** Kiracı başına 40 özel rol sınırı; izin kaldırılırsa rollerden düşer ama
+  **kayıt silinmez** (denetim izi), rol "güncellenmeli" uyarısı alır.
+- **KARAR (2026-09-13):**
+  1. **Sınır 40** özel rol/kiracı (servis katmanında sayılır; DB'de zorlanmaz; aşımda 400).
+  2. **Yeni izin kodu eklendiğinde:** **sistem rol şablonları data migration ile güncellenir**;
+     **özel roller otomatik güncellenmez** (kullanıcı yetkisi kendiliğinden büyümez).
+  3. **"Güncellenmeli" uyarısı türetilir** (özel rolün izin kümesi ile katalog arasındaki fark
+     sorgudan hesaplanır) → **kolon eklenmez**.
+  4. **İzin kaldırılırsa:** `role_permissions` bağları **silinir**, rol kaydı **kalır** (denetim
+     izi), değişiklik `audit_logs`'a yazılır.
+  5. **`platform.*` kodları** kiracı rollerine hiçbir yolla verilemez (mevcut kural korunur).
+- **Gerekçe:** P1 kataloğa 8 yeni kod ekliyor; katalog evrimi kuralı olmadan roller ve
+  `verify_fresh_install.sh` beklentileri belirsiz kalır. **Bu, P1'in en kritik blocker'ıydı.**
+- **DB etkisi:** katalog seed migration (+8 kiracı kodu) ve sistem rol şablonlarının
+  güncellenmesi; şema değişikliği yok.
+- **Authorization etkisi:** §6.2 matrisi ve rol izin sayıları birlikte güncellenir
+  (`tenant_admin` 33→41, `hr_manager` 22→30, `dept_manager` 16→17, `tenant_officer` 21→23).
+- **Migration etkisi:** 1 veri migration'ı (izinler + rol bağları); şema migration'ı yok.
+- **UI etkisi:** rol düzenleme ekranında "katalog değişti" uyarısı.
+- **Sonraki fazlara etkisi:** her yeni faz aynı prosedürü izler (katalog → data migration →
+  matris → verify script).
+
 
 - **Soru:** Kiracı başına özel rol sayısı sınırlanmalı mı? Katalogdan bir izin
   kaldırıldığında mevcut roller ne olur?
@@ -2014,7 +2105,7 @@ karar gereği v1'de yok.
   kaldırmıyor) ve F9 (denetim satırı `SET_NULL`) KAPATILDI (2026-09-11).**
 
 
-### OD29 — `leave.balance.manage` iznini hangi rol taşıyacak? — **AÇIK** ⏳ (2026-09-11)
+### OD29 — `leave.balance.manage` iznini hangi rol taşıyacak? — **KAPALI** ✅ (2026-09-13, P1 blocker)
 
 **Bağlam (bulgu — test arayüzü turu):** M14 ile katalogda `leave.balance.manage`
 ("İzin bakiyesi düzeltme") kodu tanımlandı ve `adjust_leave_balance` servisi bu izni
@@ -2028,14 +2119,28 @@ değiştirmedi; demo/bootstrap betiği sahte verisinde elle test için bakiye ta
 üretilebiliyor; hakedişin elle düzeltilmesi gerektiğinde kullanılabilir bir yol yok.
 **Güvenlik açığı değildir** — davranış fail-closed'dur (izin yoksa işlem reddedilir).
 
-**Seçenekler:**
+**KARAR (2026-09-13): seçenek (A).** `leave.balance.manage` izni **`tenant_admin` +
+`hr_manager`** rollerine verilir (kapsam `TENANT`; `adjust_leave_balance` zaten gerekçe +
+denetim kaydı zorunlu kılıyor).
+
+- **Gerekçe:** bakiye düzeltmesi P1 kapsamındaki İK operasyonudur; P1 yeni çalışan kaydı ve
+  hakediş akışını kurarken düzeltme yolunun da çalışıyor olması gerekir (aksi hâlde izin
+  hiçbir kullanıcıda bulunmaz ve servis fiilen kullanılamaz).
+- **DB etkisi:** yalnız seed verisi (2 rol-izin bağı) — şema değişikliği yok.
+- **Authorization etkisi:** `tenant_admin` 33→(P1 sonrası 41), `hr_manager` 22→(30) içinde
+  bu kod yer alır; §6.2 matrisi güncellenir.
+- **Migration etkisi:** P1 katalog data migration'ına **dahil edilir** (ayrı migration yok).
+- **UI etkisi:** İzin Bakiyeleri ekranındaki "Bakiye düzelt" düğmesi bu iki rolde görünür.
+- **Sonraki fazlara etkisi:** P6 bordro hazırlığı aynı izni kullanmaz (ayrı `compensation.*`).
+
+**Seçenekler (kayıt için):**
   * **(A)** `tenant_admin` + `hr_manager` rolleri bu izni alsın (kapsam `TENANT`;
-    denetim kaydı zaten yazılıyor).
+    denetim kaydı zaten yazılıyor). ← **SEÇİLDİ**
   * **(B)** Yalnızca `tenant_admin` alsın.
   * **(C)** Yeni bir "İK operasyon / bordro" rolü tanımlanıp izin ona verilsin.
   * **(D)** v1'de yalnızca hakediş komutu kalsın (izin katalogda rezerve kalır).
 
-### OD30 — Kişisel veri **yazma** için ayrı izin kodu gerekli mi? — **AÇIK** ⏳ (2026-09-11)
+### OD30 — Kişisel veri **yazma** için ayrı izin kodu gerekli mi? — **KAPALI** ✅ (2026-09-13, P1 blocker)
 
 **Bağlam:** Katalogda kişisel veri için yalnızca `employee.sensitive.read` var; **yazma**
 (yeni kayıt/güncelleme) için ayrı kod yok. Test arayüzü kişisel veriyi hem **okumak** hem
@@ -2046,9 +2151,25 @@ değiştirmedi; demo/bootstrap betiği sahte verisinde elle test için bakiye ta
 bu tur kapsamında katalog **bilinçli olarak sabit tutuldu**. Güvenlik açığı değildir:
 izinsiz kullanıcı hem okuma hem yazmada `403` alır (fail-closed).
 
-**Seçenekler:**
+**KARAR (2026-09-13): seçenek (B).** `employee.sensitive.write` kodu **eklenir**; kapsam
+`TENANT`; roller **`tenant_admin` + `hr_manager`**; servis **"yazma ⇒ okuma"** kuralını
+uygular (write izni olup read izni olmayan kullanıcı yazamaz → 403).
+
+- **Gerekçe:** P1 kayıt formu kişisel veriyi (K2/K3) **yazıyor**; tek kodu okuma+yazma için
+  kullanmak en az yetki ilkesini bozar ve "görme" ile "değiştirme" yetkilerini ayırt edemez.
+- **DB etkisi:** `hr.permissions` +1 satır (kiracı kodu 33→34, P1 sonrası 41), 2 rol-izin bağı.
+- **Authorization etkisi:** §6.2 matrisi ve `docs/AUTHORIZATION.md` §7 kişisel veri erişim
+  modeli birlikte güncellenir; K3 yazımı **iki kapıdan** geçer (`write` ∧ `read` ∧ kapsam).
+- **Migration etkisi:** P1 katalog data migration'ına dahil; şema değişikliği yok.
+- **UI etkisi:** kişisel veri formu yalnız write+read sahibine açılır.
+- **Sonraki fazlara etkisi:** P3 belge yükleme izinleri (`document.upload` + sınıflandırma)
+  aynı deseni izler.
+
+**Seçenekler (kayıt için):**
   * **(A)** Mevcut tek kod (`employee.sensitive.read`) okuma + yazma için yeterli olsun
     (bugünkü davranış; dokümante edilmiş kabul).
+  * **(B)** `employee.sensitive.write` kodu eklenip kapsam `TENANT` ile `hr_manager` +
+    `tenant_admin` rollerine verilsin. ← **SEÇİLDİ**
   * **(B)** `employee.sensitive.write` kodu eklenip kapsam `TENANT` ile `hr_manager` +
     `tenant_admin` rollerine verilsin (okuma izni olmadan yazma mümkün olmasın diye
     servis "yazma ⇒ okuma" kuralını uygular).
@@ -2061,7 +2182,7 @@ izinsiz kullanıcı hem okuma hem yazmada `403` alır (fail-closed).
 `docs/AUTHORIZATION.md` §6.2 matrisi ve `scripts/verify_fresh_install.sh` beklentileri
 **birlikte** güncellenmelidir — bu yüzden bu turda kod değiştirilmedi.
 
-### OD31 — Kan grubu hangi veri sınıfına girer ve arayüzden toplanmalı mı? — **AÇIK** ⏳ (2026-09-12)
+### OD31 — Kan grubu hangi veri sınıfına girer ve arayüzden toplanmalı mı? — **KAPALI** ✅ (2026-09-13, P1 blocker)
 
 **Bağlam:** Kullanıcı bildirimi: *"çalışanların kayıt esnasında bütün bilgilerini iste,
 kan grubu dahil"*. Kan grubu `hr.employee_personal_data` tablosuna eklendi (migration
@@ -2079,9 +2200,24 @@ kan grubu dahil"*. Kan grubu `hr.employee_personal_data` tablosuna eklendi (migr
 **Güvenlik açığı değildir:** her iki uçta da ölçüm fail-closed'dur (izinsiz okuma/yazma
 `403`, geçersiz değer `400`) ve değer veritabanında düz metin durmaz.
 
-**Seçenekler:**
+**KARAR (2026-09-13): (A) + (D) birlikte.** Kan grubu **K3 (özel nitelikli — sağlık)** olarak
+**şifreli** kalır ve **kayıt formunda toplanır**; ancak **zorunlu yapılamaz** ve görünürlüğü
+tenant tarafından **kısıtlanabilir**. Okuma/yazma OD30 sonrası `employee.sensitive.read` ∧
+`employee.sensitive.write` ∧ organizasyon kapsamı kapısından geçer. Ayrı K3 izni + süreli
+erişim akışı **P3 (belge modülü)** turunda değerlendirilir.
+
+- **Gerekçe:** kullanıcı talebi formda toplanması yönünde; KVKK aşırı veri toplama riski
+  zorunlu yapılmamasıyla sınırlanır; şifreleme + iki kapılı izin korunur.
+- **DB etkisi:** yok (kolon `EncryptedCharField` olarak zaten mevcut — migration 0012).
+- **Authorization etkisi:** OD30 kararı ile birlikte yazma kapısı eklenir.
+- **Migration etkisi:** yok.
+- **UI etkisi:** form alanı **opsiyonel**; `zorunlu` anahtarı sunucuda reddedilir (OD37).
+- **Sonraki fazlara etkisi:** P3 belge türleri (sağlık raporu) ile çakışmayacak şekilde
+  sınıflandırma aynı kalır.
+
+**Seçenekler (kayıt için):**
   * **(A)** (uygulanan) Kan grubu **K3/şifreli** kalır ve arayüzde K2 kapısıyla toplanır;
-    ayrı K3 izni + süreli erişim M-evrak/OD30 turunda eklenir.
+    ayrı K3 izni + süreli erişim M-evrak/OD30 turunda eklenir. ← **SEÇİLDİ (D ile birlikte)**
   * **(B)** Kan grubu **K2** sayılır (şifreleme kaldırılır, maskeleme yeterli) —
     kolon tipi `varchar` olur, yeni migration gerekir.
   * **(C)** Kan grubu **K3/şifreli** kalır ama arayüzden **hiç toplanmaz**; yalnız
@@ -2094,3 +2230,271 @@ kan grubu dahil"*. Kan grubu `hr.employee_personal_data` tablosuna eklendi (migr
 `apps/testui/api.py` (`K3_ALANLARI`, `_pii_yaz` doğrulaması), `docs/DATABASE.md`
 kolon listesi ve `scripts/verify_fresh_install.sh` adım **6c-8** beklentileri
 **birlikte** güncellenir.
+
+---
+
+## 16. P1 kararları — People Lifecycle + Configurable Onboarding (2026-09-13)
+
+**Kaynak:** `docs/HR_ROADMAP.md` §28 (P1 uygulama paketi), §3–§5 tasarımları ve **koddan yapılan
+ölçüm** (employee/employee_manager modelleri, `organization/services.py`, izin kataloğu).
+
+Bu bölümde **yalnız P1'i bloke eden** kararlar kapatılmıştır. OD6–OD18 sınıflandırması §16.1'de,
+kapatılan yol haritası önerileri §16.3'te, bu turda **açılıp kapatılan** yeni kararlar §16.4'tedir.
+Kapatılmayan öneriler (§16.5) **öneri** olarak kalır ve ilgili faz başlarken ele alınır.
+
+### 16.1 OD6–OD18 — P1 blocker sınıflandırması
+
+| OD | Konu | Sınıf | Gerekçe (koddan) |
+|---|---|---|---|
+| **OD6** | Silme mi, arşivleme mi | **BLOCKER → KAPALI** | P1 `archived` durumunu ve arşivleme ucunu tanımlar; `employee.delete` semantiği burada sabitlenir |
+| **OD7** | Yöneticinin çalışanı silme yetkisi | **BLOCKER → KAPALI** | Aynı uç: kiracı arşivler, fiziksel silme P9 |
+| **OD9** | Şirket yetkilisinin yetki sınırı | **BLOCKER → KAPALI** | P1 8 yeni izin kodu ekliyor; hangi kodlar özel role devredilebilir sorusu cevaplanmadan rol şablonları yazılamaz |
+| **OD16** | Özel rol sınırı + katalog evrimi | **BLOCKER → KAPALI** | Katalog evrimi prosedürü olmadan sistem rollerinin güncellenmesi ve `verify_fresh_install.sh` beklentileri belirsiz kalır (en kritik blocker) |
+| OD8 | ADMIN yönetim talebi kapsamı | LATER | Platform modülü (M17–M19) yok; P1 kiracı tarafında çalışır |
+| OD10 | MFA zorunluluğu | LATER | P1 işlevini bloklamaz; **ayrı güvenlik turu**. ⚠️ `ARCHITECTURE.md` §7 kararı vermiş görünüyor ama kayıt AÇIK — tutarsızlık sürüyor |
+| OD12 | Kişiye özel izin istisnası | LATER | P1 override kullanmıyor; mekanizma zaten var |
+| OD13 | Denetim görünürlüğü/saklama/zincirleme | LATER | P1 audit **yazar** (mevcut `log_action`); saklama süresi OD6 kararında 10 yıl olarak sabitlendi; zincirleme P8/P9 |
+| OD14 | Genel kimlik ile arama | LATER | P1 araması `employee_no` + ad üzerinden; PII ile arama eklenmiyor (karara aykırı değil) |
+| OD15 | Kiracı platform erişimini görsün mü | LATER | Platform erişim kaydı P9 |
+| OD17 | Platform çift onayı / break-glass | LATER | Platform modülü P9; P1'i bloklamaz |
+| OD18 | Platform PII erişiminde kiracının rolü | LATER | Platform modülü P9 |
+| OD11 | Kişi hem platform hem kiracı rolü taşıyabilir mi | **OBSOLETE** | Fiilen çözülmüş: platform kullanıcıları ayrı `platform` şemasında ve **Django modeli yok** (OD3 kapalı); kiracı rolleri `hr.user_roles` üzerinden yürür — iki rol uzayı yapısal olarak ayrık |
+
+**Sonuç:** P1'i bloke eden **4** karar (OD6, OD7, OD9, OD16) kapatıldı; ayrıca P1 kapsamına
+doğrudan giren **OD29–OD31** (izin/ PII yazma sınıfı) kapatıldı.
+
+### 16.2 P1 için kapatılan doğrudan ilgili OD'ler (OD29–OD31)
+
+OD29, OD30 ve OD31 yukarıdaki bölümlerinde **KAPALI** olarak işaretlenmiştir (özet):
+`leave.balance.manage` → `tenant_admin` + `hr_manager`; `employee.sensitive.write` **eklenir**
+(yazma ⇒ okuma kuralı); kan grubu **K3/şifreli kalır**, formda toplanır ama **zorunlu olamaz**.
+
+### 16.3 Yol haritası önerilerinden P1 için kapatılanlar
+
+#### OD35 — Tenant serbest (custom) alan tanımlayabilsin mi? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **V1/P1'de HAYIR.** Yalnız **tanımlı** alanların görünürlük/zorunluluk/sıra/etiket
+  ayarı yapılabilir. Tenant tanımlı yeni alan (custom field) **P9+**'a bırakılır ve geldiğinde
+  ayrı tasarımla: `hr.employee_custom_fields` (definition) + kapalı tip kümesi
+  (`text|number|date|boolean|select`), **K sınıflandırması zorunlu**, dosya tipi **yok**
+  (dosya P3 documents).
+- **Gerekçe:** custom alan EAV/çift doğruluk kaynağı ve KVKK sınıflandırma riski yaratır;
+  P1'in kabul kriterleri (zorunluluk + kilit seviyesi) tanımlı alanlarla karşılanıyor.
+- **DB etkisi:** yok. **Authorization etkisi:** yok. **Migration etkisi:** yok.
+- **UI etkisi:** form yapılandırma ekranında "yeni alan ekle" **bulunmaz**.
+- **Sonraki fazlara etkisi:** P9 custom field tasarımı bu kararla çelişmemeli (K sınıflandırma
+  kuralı ve kapalı tip kümesi ön koşul).
+
+#### OD36 — Form yapılandırma izni — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** Yeni kod **`employee.form.manage`** (modül ön eki `employee`, mevcut adlandırma
+  standardı). Roller: **`tenant_admin` + `hr_manager`**. Denetim olayı:
+  **`employee_form.config.update`**. `tenant_form.*` gibi yeni bir üst modül **açılmaz**.
+- **Gerekçe:** kod adlandırması `<modül>.<nesne>.<işlem>` desenini izler; yeni modül ön eki
+  katalog büyümesi ve izin matrisi karmaşası yaratır.
+- **DB etkisi:** `hr.permissions` +1 (kapsam `TENANT`) + 2 rol-izin bağı.
+- **Authorization etkisi:** OD9'un **devredilemez** listesinde (v1).
+- **Migration etkisi:** katalog data migration'ı. **UI:** form ayarları sekmesi.
+- **Risk:** `role.manage` sahibi ile `employee.form.manage` sahibi farklı olabilir → v1'de
+  `hr_manager` ikisini de taşır (mevcut şablonlar).
+
+#### OD37 — K3 alanlar formda zorunlu yapılabilir mi? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **HAYIR.** Sunucu, K3 alanlar için `is_required=true` yazımını **400** ile
+  reddeder (`K3_ALANLARI` listesi kaynak). K3 alanlar **gizlenebilir** ve **opsiyonel** olur.
+- **Gerekçe:** özel nitelikli veriyi zorunlu toplamak KVKK aşırı veri toplama riski.
+- **DB/Auth/Migration etkisi:** yok (kural servis + konfigürasyon doğrulamasında).
+- **UI etkisi:** form ayar ekranında K3 alanların "zorunlu" anahtarı **kapalı ve gerekçeli**.
+- **Sonraki fazlara etkisi:** P3 belge türleri için aynı kural (sağlık raporu zorunlu
+  yapılabilir ama **içeriği** K4 erişim kurallarına tabidir) ayrıca değerlendirilir.
+
+#### OD38 — Form yapılandırması sürümlenmeli mi? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **Sürüm tablosu YOK.** Değişiklik `audit_logs`'a yazılır (alan, eski→yeni).
+  Zorunlu hâle gelen alan **mevcut kayıtları geçersiz saymaz**; eksik alanlar sorgudan
+  **"eksik alan" listesi** olarak çıkarılır ve §5 onboarding görev akışı bu listeyi tüketir.
+- **Gerekçe:** sürümleme tablosu, P1'de karşılığı olmayan bir "form sürümü" kavramı yaratır;
+  audit + türetilmiş eksik-alan sorgusu aynı ihtiyacı karşılar.
+- **DB etkisi:** yok. **Migration:** yok. **UI:** "eksik alan" uyarı kartı.
+- **Sonraki fazlara etkisi:** P9 görev motoru aynı sorguyu kullanır.
+
+#### OD41 — `notice_period` durum olarak mı, türetilmiş etiket mi? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **Türetilmiş etiket.** `EmployeeStatus` kapalı kümesi
+  `{active, suspended, terminated, archived}` **büyütülmez**. Yeni alan:
+  `hr.employees.notice_end_date` (nullable). Etiket kuralı:
+  `status == active|suspended ∧ termination_date IS NOT NULL ∧ termination_date > bugün`
+  → **"ihbar döneminde"** (UI rozeti + filtre).
+- **Gerekçe:** durum makinesini 4 durumda tutmak, geçişleri ve RBAC/izin mantığını
+  basitleştirir; ihbar dönemi bir **zaman aralığı**, ayrı bir yaşam döngüsü hâli değil.
+- **DB etkisi:** +1 kolon (`notice_end_date date NULL`), CHECK: `notice_end_date >= termination_date`
+  (ikisi de doluysa).
+- **Authorization etkisi:** yok (durum geçiş izinleri OD61).
+- **Migration etkisi:** şema migration'ı (kolon + CHECK + audit tetikleyicisi kapsamı).
+- **UI etkisi:** çalışan listesinde "İhbar döneminde" rozeti; işten çıkış formunda alan.
+- **Sonraki fazlara etkisi:** P9 offboarding aynı alanı kullanır (son çalışma günü ≠ ihbar sonu).
+
+#### OD42 — `suspended` çalışan izin talebi açabilir mi? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **HAYIR.** Askıya alınmış çalışan **yeni izin talebi açamaz** (sunucu reddeder,
+  fail-closed); askıdan önce açılmış **bekleyen talepler iptal edilmez**, İK karar verir.
+  Askıya alma sırasında hakediş **durmaz** (mevcut `accrue_leave_entitlements` davranışı korunur).
+- **Ek karar (erişim, OD59 ile birlikte):** `suspended` çalışanın **girişi engellenir** ve
+  token'ları iptal edilir (fail-closed); geri dönüşte yeniden giriş yapar.
+- **Gerekçe:** askıya alma çoğunlukla idari inceleme dönemidir; sistem erişimini açık tutmak
+  inceleme bütünlüğünü zedeler. Mevcut taleplerin iptali ise İK yetkisini gasp eder.
+- **DB etkisi:** yok. **Authorization:** `employee.suspend` (OD61). **Migration:** yok.
+- **UI etkisi:** askıdaki çalışan için "izin talebi" düğmesi kapalı; liste rozeti "Askıda".
+- **Sonraki fazlara etkisi:** P4 devam/vardiya ve P5 fazla mesai aynı kuralı uygular.
+
+#### OD43 — İşten çıkış onayı kaç adım? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **P1'de tek adım:** `employee.terminate` izni + **zorunlu gerekçe** +
+  `termination_date` + audit. Başlatan ≠ onaylayan **iki adımlı** akış **P9**'a bırakılır
+  (mevcut `approval_steps` altyapısı yeniden kullanılır).
+- **Gerekçe:** P1'in hedefi **minimum lifecycle güvenliği**; izin + gerekçe + audit üçlüsü
+  geri alınabilir (restore) ve izlenebilir bir taban sağlar. İki adımlı onay, offboarding
+  workflow'unun konusudur.
+- **DB etkisi:** yok (gerekçe audit'e yazılır). **Migration:** yok.
+- **UI etkisi:** işten çıkış formu (tarih + neden + gerekçe); "Onaya gönder" adımı **yok**.
+- **Sonraki fazlara etkisi:** P9 çok adımlı onay + kullanıcı erişim kapatma checklist'i ekler.
+
+### 16.4 Bu turda açılıp kapatılan yeni kararlar
+
+#### OD58 — İşyeri / lokasyon ayrı bir entity mi? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **Evet, ayrı entity:** `hr.workplaces` (kiracı kapsamlı, RLS zorunlu).
+  Kolonlar (özet): `id`, `tenant_id`, `code`, `name`, `type`
+  (`office|branch|remote|client_site`), `country_code` (ISO-3166-1 alpha-2), `city`,
+  `address`, `timezone` (IANA), `is_active`, audit kolonları.
+  - Çalışan bağı **`employees` tablosuna eklenmez**: **etkili tarihli**
+    `hr.employee_employment_terms.workplace_id` üzerinden kurulur (OD60).
+  - **Departman ile karıştırılmaz:** departman **organizasyon** ekseni (kimin nereye bağlı
+    olduğu), işyeri **fiziksel/mali** eksendir (ülke, saat dilimi, resmî tatil, bordro).
+- **Gerekçe:** ülke/saat dilimi bilgisi **işyeri**nde doğal olarak bulunur; ilerideki devam
+  (P4: tatil takvimi, vardiya saatleri), ülke kural motoru (P7) ve raporlama (P8) bu ekseni
+  kullanacaktır. `Employee`'ye tek kolon eklemek bu bilgiyi taşıyamaz (çok işyerli kiracı).
+- **DB etkisi:** +1 tablo (`hr.workplaces`) + RLS + `ensure_same_tenant_ref` guard'ları;
+  `hr.employee_employment_terms.workplace_id` (aynı fazda gelen tablo).
+- **Authorization etkisi:** yeni kodlar `org.workplace.read` / `org.workplace.manage`
+  (`org.*` modülü genişler; `dept_manager` yalnız read).
+- **Migration etkisi:** yeni tablo + seed (her kiracıya en az bir "Merkez" işyeri opsiyonel);
+  geri dönüş kolay (tablo düşürülür, FK yok).
+- **UI etkisi:** Ayarlar → İşyerleri (liste + form); çalışan formunda işyeri seçimi.
+- **Sonraki fazlara etkisi:** **P4** tatil/vardiya takvimi, **P7** ülke kuralı seçimi,
+  **P8** ülke bazlı raporlar bu tabloyu kullanır. `country_code` bu yüzden **zorunlu**dur.
+
+#### OD59 — User ↔ Employee ilişkisi ve erişim kesme — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR (cardinality):** 1 kullanıcı ↔ **en fazla 1 aktif çalışan kaydı**; 1 çalışan kaydı ↔
+  **en fazla 1 kullanıcı**. Kısmi benzersizlik:
+  `UNIQUE (user_id) WHERE deleted_at IS NULL AND status <> 'archived'`.
+  Arşivlenmiş kayıt bu kısıtı işgal etmez (yeniden işe alma senaryosu).
+- **KARAR (P1 akışı):** her P1 çalışan oluşturma akışında **giriş hesabı zorunludur**;
+  çalışan + kullanıcı **tek atomik işlemde** yazılır (mevcut test UI davranışının servis
+  katmanına taşınması; `create_employee(user=...)` parametresi zorunlu hâle gelir).
+- **KARAR (erişim kesme):** `terminated` **veya** `suspended` olduğunda:
+  1. `users.status = 'inactive'` yazılır (login reddi — mevcut `is_active` özelliği),
+  2. kullanıcının **API token'ları iptal edilir** (`revoke_tokens_for_inactive_user`, mevcut servis),
+  3. **mevcut oturumlar** için yeni kolon **`users.auth_version`** (`integer NOT NULL DEFAULT 0`)
+     artırılır; oturum açılışında saklanan sürüm ile karşılaştırılır ve uyuşmazsa oturum düşer.
+     (Django'nun `session_auth_hash` mekanizması yalnız parola değişiminde çalıştığı için
+     açık bir sürüm alanı gerekir.)
+- **KARAR (silme/arşiv):** `users` kaydının silinmesi (soft delete) çalışanın **HR geçmişini
+  silmez**; çalışanın arşivlenmesi `users` satırını **silmez**, yalnız erişimi keser.
+  `Employee.user` FK davranışı `SET_NULL` olarak **korunur** (kullanıcı silinse de kayıt kalır).
+- **Kapsam dışı:** platform kullanıcıları (`platform` şeması) bu modele **dahil değildir**.
+- **Gerekçe:** "kullanıcı" bir kimlik, "çalışan" bir İK kaydıdır; ikisini eşitlemek ya kimlik
+  geçmişini ya İK geçmişini bozar. Erişim kesme, işten çıkışın **ilk ve zorunlu** adımıdır.
+- **DB etkisi:** `users.auth_version` (+1 kolon), `employees` üzerinde kısmi benzersizlik
+  (yeni constraint), değişiklik yok (mevcut `SET_NULL` korunur).
+- **Authorization etkisi:** `employee.terminate` / `employee.suspend` izinleri (OD61);
+  erişim kesme **izin gerektirir**, otomatik yan etki değildir (servis içinde yapılır).
+- **Migration etkisi:** 1 şema migration'ı (kolon + constraint) — veri kaybı yok;
+  `auth_version` varsayılanı 0 olduğu için mevcut oturumlar geçerli kalır.
+- **UI etkisi:** çalışan detayında "Askıya al" / "İşten çıkar" / "Geri al" düğmeleri;
+  işlem sonrası "kullanıcı erişimi kesildi" bilgisi; işten çıkmış çalışanda hesap durumu görünür.
+- **Sonraki fazlara etkisi:** P9 offboarding checklist'i bu mekanizmayı genişletir (tüm token'lar,
+  e-posta yönlendirme, zimmet).
+
+#### OD60 — Employee history yaklaşımı — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** **iki katmanlı** model; **generic JSON history reddedildi.**
+  1. **Etkili tarihli domain tablosu:** `hr.employee_employment_terms`
+     (`employee_id`, `effective_from`, `effective_to`, `employment_type`, `working_model`,
+     `workplace_id`, `contract_type`, `contract_start_date`, `contract_end_date`,
+     `probation_end_date`, `reason`, `created_by`; **tek açık satır** kısmi benzersizlik).
+  2. **Atama geçmişi:** `hr.employee_assignments` (`employee_id`, `department_id`,
+     `position_id`, `effective_from`, `effective_to`, `reason`, `created_by`; tek açık satır).
+     `move_employee` **eski satırı kapatır, yenisini açar** (üzerine yazmaz).
+  3. **Maaş:** P6 (`hr.employee_compensation`) — P1'de ücret alanı **yok** (item 18).
+  4. **PII (K2/K3):** **tarihçesiz** — tek satır, düzeltme; audit'e yalnız **alan adı** yazılır
+     (değer yazılmaz). Mevcut kural korunur.
+- **Manager:** yeni sistem **kurulmaz**; mevcut `hr.employee_manager` (etkili tarihli, tek aktif
+  birincil, çift kaydı engelli) kullanılır — değişimde eski ilişki `effective_to` ile kapanır.
+- **Audit ile ayrım:** `audit_logs` = "kim, ne zaman, hangi işlemi yaptı" (append-only denetim);
+  domain tabloları = "şu tarihte geçerli değer neydi" (sorgulanabilir iş geçmişi). İkisi
+  birbirinin yerine geçmez; P1 **ikisini birlikte** yazar.
+- **Gerekçe:** "Ahmet 01.01'de Finans Uzmanı, 01.07'de Finans Müdürü" sorusu JSON/audit ile
+  güvenilir yanıtlanamaz (sorgu, tip güvenliği, indeks). Ayrıca tazminat/bordro hesapları
+  geçmişe bağlıdır (P6/P7).
+- **DB etkisi:** **+2 tablo** (`employee_employment_terms`, `employee_assignments`) + RLS +
+  tenant guard + kısmi benzersizlik (tek açık satır) + audit tetikleyicileri.
+- **Authorization etkisi:** `employee.update` (yazma), `employee.history.read` (yeni, okuma).
+- **Migration etkisi:** yeni tablolar; mevcut `employees.department_id/position_id` **korunur**
+  ("güncel değer" hızlı okuma için) ve atama tablosu ile **tutarlı** yazılır (tek servis yolu).
+  Risk: iki kaynağın ayrışması → servis dışı yazma yasak + test.
+- **UI etkisi:** çalışan detayında "Geçmiş" sekmesi (tarih, alan, eski→yeni, gerekçe, aktör).
+- **Sonraki fazlara etkisi:** P6 bordro/tazminat ve P8 raporlama bu tabloları kullanır.
+
+#### OD61 — P1 izin kodları, adlandırma ve rol ataması — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR — yeni izin kodları (8):**
+
+| Kod | Modül | Anlam | Roller |
+|---|---|---|---|
+| `employee.suspend` | employee | Çalışanı askıya al / geri al | `tenant_admin`, `hr_manager` |
+| `employee.terminate` | employee | İşten çıkış (tarih + neden + gerekçe) | `tenant_admin`, `hr_manager` |
+| `employee.restore` | employee | Yanlış çıkış/askı kaydını geri al (gerekçeli) | `tenant_admin`, `hr_manager` |
+| `employee.history.read` | employee | İstihdam/atama geçmişini görme | `tenant_admin`, `hr_manager`, `dept_manager` (kapsam) |
+| `employee.form.manage` | employee | Onboarding form yapılandırması (OD36) | `tenant_admin`, `hr_manager` |
+| `employee.sensitive.write` | employee | Kişisel veri yazma (OD30) | `tenant_admin`, `hr_manager` |
+| `org.workplace.read` | org | İşyeri listesi görme | `tenant_admin`, `hr_manager`, `dept_manager` |
+| `org.workplace.manage` | org | İşyeri oluşturma/güncelleme | `tenant_admin`, `hr_manager` |
+
+- **Adlandırma standardı (kesinleşti):** `<modül>.<nesne>.<işlem>`; modül ön ekleri mevcut
+  kümeyle sınırlı (`tenant|user|role|org|employee|leave|shift|attendance|document|audit|billing`).
+  Yeni üst modül açılmaz. `employee.delete` adı korunur, **anlamı arşivleme** (OD6).
+- **Rol izin sayısı hedefi (uygulama turunda matrisle birlikte):**
+  `tenant_admin` 33→**41**, `hr_manager` 22→**30**, `tenant_officer` 21→**23**,
+  `dept_manager` 16→**17**, `employee` 8 (değişmez); `platform.*` 6 (değişmez).
+  Kiracı kodu toplamı 33→**41**, genel toplam 39→**47**.
+- **OD9 uyumu:** `employee.suspend/terminate/restore`, `employee.sensitive.write`,
+  `employee.form.manage`, `employee.history.read` → ilk beşi **devredilemez**,
+  `employee.history.read` **devredilebilir** (OD9 listesi).
+- **Gerekçe:** P1 uçları izinsiz yazılamaz; isimler mevcut katalogla tutarlı olmalı ki
+  `docs/AUTHORIZATION.md` §6.2 matrisi ve `scripts/verify_fresh_install.sh` beklentileri
+  tek seferde güncellenebilsin.
+- **DB etkisi:** `hr.permissions` +8 satır, rol-izin bağları +? (yukarıdaki tablo);
+  şema değişikliği yok.
+- **Migration etkisi:** **1 data migration** (katalog + sistem rol şablonları);
+  `verify_fresh_install.sh` izin sayısı beklentileri güncellenir.
+- **UI etkisi:** çalışan detayı işlem menüsü, form ayarları sekmesi, işyerleri ekranı.
+- **Sonraki fazlara etkisi:** P2–P9 her faz kendi kodlarını aynı desenle ekler (OD16 prosedürü).
+
+### 16.5 Kapatılmayan öneriler (öneri olarak kalır)
+
+`OD32, OD33, OD34, OD39, OD40` (fazla mesai) · `OD44` (yuvarlama) · `OD45` (maaş izni) ·
+`OD46–OD48` (belge limitleri/saklama) · `OD49–OD50` (takvim) · `OD51–OD52` (bordro) ·
+`OD53–OD54` (ülke kuralı) · `OD55–OD56` (raporlama) · `OD57` (arşiv verisi).
+Bunlar **P1'i bloklamaz**; ilgili fazın başında kapatılır. Kaynak: `docs/HR_ROADMAP.md` §26.
+
+### 16.6 P1 sonrası açık kalan kalan iş (doküman notu)
+
+- **Self-service düzenleme (item 13):** **LATER** — P1'de çalışan yalnız okur; kişisel veri
+  değişikliği **İK üzerinden** yapılır. Talep akışı P9 (ESS) konusudur ve P1 kodunu **bloklamaz**.
+- **P1'de belge kolonu yok (item 17):** `employees` tablosuna `contract_file` / `identity_file` /
+  `certificate_file` gibi kolonlar **eklenmez**; belgeler P3'te `hr.documents` (M16) ilişkisiyle
+  bağlanır. P1 formunda "belge" bölümü **yalnız bilgilendirme** olarak yer alabilir.
+- **P1'de ücret alanı yok (item 18):** maaş/ücret P6 `hr.employee_compensation` ile gelir;
+  P1 formunda ücret bölümü **gösterilmez** (bağımlılık notu: P6).

@@ -3,6 +3,71 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.36.0] — 2026-09-13 — P1 blocker kararları kapatıldı: People Lifecycle + Configurable Onboarding
+
+**Kapsam:** **yalnız doküman** — kod, migration, DB değişikliği ve yeni uç **yok**
+(`makemigrations --check` temiz; `git diff` yalnız `docs/`; DB yalnız **okundu**).
+**Baseline:** `03871fd`, 473 test yeşil. **Sonuç:** P1 **`implementation-ready` ✅**.
+
+### KAPATILAN KARARLAR (17)
+
+- **P1 blocker (OD6–OD18 analizi):** **OD6** (silme→arşivleme; `employee.delete` = arşivleme,
+  fiziksel silme P9, saklama 10 yıl), **OD7** (kiracı arşivler, silme platform onayıyla P9),
+  **OD9** (devredilemez/devredilebilir izin listesi), **OD16** (özel rol sınırı 40 + katalog
+  evrimi: sistem rolleri data migration ile, özel roller otomatik güncellenmez).
+- **Doğrudan ilgili:** **OD29** (`leave.balance.manage` → `tenant_admin` + `hr_manager`),
+  **OD30** (`employee.sensitive.write` **eklenir**; "yazma ⇒ okuma" kuralı), **OD31** (kan grubu
+  K3/şifreli kalır, formda toplanır ama **zorunlu olamaz**).
+- **Yol haritası önerilerinden:** **OD35** (custom alan v1'de **yok**), **OD36**
+  (`employee.form.manage`), **OD37** (K3 zorunlu yapılamaz → 400), **OD38** (sürüm tablosu yok;
+  audit + türetilmiş "eksik alan"), **OD41** (`notice_period` **türetilmiş etiket** +
+  `notice_end_date`), **OD42** (`suspended` izin talebi açamaz + girişi engellenir), **OD43**
+  (P1'de tek adım; iki adımlı onay P9).
+- **Bu turda açılıp kapatılan yeni kararlar:** **OD58** (`hr.workplaces` ayrı entity; departmanla
+  karışmaz), **OD59** (1 kullanıcı ↔ en fazla 1 aktif çalışan; erişim kesme: `inactive` + token
+  iptali + `users.auth_version` ile oturum düşürme), **OD60** (iki katmanlı geçmiş:
+  `employee_employment_terms` + `employee_assignments`; generic JSON history **reddedildi**),
+  **OD61** (8 yeni izin kodu + adlandırma standardı + rol hedefleri).
+
+### LATER / OBSOLETE
+
+- **LATER (P1'i bloklamaz):** OD8, OD10 (MFA — ayrı güvenlik turu), OD12, OD13, OD14, OD15, OD17, OD18.
+- **OBSOLETE:** **OD11** — platform ve kiracı rol uzayları yapısal olarak ayrık (OD3 kapalı).
+
+### KESİNLEŞEN TASARIM (kod turuna girdi)
+
+- **Veri modeli:** +4 tablo (`hr.workplaces`, `hr.employee_employment_terms`,
+  `hr.employee_assignments`, `hr.form_field_definitions`); `hr.employees`
+  (+`notice_end_date`, +`termination_reason_code`, +`termination_note`, +`user_id` kısmi
+  benzersizlik), `hr.users` (+`auth_version`).
+- **Durum makinesi:** 4 durum korunur; 7 geçiş tanımlı (2'si **yasak**), izinsiz geçiş **409**,
+  aynı duruma yazma no-op.
+- **Form politikası:** A (sistem-kilitli: `department`, `hire_date`, e-posta/parola, ad/soyad,
+  `employee_no`) / B (yapılandırılabilir) / C (koşullu) seviyeleri; bilinmeyen alan kodu **400**;
+  A seviyesi gizleme/opsiyonel yapma **400**; zorunluluk **sunucuda**.
+- **İzin seti:** `employee.suspend`, `employee.terminate`, `employee.restore`,
+  `employee.history.read`, `employee.form.manage`, `employee.sensitive.write`,
+  `org.workplace.read`, `org.workplace.manage` → kiracı kodu 33→41, genel 39→47;
+  rol hedefleri `tenant_admin` 41, `hr_manager` 30, `tenant_officer` 23, `dept_manager` 17.
+- **P1 kapsamı dışı:** ücret (P6), belge kolonu (P3), bildirim gönderimi (P2), offboarding
+  checklist + self-service (P9), custom alan (P9), MFA (ayrı tur).
+
+### ÖLÇÜM (canlı DB, yalnız okuma)
+
+- P1 kardinalite kısıtı için risk ölçümü: `demo` kiracısında **9 çalışan, 5'i kullanıcıya bağlı,
+  çoklu bağlı kullanıcı = 0** → `UNIQUE(user_id) WHERE deleted_at IS NULL AND status <> 'archived'`
+  kısıtı bugünkü veriyle uygulanabilir. (`askida` kiracısında çalışan yok.)
+- RLS nedeniyle ölçümler `set_config('app.tenant_id', …)` ile kiracı bağlamı kurularak yapıldı
+  (bağlamsız sorgu tüm satırları gizler — bu davranış doğru çalışıyor).
+
+### DEĞİŞEN DOKÜMANLAR
+
+`docs/AUTHORIZATION.md` (§16 karar kayıtları + §14 durum), `docs/HR_ROADMAP.md` (§28 kesin tasarım,
+§22 P1 = implementation-ready, §26 kapatılan öneriler), `docs/DATABASE.md` (P1 tabloları),
+`docs/ORGANIZATION.md` (§7 durum makinesi + §7.1 istihdam koşulları/işyeri/geçmiş),
+`docs/SECURITY.md` (§14 P1 güvenlik kararları), `docs/ARCHITECTURE.md` (P1 modül sınırı),
+`docs/FEATURES.md` (P1 durumu), `docs/CHANGELOG.md`.
+
 ## [0.35.2] — 2026-09-13 — Doküman düzeltmesi: model/tablo sayımı (kod değişmedi)
 
 **Kapsam:** yine **yalnız doküman** (`docs/`). İkinci envanter ajanının (veri modeli + migration)

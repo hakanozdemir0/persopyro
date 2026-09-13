@@ -4,6 +4,10 @@
 migration, DB değişikliği veya yeni uç eklenmemiştir**).
 **Son güncelleme:** 2026-09-13 · **Ölçüm temeli:** `6b59ebd` kodu (doküman commit'i `4e417d8`; kod değişmedi)
 · 473 test yeşil · ölçümler **bağımsız envanter ajanı + doğrudan kod/DB okuması** ile çapraz kontrol edildi (2026-09-13).
+**P1 durumu:** **`implementation-ready` ✅ (2026-09-13)** — P1'i bloke eden tüm açık kararlar
+kapatıldı (`docs/AUTHORIZATION.md` §16: OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38, OD41–OD43,
+OD58–OD61); kesin veri modeli / durum makinesi / form politikası / izin seti: **§28**.
+**Kod, migration ve DB bu turda değişmedi.**
 **Kapsam:** işe girişten işten ayrılışa kadar İK operasyonunun tamamı; çok ülkeli (TR/AB/ABD)
 genişleyebilir mimari.
 **Tek doğruluk kaynağı:** bu doküman. Diğer dokümanlar aynı planı tekrar etmez, buraya **referans
@@ -1159,32 +1163,40 @@ kod içinde `apps/` paketleri + **servis katmanı** ile korunur. Mikroservis **y
 - **Migration riski:** yok.
 
 ---
-### P1 — People lifecycle + yapılandırılabilir onboarding formu
-- **Amaç:** istihdam koşullarının (model/tip/lokasyon/sözleşme/deneme) ve form
-  yapılandırmasının gelmesi; işe girişin **tek akışta** tamamlanması.
-- **Kullanıcıya görünen sonuç:** HR, çalışanı açarken ülke/tipe göre değişen form görür; alanları
-  kiracı yöneticisi açar/kapatır; eksik alanlar için görev üretilir.
-- **DB (yeni):** `hr.employee_employment_terms`, `hr.employee_contracts`,
-  `hr.employee_assignments` (terfi geçmişi — gerekiyorsa), `hr.form_field_definitions`,
-  `hr.employee_tasks`, `hr.employee_task_events`, `hr.onboarding_templates`,
-  `hr.onboarding_template_tasks`. **Değişen:** `hr.employees` (+`termination_reason_code`,
-  `notice_end_date` — OD41 kararına bağlı).
-- **Servisler:** `employee.create` (genişletilmiş, atomik), `employment_terms.set`,
-  `contract.create/renew`, `form_config.upsert`, `tasks.generate_from_template`,
-  `tasks.complete`.
-- **Permissions (öneri):** `employee.terminate`, `employee.form.manage`,
-  `employee.task.read|manage`, `contract.manage`.
-- **Audit events:** `employee.create`, `employee.terms_change`, `contract.create`,
-  `contract.renew`, `employee_form.config.update`, `employee_task.create|complete`.
-- **Background jobs:** yok (görev üretimi senkron, mail P2).
-- **Test kabul:** §3.5, §4.4 ve §5.3'teki maddelerin tamamı.
-- **OD blocker:** **OD41** (notice_period temsili), **OD35/OD36/OD38** (form modeli/izin/sürüm),
-  **OD37** (K3 zorunlu olabilir mi). → P1 **bu kararlar olmadan başlamamalı** (özellikle OD41 ve
-  OD38).
-- **Migration riski:** orta — `hr.employees`'e nullable alan eklemek güvenli; **zorunlu** hâle
-  getirmek mevcut satırları kırar → yalnız uygulama katmanında zorunluluk.
+### P1 — People lifecycle + yapılandırılabilir onboarding formu — **`implementation-ready` ✅ (2026-09-13)**
 
----
+- **Durum:** P1'i bloke eden tüm kararlar **KAPALI** (OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38,
+  OD41–OD43, **OD58–OD61**). Kesin tasarım: **§28**; karar kayıtları: `AUTHORIZATION.md` §16.
+- **Amaç:** istihdam koşullarının (tip/model/işyeri/sözleşme/deneme) ve form yapılandırmasının
+  gelmesi; işe girişin **tek atomik akışta** (çalışan + kullanıcı) tamamlanması; geçmişin
+  sorgulanabilir olması.
+- **Kullanıcıya görünen sonuç:** HR çalışanı açarken kiracı yapılandırmasına göre alanları görür
+  (A seviyesi alanlar kapatılamaz); istihdam koşulları ve işyeri seçilir; departman/pozisyon
+  değişiklikleri geçmişte sorgulanır; askıya alma/işten çıkışta erişim kesilir.
+- **DB (yeni):** `hr.workplaces`, `hr.employee_employment_terms`, `hr.employee_assignments`,
+  `hr.form_field_definitions`. **Değişen:** `hr.employees` (+`notice_end_date`,
+  `termination_reason_code`, `termination_note`, `user_id` kısmi benzersizlik),
+  `hr.users` (+`auth_version`).
+- **P1.1 (aynı fazın ikinci paketi):** onboarding görev/checklist tabloları
+  (`hr.employee_tasks`, `hr.employee_task_events`, `hr.onboarding_templates`,
+  `hr.onboarding_template_tasks`) — §5; P1.0 bunlara **bağımlı değildir**, ancak olay kataloğu
+  (§28.8) bu paketle tamamlanır.
+- **Servisler:** `create_employee` (kullanıcı **zorunlu**, atomik), `update_employee`,
+  `move_employee` (atama geçmişi aç/kapat), `set_employment_terms`, `set_primary_manager`
+  (mevcut), `change_status`/`suspend`/`terminate`/`restore`/`archive`, `form_config.upsert`,
+  `workplace.create/update`.
+- **Permissions:** `employee.suspend`, `employee.terminate`, `employee.restore`,
+  `employee.history.read`, `employee.form.manage`, `employee.sensitive.write`,
+  `org.workplace.read`, `org.workplace.manage` (OD61).
+- **Audit events:** §28.8 listesi (PII değeri yazılmaz).
+- **Background jobs:** **yok** (P2 outbox'ı hazır; P1 senkron çalışır).
+- **Test kabul:** §3.5 + §4.4 maddeleri; ayrıca durum makinesi (**409**), arşivleme,
+  `auth_version` ile oturum düşürme, K3 zorunluluk reddi, A seviyesi alan kilidi.
+- **OD blocker:** **YOK** ✅ (kapatılanlar: OD9, OD16, OD35–OD38, OD41–OD43, OD58–OD61).
+- **Migration riski:** orta — bkz. **§28.10** (özellikle `employees` kısmi benzersizlik
+  migration'ı öncesi **ölçüm sorgusu**; `employee_assignments`/`employment_terms` için
+  **veri doldurma** ayrı migration).
+
 ### P2 — Bildirim / e-posta (outbox)
 - **Amaç:** onay akışının e-posta ile yürümesi; mail hatasının ana işlemi bozmaması.
 - **Kullanıcıya görünen sonuç:** izin talebi düşünce approver'a mail; onay/red sonucu çalışana
@@ -1430,32 +1442,32 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 
 ## 26. Açık kararlar (öneri)
 
-> **Bu turda hiçbir karar verilmedi.** Aşağıdakiler **öneri**dir; `docs/AUTHORIZATION.md`
-> içindeki OD listesine **açılmamıştır**. OD32–OD40 numaraları bu dokümanın ilk sürümünde
+> **2026-09-13 güncellemesi:** P1'i bloke eden öneriler **kapatıldı** (aşağıda ✅ işaretli);
+> karar kayıtları `docs/AUTHORIZATION.md` **§16**'dadır. Kapatılmayanlar **öneri** olarak kalır. OD32–OD40 numaraları bu dokümanın ilk sürümünde
 > (fazla mesai + dinamik form bölümleri) önerilmişti ve **korunmuştur**; OD41+ bu turda eklenen
 > önerilerdir. En yüksek **kapanmış** karar OD31'dir.
 
-### 24.1 Mevcut öneriler (ilk sürümden korunanlar)
+### 26.1 Mevcut öneriler (ilk sürümden korunanlar)
 
 | # | Soru | Önerilen seçenek |
 |---|---|---|
 | OD32 | Fazla mesainin TIME_OFF karşılığı leave ledger'a nasıl yazılsın? | Sistem kodlu izin türü (`overtime_comp`) + `entry_kind='overtime_credit'` defter kaydı |
 | OD33 | Ücret karşılığı için ayrı `overtime.pay.read` gerekli mi? | Gerekli değil; mevcut `overtime.request.read` + `compensation.read` yeterli |
 | OD34 | Katsayı hangi anda sabitlenir? | **Onay anında** snapshot (`pay_multiplier_snapshot`) |
-| OD35 | Tenant serbest (custom) alan tanımlayabilsin mi? | V1: hayır (yalnız tanımlı alanların görünürlüğü); custom alan P9+ |
-| OD36 | Form yapılandırma izni: `tenant_form.*` mı, `role.manage` mı? | Yeni `employee.form.manage` kodu |
-| OD37 | K3 alanlar dinamik formda zorunlu yapılabilir mi? | **Hayır** (aşırı veri toplama riski) |
-| OD38 | Form yapılandırması sürümlenmeli mi? | Evet: değişiklik audit + mevcut kayıtlar geçersiz sayılmaz, "eksik alan" görevi üretilir |
+| ~~OD35~~ | Tenant serbest (custom) alan tanımlayabilsin mi? | **✅ KAPALI (2026-09-13):** V1/P1'de **hayır**; custom alan P9+ (tipli, K sınıflandırmalı) — `AUTHORIZATION.md` §16.3 |
+| ~~OD36~~ | Form yapılandırma izni | **✅ KAPALI (2026-09-13):** yeni kod **`employee.form.manage`**; `tenant_admin` + `hr_manager` |
+| ~~OD37~~ | K3 alanlar dinamik formda zorunlu yapılabilir mi? | **✅ KAPALI (2026-09-13):** **hayır**; sunucu K3 için `is_required=true` yazımını 400 ile reddeder |
+| ~~OD38~~ | Form yapılandırması sürümlenmeli mi? | **✅ KAPALI (2026-09-13):** sürüm tablosu **yok**; audit + türetilmiş "eksik alan" sorgusu; mevcut kayıtlar geçersiz sayılmaz |
 | OD39 | Fazla mesai onay sırası leave ile aynı mı? | Evet, aynı altyapı (önce birincil yönetici, sonra İK) |
 | OD40 | `attendance_records.overtime_minutes` ile `overtime_requests` ilişkisi | Devam kaydı **hesaplar**, talep **onaylar**; onay tek yerde (`overtime_requests.status`) |
 
-### 24.2 Bu turda eklenen öneriler
+### 26.2 Bu turda eklenen öneriler
 
 | # | Soru | Önerilen seçenek | Blokladığı faz |
 |---|---|---|---|
-| **OD41** | `notice_period` durum olarak mı, türetilmiş etiket mi? | Durum kümesi büyütülmez; `notice_end_date` alanı + türetilmiş "ihbar döneminde" etiketi | P1/P9 |
-| **OD42** | `suspended` çalışan izin talebi açabilir mi? | Hayır; yalnız HR açar (talep formu gizlenir, sunucu da reddeder) | P1 |
-| **OD43** | İşten çıkış onayı kaç adım? | İki adım (başlatan ≠ onaylayan), `employee.terminate` izni | P1/P9 |
+| ~~**OD41**~~ | `notice_period` durum olarak mı, türetilmiş etiket mi? | **✅ KAPALI (2026-09-13):** türetilmiş etiket + `notice_end_date` kolonu; durum kümesi 4'te kalır | P1/P9 |
+| ~~**OD42**~~ | `suspended` çalışan izin talebi açabilir mi? | **✅ KAPALI (2026-09-13):** hayır (sunucu reddi) + **giriş engeli + token iptali**; mevcut talepler iptal edilmez | P1 |
+| ~~**OD43**~~ | İşten çıkış onayı kaç adım? | **✅ KAPALI (2026-09-13):** P1'de **tek adım** (izin + neden + gerekçe + audit); iki adımlı onay **P9** | P1/P9 |
 | **OD44** | TIME_OFF yuvarlama politikası | Dakika hesaplanır, bakiyeye **yarım gün aşağı** yuvarlanır; artan dakika birikir | P5a |
 | **OD45** | Maaş için ayrı izin kodu? | Evet: `compensation.read` / `compensation.manage` (K2 + ayrı denetim) | P6 |
 | **OD46** | Belge boyutu limitleri | Sistem tavanı **25 MB**, tenant alt sınırı ≤ 25 MB (dosya türü bazlı daha düşük olabilir) | P3 |
@@ -1538,23 +1550,162 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 
 ---
 
-## 28. Sıradaki uygulama paketi (P1.0 — öneri)
+## 28. P1 — People Lifecycle + Configurable Onboarding (KESİNLEŞTİRİLMİŞ TASARIM)
 
-**Amaç:** çalışan açma akışının "istihdam koşulları + yapılandırılabilir form + görev listesi"
-ile tamamlanması. Kod yazılmadan önce **OD16, OD38, OD41** kapanmalı veya açıkça ertelenmelidir.
+> **Durum: `implementation-ready` ✅ (2026-09-13).** P1'i bloke eden açık kararların tamamı
+> kapatıldı: **OD6, OD7, OD9, OD16, OD29, OD30, OD31** + yol haritası önerilerinden
+> **OD35, OD36, OD37, OD38, OD41, OD42, OD43** + bu turda açılıp kapatılan **OD58–OD61**.
+> Kararların gerekçe/etki kaydı: **`docs/AUTHORIZATION.md` §16**. Bu bölüm P1'in **kesin veri
+> modelini, durum makinesini, form politikasını ve izin setini** tanımlar; **kod bu turda
+> yazılmadı**.
+>
+> **Kalan iş, kod turuna aittir:** şema migration'ları, servisler, uçlar, test UI ekranları,
+> `verify_fresh_install.sh` adımları, `§6.2` izin matrisi ve `scripts/_demo_data.py` uyarlaması.
 
-| Adım | İş | Dosya (öneri) | Test |
+### 28.1 Kesin veri modeli (P1)
+
+**Mevcut ve korunacak (değişmez):** `hr.employees` (`employee_no` sunucu üretir, `department_id`
+NOT NULL, `position_id` nullable, `hire_date`, `termination_date`, `status`), `hr.employee_personal_data`
+(OneToOne, K2 açık / K3 şifreli), `hr.employee_manager` (etkili tarihli, tek aktif birincil),
+`hr.users` (kiracı kapsamlı, `public_id`), `hr.user_roles` (kapsamlı yetki).
+
+| Tablo | Durum | Kolonlar (özet) | Kısıt / kural |
 |---|---|---|---|
-| 1 | İstihdam koşulları modeli (etkili tarihli) + RLS + audit | `apps/people/models.py`, `migrations/0001_*.py` | tarihçe + tek açık kayıt testi |
-| 2 | Sözleşme modeli (tip, süre, belge bağı) | aynı | sözleşme yenileme testi |
-| 3 | Görev modeli (`hr.employee_tasks`) + şablonlar | aynı | şablondan üretim + idempotans |
-| 4 | Form yapılandırma modeli + allowlist doğrulama | aynı | A seviyesi kilitli alan reddi |
-| 5 | Çalışan oluşturma servisi: form konfigürasyonuna göre zorunluluk | `apps/organization/services.py` (genişletme) | eksik zorunlu alan → 400 |
-| 6 | Test arayüzü: alt sekme + dinamik alan gösterimi | `apps/testui/…` | canlı doğrulama |
-| 7 | Panel: onboarding görev kartı | `apps/testui/api.py` | kart sayısı testi |
+| `hr.workplaces` | **YENİ** | `id`, `tenant_id`, `code`, `name`, `type` (`office\|branch\|remote\|client_site`), `country_code` (ISO alpha-2, **NOT NULL**), `city`, `address`, `timezone` (IANA, NOT NULL), `is_active`, audit kolonları | `UNIQUE(tenant_id, code) WHERE deleted_at IS NULL`; RLS + `ensure_same_tenant_ref` |
+| `hr.employee_employment_terms` | **YENİ** | `id`, `tenant_id`, `employee_id`, `effective_from` (NOT NULL), `effective_to` (NULL = açık), `employment_type` (`full_time\|part_time\|contractor\|intern\|temporary`), `working_model` (`onsite\|hybrid\|remote`), `workplace_id`, `contract_type` (`permanent\|fixed_term\|project\|internship`), `contract_start_date`, `contract_end_date`, `probation_end_date`, `reason`, `created_by`, audit | **Tek açık satır** `UNIQUE(employee_id) WHERE effective_to IS NULL AND deleted_at IS NULL`; `effective_to >= effective_from`; `contract_end_date >= contract_start_date` |
+| `hr.employee_assignments` | **YENİ** | `id`, `tenant_id`, `employee_id`, `department_id`, `position_id` (nullable), `effective_from`, `effective_to`, `reason`, `created_by`, audit | **Tek açık satır** `UNIQUE(employee_id) WHERE effective_to IS NULL AND deleted_at IS NULL`; `move_employee` eskiyi kapatıp yenisini açar |
+| `hr.form_field_definitions` | **YENİ** | `id`, `tenant_id`, `form_code` (`employee_onboarding`), `field_code` (**kodda tanımlı allowlist**), `section_code`, `section_label`, `sort_order`, `is_visible`, `is_required`, `label_override` (nullable), `helper_text` (nullable), `lock_level` (`A\|B\|C` — **sunucu hesaplar, tenant yazamaz**), `applicability` (JSONB: `country_in`, `employment_type_in`, `working_model_in`), `created_by`, audit | `UNIQUE(tenant_id, form_code, field_code)`; bilinmeyen `field_code` → **400**; A seviyesi için `is_visible=false` veya `is_required=false` yazımı → **400**; K3 alanlar için `is_required=true` → **400** (OD37) |
+| `hr.employees` | **DEĞİŞİR** | `+ nothing` | Yalnız **kısmi benzersizlik**: `UNIQUE(user_id) WHERE deleted_at IS NULL AND status <> 'archived'` (OD59) |
+| `hr.employees` | **DEĞİŞİR** | `+ notice_end_date date NULL` | CHECK: `notice_end_date >= termination_date` (ikisi doluysa) — OD41 |
+| `hr.employees` | **DEĞİŞİR** | `+ termination_reason_code varchar(40) NULL` (kapalı küme: `resignation\|employer_termination\|mutual_agreement\|contract_end\|retirement\|death\|other`), `+ termination_note text NULL` | CHECK: `status='terminated'` ise `termination_date` **ve** `termination_reason_code` zorunlu (sunucu + DB) |
+| `hr.users` | **DEĞİŞİR** | `+ auth_version integer NOT NULL DEFAULT 0` | Erişim kesme (OD59): askıya alma/çıkış/geri alma işlemlerinde artırılır |
 
-**Kabul (paket sonu):** §3.5 + §4.4 + §5.3 maddeleri; tüm mevcut testler değişmeden geçer;
-`verify_fresh_install.sh` yeni adımlarla genişletilir.
+**P1'de EKLENMEYECEK (bilinçli):** `employees` üzerine ücret/maaş kolonu (P6), belge kolonu
+(P3), ülkeye özgü kolon (ülke farkı kural setleri/koşullu form/belge türleri ile modellenir).
+`employees.department_id` / `position_id` **korunur** ("güncel değer" hızlı okuması için) ve
+atama tablosu ile **aynı servis yolundan** yazılır (çift kaynak ayrışması test edilir).
+
+### 28.2 Durum makinesi (kesin)
+
+Kapalı küme **değişmez:** `active`, `suspended`, `terminated`, `archived` (OD41: `notice_period`
+durum değil, **türetilmiş etiket**: `status ∈ {active, suspended}` ∧ `termination_date > bugün`).
+
+| # | Geçiş | İzin | Zorunlu alanlar | Yan etki | Audit olayı |
+|---|---|---|---|---|---|
+| 1 | `active → suspended` | `employee.suspend` | `reason` | `users.status='inactive'`, token iptali, `auth_version++` | `employee.suspend` |
+| 2 | `suspended → active` | `employee.restore` | `reason` | Erişim geri açılır (yeniden giriş gerekir), `auth_version++` | `employee.restore` |
+| 3 | `active/suspended → terminated` | `employee.terminate` | `termination_date`, `termination_reason`, `reason` | `users.status='inactive'`, token iptali, `auth_version++`; `notice_end_date` varsa ihbar dönemi etiketi | `employee.terminate` |
+| 4 | `terminated → archived` | `employee.delete` (arşivleme) | `reason` | Hiçbir listede görünmez; PII maskeleme **P9** | `employee.archive` |
+| 5 | `terminated → active` | `employee.restore` | `reason` (**hata düzeltme**) | Erişim geri açılır; kayıt geçmişi korunur | `employee.restore` |
+| 6 | `archived → active` | — | — | **YASAK** (yalnız P9 KVKK/denetimli akış) | — |
+| 7 | `terminated → suspended` | — | — | **YASAK** (anlamsız) | — |
+
+**Kural:** izin verilmeyen geçiş **409** döner (fail-closed) ve denemesi audit'e yazılır.
+Aynı durum değeri tekrar yazılırsa **no-op + 200** (idempotent), audit yazılmaz.
+
+### 28.3 Erişim kesme (termination/suspension) — P1 minimum güvenliği
+
+1. `users.status = 'inactive'` → mevcut `User.is_active` özelliği girişi reddeder (kod mevcut).
+2. **Token iptali:** mevcut `apps/accounts/services.py::revoke_tokens_for_inactive_user` servisi
+   çağrılır (yeni mekanizma kurulmaz).
+3. **Oturumlar:** `users.auth_version` artırılır; oturum açılışında saklanan sürümle karşılaştırılır,
+   uyuşmazsa oturum düşürülür ve `auth.session_revoked` audit kaydı yazılır.
+4. **RBAC:** kullanıcı pasifken izin çözümü **hiçbir şey döndürmez** (yetki üretmez); `user_roles`
+   satırları **silinmez** (geri dönüş ve denetim için korunur).
+5. **HR geçmişi korunur:** `audit_logs` silinmez; `employees`/`employee_personal_data` satırları
+   silinmez; `Employee.user` FK davranışı `SET_NULL` kalır.
+
+### 28.4 Yapılandırılabilir onboarding formu (kesin politika)
+
+**Yaklaşım:** metadata + config (ağır form builder **yok**); form yapısı koddaki alan
+tanımlarından türetilir, tenant yalnız **görünürlük / zorunluluk / sıra / etiket** override eder.
+Zorunluluk **sunucuda** dayatılır; istemciden gelen zorunluluk bilgisi **dikkate alınmaz** (OD38/A).
+
+| Seviye | Anlam | Alanlar (kod doğrulamasına göre) |
+|---|---|---|
+| **A — Sistem-kilitli** | gizlenemez, opsiyonel yapılamaz; yalnız etiket/sıra değişir | `tenant` (örtük), `employee_no` (sunucu üretir), `department_id` (**NOT NULL**), `hire_date` (**NOT NULL**), kurumsal `email` (**UNIQUE(tenant,email)**), `password`, `first_name`/`last_name` (**NOT NULL** — hem `users` hem `employee_personal_data`), `status` (varsayılan `active`) |
+| **B — Yapılandırılabilir** | görünür/gizli + zorunlu/opsiyonel + sıra + etiket | `position_id`, `birth_date`, `national_id`, `personal_email`, `personal_phone`, `address`, `emergency_contact_phone`, `emergency_contact_relation`, `citizenship`, `work_permit_type`, `work_permit_valid_until`, `bank_name`, `iban`, `blood_type` (**K3 — zorunlu yapılamaz**, OD37), `health_notes`/`disability_status`/`biometric_ref` (**K3**), `employment_type`, `working_model`, `workplace_id`, `contract_type`, `contract_start_date`, `contract_end_date`, `probation_end_date`, birincil yönetici |
+| **C — Koşullu** | B'nin tamamı + `applicability` koşulu | `work_permit_type`/`work_permit_valid_until` (`country_in` TR **değil**), `iban` (`country_in` TR/SEPA), `national_id` (ülke formatı), `contract_end_date` (`contract_type = fixed_term`), `probation_end_date` (`probation` işaretliyse) |
+
+**K3 kuralı:** K3 alanlar **zorunlu yapılamaz** ve **gizlenebilir**; yazma OD30 kararıyla
+`employee.sensitive.write` ∧ `employee.sensitive.read` ∧ organizasyon kapsamı kapısından geçer.
+Sınıflandırma **kodda** durur; tenant yalnız görünürlük/zorunluluk değiştirir (K2/K3 modeli bozulmaz).
+
+**Denetim:** her konfigürasyon değişikliği `employee_form.config.update` olarak yazılır
+(alan, eski→yeni görünürlük/zorunluluk; **PII değeri yazılmaz**).
+
+### 28.5 Custom alan kararı (OD35)
+
+**P1'de custom alan YOK.** Yalnız tanımlı alanların konfigürasyonu. P9+ için ön koşullar:
+kapalı tip kümesi (`text|number|date|boolean|select`), **zorunlu K sınıflandırması**,
+dosya tipi yok (P3 documents), değerler ayrı `hr.employee_custom_values` tablosu (EAV değil,
+tipli kolon seti + CHECK).
+
+### 28.6 Geçmiş (history) kararı (OD60)
+
+| Bilgi | Mekanizma | Sorgu örneği |
+|---|---|---|
+| Departman / pozisyon | **`hr.employee_assignments`** (etkili tarihli, tek açık satır) + audit | "01.01'de hangi birimde?" |
+| İstihdam koşulları (tip/model/işyeri/sözleşme/deneme) | **`hr.employee_employment_terms`** (etkili tarihli) | "01.07'de sözleşme tipi neydi?" |
+| Yönetici | Mevcut **`hr.employee_manager`** (etkili tarihli; yeni sistem kurulmaz) | "Geçen yıl kimin yöneticisiydi?" |
+| Maaş | **P6** `hr.employee_compensation` | — |
+| Kişisel veri (K2/K3) | **Tarihçesiz** tek satır; audit'e yalnız **alan adı** | — |
+| Durum değişimleri | **`audit_logs`** (append-only) | "Kim, ne zaman askıya aldı?" |
+
+**Reddedilen:** generic JSON history (sorgulanamaz, indekslenemez, tip güvenliği yok).
+**Ayrım:** audit = denetim izi (değiştirilemez); domain tabloları = iş geçmişi (sorgulanabilir).
+
+### 28.7 İzin seti ve rol ataması (OD61)
+
+Yeni kodlar (8): `employee.suspend`, `employee.terminate`, `employee.restore`,
+`employee.history.read`, `employee.form.manage`, `employee.sensitive.write` (OD30),
+`org.workplace.read`, `org.workplace.manage`.
+Rol hedefleri: `tenant_admin` **41**, `hr_manager` **30**, `tenant_officer` **23**,
+`dept_manager` **17**, `employee` **8**; kiracı kodu **41**, genel toplam **47**.
+`employee.delete` = **arşivleme** (OD6). Devredilemez kod listesi: `AUTHORIZATION.md` §16 / OD9.
+
+### 28.8 P1 audit olay kataloğu
+
+`employee.create` (mevcut) · `employee.update` · `employee.department_change` (mevcut) ·
+`employee.position_change` · `employee.manager.open` / `employee.manager.close` (`close` mevcut) ·
+`employee.status_change` · `employee.suspend` · `employee.restore` · `employee.terminate` ·
+`employee.archive` · `employee.employment_terms.change` · `employee.assignment.change` ·
+`employee.personal_data.create` (mevcut) / `employee.personal_data.update` ·
+`employee_form.config.update` · `org.workplace.create` / `org.workplace.update` ·
+`auth.session_revoked`.
+**Kural:** PII **değeri** yazılmaz; yalnız alan adı + `changed=true` işareti.
+
+### 28.9 P2 / P3 / P6 bağımlılık notları
+
+- **P2 (bildirim):** P1 tabloları olay üretmeye **hazırdır**; `notification_events` outbox'ı
+  `dedup_key` ile P1 kayıt kimliklerini kullanacak (şema P1'i bloklamaz). P1'de tetiklenecek
+  olaylar: `employee.created`, `probation.ending`, `contract.ending`, `employee.status_changed`,
+  `termination.scheduled` — **P1'de kod yazılmaz** (§7).
+- **P3 (belge):** çalışan formunda **belge kolonu yok**; `contract_file` vb. `hr.documents`
+  ilişkisiyle gelir (M16). P1 formunda belge bölümü yalnız **bilgilendirme** olabilir.
+- **P6 (ücret):** P1'de ücret alanı **yok**; `hr.employee_compensation` P6'da gelir. Form
+  yapılandırmasında `salary.*` alan kodu **tanımlı değildir** (tanımsız kod → 400).
+- **P4 (devam/vardiya):** `hr.workplaces.country_code` + `timezone` bu fazın girdisidir.
+
+### 28.10 Migration riskleri ve geri dönüş
+
+| Migration | Risk | Azaltım |
+|---|---|---|
+| `hr.workplaces` + RLS + guard | Yeni tablo; mevcut veri etkilenmez | İleri/geri dönüş kolay (FK bağımlılığı P1'de yok) |
+| `employee_employment_terms` / `employee_assignments` | **Veri doldurma gerekir**: mevcut çalışanlar için "açık satır" üretilmezse geçmiş sorgusu boş kalır | Data migration: her çalışan için `effective_from = hire_date` ile **tek açık atama** (mevcut `department_id/position_id`) ve **tek açık koşul satırı** (tip/model boş) üretilir; **uygulanmış migration değiştirilmez**, veri doldurma ayrı migration'dadır |
+| `employees.notice_end_date` | CHECK ihlali riski düşük (yeni kolon NULL) | Kolon önce nullable eklenir; CHECK ayrı adımda |
+| `employees` kısmi benzersizlik (`user_id`) | Mevcut veride bir kullanıcıya bağlı **birden çok çalışan** varsa migration **başarısız olur** | **ÖLÇÜLDÜ (2026-09-13, canlı DB, kiracı bağlamı kurularak):** `demo` kiracısında 9 çalışan, 5'i kullanıcıya bağlı, **çoklu bağlı kullanıcı = 0** → kısıt bugünkü veriyle **uygulanabilir**. Uygulama turunda aynı ölçüm tekrarlanır; çakışma varsa önce veri düzeltilir (migration'da sessiz silme **yapılmaz**) |
+| `users.auth_version` | Mevcut oturumlar etkilenmemeli | Varsayılan 0; artırım yalnız suspend/terminate/restore işlemlerinde |
+
+### 28.11 P1 kapsamı DIŞI (bilinçli)
+
+Ücret/maaş (P6) · belge yükleme (P3) · bildirim gönderimi (P2) · offboarding checklist (P9) ·
+çalışan self-service düzenleme (P9) · custom alan (P9) · MFA (ayrı güvenlik turu) ·
+fiziksel silme/KVKK akışı (P9) · devam/vardiya (P4) · fazla mesai (P5) · çok adımlı işten çıkış
+onayı (P9).
+
+**P1.1 paketi (aynı faz):** onboarding görev/checklist tabloları ve şablonları (§5).
+P1.0 bu pakete bağımlı değildir; ancak §28.8 olay kataloğu P1.1 ile tamamlanır.
 
 ---
 

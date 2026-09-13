@@ -752,3 +752,25 @@ Açık olanlar:
 | G6 | Acil durum (break-glass) erişiminin sınırları ve sonradan gözden geçirme | Sonradan zorunlu inceleme; kayıt silinemez; **OD17** ile birlikte kararlaştırılır |
 | G7 | Platform çift onayının tek yönetici / acil durum durumunda uygulanması | Fail-closed varsayılan + sınırlı break-glass (**OD17**) |
 | G9 | Fazla yetki turu: global tanım tabloları ve yansılarda uygulama rolü yazma yetkisi | `permissions` yazma yetkisi geri alınır; yeni tablolarda yetki turu (`docs/DATABASE.md` D.6) |
+
+## 14. People lifecycle güvenlik kararları — P1 (2026-09-13, karar KAPALI)
+
+> Bu bölüm **kararı** kaydeder; kod P1 uygulama turunda yazılır. Kaynak: `docs/AUTHORIZATION.md`
+> §16 (OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38, OD41–OD43, OD58–OD61); tasarım: `HR_ROADMAP.md` §28.
+
+| Karar | Gerekçe / etki |
+|---|---|
+| **İşten çıkış/askıya alma = erişim kesme (zorunlu ilk adım)** | `users.status='inactive'` (mevcut `is_active` girişi reddeder) + **token iptali** (`revoke_tokens_for_inactive_user`) + **oturum düşürme** (`users.auth_version` artırımı; Django'nun `session_auth_hash` mekanizması yalnız parola değişiminde çalıştığı için açık sürüm alanı gerekir). `user_roles` satırları **silinmez**; pasif kullanıcı için izin çözümü **boş küme** döner |
+| **Kişisel veri yazma için ayrı izin** | Yeni `employee.sensitive.write`; servis **"yazma ⇒ okuma"** kuralını uygular (write var, read yok → 403). K3 yazımı **iki kapıdan** geçer: `sensitive.write` ∧ `sensitive.read` ∧ organizasyon kapsamı |
+| **K3 alanlar formda zorunlu yapılamaz** | Sunucu, K3 kodları için `is_required=true` yazımını **400** ile reddeder (KVKK aşırı veri toplama). K3 alanlar gizlenebilir |
+| **Devredilemez izin listesi** | `role.manage`, `tenant.manage`, `user.manage`, `employee.delete`, `employee.suspend`, `employee.terminate`, `employee.restore`, `employee.sensitive.read`, `employee.sensitive.write`, `employee.form.manage`, `leave.balance.manage`, `audit.read` → **özel role verilemez** (400). Sistem rol şablonları muaf |
+| **`employee.delete` = arşivleme** | Fiziksel silme kiracı tarafında **yok**; KVKK başvurusunda platform iki onayla (P9). Denetim izi ve yasal saklama (10 yıl) korunur |
+| **Form konfigürasyonu güvenlik sınırı** | Konfigürasyon **veri**dir, güvenlik sınıflandırması **kod**dur: tenant yalnız görünürlük/zorunluluk/sıra değiştirir; **A seviyesi alanları kapatamaz** (400), **bilinmeyen alan kodu** reddedilir (400), K2/K3 sınıfı değiştirilemez |
+| **Geçmiş (history) ve PII** | Departman/pozisyon ve istihdam koşulları **etkili tarihli domain tablolarında** tutulur; **kişisel veri tarihçesi tutulmaz** (K2/K3 tek satır). Audit'e **değer** değil **alan adı** yazılır |
+| **Custom alan yok (v1)** | Serbest alan tanımı P9+'a bırakıldı; geldiğinde **K sınıflandırması zorunlu** ve dosya tipi yasak (dosya P3 documents). Bu karar, sınıflandırma dışına veri kaçışını engeller |
+| **Genel kimlik ile arama yok** | OD14 (LATER) gereği P1 araması `employee_no` + ad (kiracı içi) ile sınırlıdır; e-posta/telefon ile arama P1'de **eklenmez** |
+
+**Yeni açıklık (güvenlik bulgusu) — P1 turunda üretilmedi:** ölçümde P1 kararları **yeni bir
+açıklık yaratmıyor**; aksine iki bilinen boşluğu kapatıyor (PII yazma izni ayrımı, erişim kesme).
+Açık kalan güvenlik konuları **P1 kapsamı dışıdır**: MFA (OD10, LATER), ülke/veri yurt dışı aktarım
+kuralları (P7), belge zararlı yazılım taraması (P3).

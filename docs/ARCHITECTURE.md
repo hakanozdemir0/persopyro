@@ -656,6 +656,12 @@ listesi uygulanır.
 > fazda geleceği ve kabul kriterleri **`docs/HR_ROADMAP.md` §21–§22** içindedir. Bu dokümandaki
 > §9 (dosya saklama), §10 (background jobs → django-q2) ve §11 (e-posta) kararları roadmap'te
 > **uygulama işi** olarak planlanır; yeniden karar verilmez.
+>
+> **P1 modül sınırı kararı (2026-09-13):** P1 tabloları (`hr.workplaces`,
+> `hr.employee_employment_terms`, `hr.employee_assignments`, `hr.form_field_definitions`)
+> **mevcut `apps/organization` uygulamasında** yaşar; ayrı bir `apps/people` açılmaz (aynı bounded
+> context: kiracı → organizasyon → çalışan). Belge (P3) ve bildirim (P2) kendi uygulamalarını alır.
+> Kod yazılmadı; karar kaydı: `docs/AUTHORIZATION.md` §16, tasarım: `docs/HR_ROADMAP.md` §28.
 
 ## 23. Özet: neden bu yığın
 
