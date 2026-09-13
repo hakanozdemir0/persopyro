@@ -2,7 +2,8 @@
 
 **Durum:** `designed-not-coded` (bu doküman **plan** dokümanıdır; bu turda **hiçbir kod,
 migration, DB değişikliği veya yeni uç eklenmemiştir**).
-**Son güncelleme:** 2026-09-12 · **Ölçüm temeli:** `6b59ebd` (çalışma ağacı temiz, 473 test yeşil).
+**Son güncelleme:** 2026-09-13 · **Ölçüm temeli:** `6b59ebd` kodu (doküman commit'i `4e417d8`; kod değişmedi)
+· 473 test yeşil · ölçümler **bağımsız envanter ajanı + doğrudan kod/DB okuması** ile çapraz kontrol edildi (2026-09-13).
 **Kapsam:** işe girişten işten ayrılışa kadar İK operasyonunun tamamı; çok ülkeli (TR/AB/ABD)
 genişleyebilir mimari.
 **Tek doğruluk kaynağı:** bu doküman. Diğer dokümanlar aynı planı tekrar etmez, buraya **referans
@@ -35,7 +36,7 @@ Aşağıdaki konularda karar **mevcuttur**; roadmap bunları **uygulama işi** o
 
 | Konu | Karar yeri | Durum |
 |---|---|---|
-| Görev kuyruğu / worker | `docs/ARCHITECTURE.md` §10 — **django-q2 + ORM broker** | karar var, kod yok |
+| Görev kuyruğu / worker | `docs/ARCHITECTURE.md` §10 — django-q2 + ORM broker. **Ölçüldü:** paket **kurulu** (`pyproject.toml:20` `django-q2>=1.10`), `Q_CLUSTER` **yapılandırılmış** (`config/settings.py:274-285`: `max_attempts` 3, `retry` 600 s, `save_limit` 500, `catch_up` False, **`sync: DEBUG`** → geliştirmede senkron) | kuyruk var, **hiçbir görev kuyruğa atılmıyor** (kod yok) |
 | Dosya saklama | `docs/ARCHITECTURE.md` §9 (+ K7) — **S3 uyumlu özel nesne depolama + boto3**, ön imzalı URL | karar var, kod yok |
 | E-posta | `docs/ARCHITECTURE.md` §11 — Django SMTP + sağlayıcı bağımsız relay, **kuyruk üzerinden** | ayarlar var, kod yok |
 | Redis / cache | `docs/ARCHITECTURE.md` §6.1 — **Redis yok**, DB cache + DRF throttling | uygulandı |
@@ -77,10 +78,10 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 | Uygulama paketi | 9 (`accounts`, `audit`, `common`, `leave`, `organization`, `platform`, `rbac`, `tenancy`, `testui`) |
 | Kod satırı (migration hariç) | **11.896** |
 | Kod satırı (migration dahil) | **17.307** |
-| Test satırı | **10.813** (20 test dosyası, **473 test**) |
+| Test satırı | **10.813** (19 test dosyası, **462** `def test_` fonksiyonu → pytest sonucu **473 test**; parametreli testler dahil) |
 | Migration | **49** |
 | Model | **43** (leave 11, organization 9, rbac 8, accounts 7, common 4, audit 2, tenancy 2) |
-| İzin kodu | **38** / 12 modül (`tenant` 2, `user` 2, `role` 2, `org` 3, `employee` 5, `leave` 8, `shift` 3, `attendance` 2, `document` 4, `audit` 1, `billing` 1, `platform` 5) |
+| İzin kodu | **39** / 12 modül — **33 kiracı** (`leave` 8, `employee` 5, `document` 4, `org` 3, `shift` 3, `tenant` 2, `user` 2, `role` 2, `attendance` 2, `audit` 1, `billing` 1) + **6 platform** (`platform.*`); canlı DB'den doğrulandı: `hr.permissions` = 39 satır (33 kiracı + 6 platform) |
 | Varsayılan rol | **5** (`tenant_admin`, `tenant_officer`, `hr_manager`, `dept_manager`, `employee`) |
 | Doküman | 11 dosya, ~9.400 satır (`AUTHORIZATION` 2.086, `CHANGELOG` 3.158, `DATABASE` 952, `SECURITY` 749, `ARCHITECTURE` 666 …) |
 
@@ -97,7 +98,7 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 
 | Yetenek | Kanıt |
 |---|---|
-| Kiracı izolasyonu + PostgreSQL RLS (FORCE) | `hr.*` tablolar `tenant_id` + politika; `verify_fresh_install.sh` RLS adımları |
+| Kiracı izolasyonu + PostgreSQL RLS (FORCE) | Ölçüldü (canlı DB): `hr`+`public` şemasında **33 tablo**, bunların **19**'unda `relrowsecurity` açık, tek politika `tenant_isolation` (`USING`/`WITH CHECK` = `hr.current_tenant_id()`); `hr.*` tablolar `tenant_id` + politika; `verify_fresh_install.sh` RLS adımları |
 | Veritabanı rolleri ayrımı (owner/app/platform) | `scripts/bootstrap.sh`, `scripts/02_grant_app_privileges.sql`, `tests/test_database_roles.py` |
 | Kimlik doğrulama (oturum + API token) | `apps/accounts`, `apps/platform`; `tests/test_api_auth.py`, `test_api_tokens_db_guards.py` |
 | RBAC + organizasyon kapsamı + self-elevation yasağı | `apps/rbac/services/roles.py`, `tests/test_rbac_scope_m7_m9.py` |
@@ -125,7 +126,7 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 | Manager self service | ekip görünürlüğü + izin onayı + ekip bakiyesi | ekip takvimi, fazla mesai onayı, vardiya, değişiklik talepleri |
 | Dashboard | panel kartları (toplam/izinde/yaklaşan/bekleyen/kritik bakiye) | görev, belge, deneme süresi, sözleşme, bordro kartları |
 | Raporlama | ekran içi tablolar + filtreler | merkezî export servisi, XLSX, asınk üretim, güvenli indirme |
-| Yetki kataloğu ↔ modül | 38 izin kodu (shift/attendance/document dahil) | ilgili modüller yok (bkz. §1.2 notu) |
+| Yetki kataloğu ↔ modül | **39** izin kodu (33 kiracı + 6 platform; `shift`/`attendance`/`document` izinleri var) | ilgili modüller yok (bkz. §1.2 notu) |
 | Uluslararasılaştırma | `USE_TZ`, tek TZ; Türkçe metinler | i18n altyapısı, çoklu dil, çoklu para birimi |
 
 **Sınıf 3 — Yalnız planlanmış (tasarım var/başlanmadı)**
@@ -157,6 +158,23 @@ nesne depolama (S3) · kur dönüşümü · planlı/paylaşımlı raporlar · mi
 7. **Çıkış süreci** — `terminated` durumu **hiç yazılmıyor**; erişim kapatma akışı yok (P9).
 
 ---
+
+**Ölçülen altyapı doğrulamaları (2026-09-13, canlı DB + kod okuması)**
+
+| Ölçüm | Sonuç | Kanıt |
+|---|---|---|
+| `hr.permissions` satırı | **39** (33 kiracı + 6 platform) | `SELECT count(*) …` (canlı DB) |
+| RLS açık tablo | **19** / 33 tablo | `pg_class.relrowsecurity` (canlı DB) |
+| Varsayılan kiracı rolleri | 5 (`tenant_admin` 33, `hr_manager` 22, `tenant_officer` 21, `dept_manager` 16 — UNIT, `employee` 8 — SELF) | `permission_catalog.py:118-228` |
+| Platform rolleri | 2 kapalı küme (`superadmin` 6, `platform_admin` 4) | `apps/platform/constants.py` |
+| Django Admin | **yok** (OD19 kapalı; `/admin/` route yok) | `tests/test_od19_django_admin_kapali.py` |
+| Throttle oranları | `auth` **10/dk**, `user` 1000/sa, `anon` 60/dk | `config/settings.py:256-260` |
+| Kuyruk | django-q2 kurulu + `Q_CLUSTER` yapılandırılmış, **görev yok** | `settings.py:274-285`, `pyproject.toml:20` |
+| Dosya deposu | `STORAGE_S3_*` ayarlı, storage backend/boto3 **yok** | `settings.py:300-309` |
+| E-posta | SMTP ayarlı, `send_mail`/`EmailMessage` çağrısı **yok** | grep → 0 |
+| i18n | `LANGUAGE_CODE="tr"`, `USE_I18N=True`, `locale/` **yok** | `settings.py:329-334` |
+| Yedekleme betiği | `scripts/` içinde pg_dump/pg_restore **yok** (yalnız plan) | `docs/ARCHITECTURE.md` yedekleme bölümü |
+| Para birimi ayarı | **YOK** (`billing.manage` izni var, currency alanı/ayarı yok) | grep → 0 |
 
 ## 2. Modül haritası (bounded context'ler)
 
@@ -450,6 +468,12 @@ YOKTUR** (yalnız `status` alanı ve `termination_date` kolonu var) — bu turda
 SMTP backend + sağlayıcı bağımsız relay, gönderim **kuyruk üzerinden**, şablonlar kodda, TR/EN
 hedeflenir, e-postaya **kişisel veri yazılmaz**). `config/settings.py` bu ayarları zaten içerir
 (`EMAIL_BACKEND` konsol/SMTP, `EMAIL_HOST*`, `DEFAULT_FROM_EMAIL`).
+**Ölçüldü (2026-09-13):** `django-q2>=1.10` **kurulu** ve `Q_CLUSTER` yapılandırılmış
+(`config/settings.py:274-285`; `max_attempts` 3, `retry` 600 s, `save_limit` 500,
+`catch_up` False), ancak **hiçbir görev kuyruğa atılmıyor**. `sync: DEBUG` olduğu için
+geliştirmede görevler istek içinde **senkron** çalışır (test edilebilir), üretimde worker
+süreci çalıştırılmalıdır (`manage.py qcluster`) — bu ayrım testlerde ve `verify_fresh_install.sh`
+adımlarında dikkate alınmalıdır.
 
 ### 7.1 Mimari: **outbox** deseni (zorunlu)
 
@@ -1350,7 +1374,7 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 | **Dosya depolama** | **Karar VAR, kod yok**: `docs/ARCHITECTURE.md` §9 = **S3 uyumlu özel nesne depolama + boto3**, ön imzalı URL, `tenant/<tenant_id>/<kategori>/<uuid>`; geliştirmede yerel FS. `config/settings.py` içinde `STORAGE_S3_*` + `STORAGE_SIGNED_URL_TTL_SECONDS` mevcut (ölçüldü) | P3: bu karar uygulanır; path traversal/SSRF koruması, dosya adı sanitize, sha256, kota |
 | **Yedek/geri yükleme** | `docs/ARCHITECTURE.md`: **pgBackRest veya `pg_dump` → nesne depolama, şifreli**; "geri yükleme denenmeden yedek yok sayılır"; belge deposunda **sürümleme + yaşam döngüsü** | Günlük tam yedek + WAL arşivi; **geri yükleme tatbikatı** çeyrek yılda bir |
 | **Observability** | Django log; üretim hedefi `docs/ARCHITECTURE.md` §12: stdout → **journald** (+ Sentry); audit'ten **ayrı** | Yapılandırılmış log, `request_id`, yavaş sorgu uyarısı; **PII loglanmaz** |
-| **Queue/worker** | **Karar VAR, kurulu değil**: `docs/ARCHITECTURE.md` §10 = **django-q2 + ORM broker** (ayrı broker süreci yok); kodda kullanılmıyor, bağımlılık olarak eklenmemiş (ölçüldü) | P2: bu karar uygulanır — outbox + django-q2 worker; ayrı kuyruk altyapısı **kurulmaz** |
+| **Queue/worker** | **Kurulu ve yapılandırılmış, kullanılmıyor**: `django-q2>=1.10` bağımlılıkta (`pyproject.toml:20`), `Q_CLUSTER` `config/settings.py:274-285` (ORM broker, `max_attempts` 3, `retry` 600 s, `save_limit` 500, `catch_up` False, `sync: DEBUG`); **enqueue edilen görev yok** (ölçüldü). `sync: DEBUG` sayesinde geliştirmede görevler istek içinde senkron çalışır → test edilebilir, üretimde worker süreci gerekir | P2: outbox + mevcut django-q2 yapılandırması kullanılır; ayrı kuyruk altyapısı **kurulmaz** |
 | **Rate limits** | **DRF throttling + DB cache** (`ARCHITECTURE.md` §6.1); `/auth/login` ve token uçlarında `throttle_scope='auth'` (kanıt: `apps/accounts/views.py`) | Export/belge yükleme/mail tetikleme uçlarına ayrı scope; tenant bazlı kota (P3) |
 | **API pagination** | Test UI uçları sabit limitli liste | Genel API standardı: cursor/sayfa tabanlı; rapor uçları asınk |
 | **Async exports** | **YOK** | P8: eşik üstü raporlar worker'a; ilerleme durumu ve bildirim |

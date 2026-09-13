@@ -3,6 +3,37 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.35.1] — 2026-09-13 — Doküman düzeltmesi: ölçüm sayıları (kod değişmedi)
+
+**Kapsam:** yine **yalnız doküman**. Bağımsız envanter ajanının raporu ile yapılan çapraz
+kontrol, `docs/HR_ROADMAP.md` §1'deki üç ölçüm değerini düzeltmeyi gerektirdi. Kod, migration,
+DB ve uç **değişmedi** (`makemigrations --check` temiz; `git diff --stat` yalnız `docs/` + `README.md`).
+
+### DÜZELTİLDİ
+
+- **İzin kodu sayısı 38 → 39.** Önceki sayım katalog dosyasındaki regex taramasına dayanıyordu;
+  canlı DB doğrulaması `hr.permissions` = **39** (33 kiracı + 6 platform) gösterdi. Modül
+  kırılımı ve `platform.*` listesi güncellendi.
+- **Kuyruk durumu "kurulu değil" → "kurulu ve yapılandırılmış, kullanılmıyor".** `django-q2>=1.10`
+  bağımlılıkta (`pyproject.toml:20`) ve `Q_CLUSTER` ayarlı (`config/settings.py:274-285`;
+  `max_attempts` 3, `retry` 600 s, `save_limit` 500, `catch_up` False, **`sync: DEBUG`**);
+  **hiçbir görev enqueue edilmiyor**. §0.1, §7.1 ve §24 buna göre düzeltildi; `sync: DEBUG`
+  nedeniyle geliştirmede görevlerin senkron çalıştığı ve üretimde `qcluster` gerektiği not edildi.
+- **Test ölçeği netleştirildi:** 19 test dosyası, **462** `def test_` fonksiyonu → pytest sonucu
+  **473 test** (parametreli testler dahil). Önceki "20 test dosyası" ifadesi yanlıştı.
+- **§1.3'e ölçülen altyapı tablosu eklendi:** 19/33 tabloda RLS açık (`pg_class.relrowsecurity`,
+  canlı DB), 5 varsayılan kiracı rolü (+2 platform rolü), Django Admin yok (OD19), throttle
+  oranları (`auth` 10/dk, `user` 1000/sa, `anon` 60/dk), dosya deposu/e-posta/i18n/yedekleme/para
+  birimi boşlukları.
+- **`README.md`:** "97 test yeşil" ifadesi **bayattı** → "473 test yeşil (2026-09-13 ölçümü)".
+
+### DOĞRULANAN
+
+- Ölçümler bağımsız bir envanter ajanı raporuyla çapraz kontrol edildi; uyuşmayan üç nokta
+  (izin sayısı, kuyruk durumu, test dosyası sayısı) **koddan ve canlı DB'den** yeniden ölçülüp
+  düzeltildi. Canlı DB yalnız **okundu** (`SELECT count(*)`); hiçbir yazma yapılmadı.
+- `makemigrations --check --dry-run` → `No changes detected`; `scripts/run_tests.sh` → 473 passed.
+
 ## [0.35.0] — 2026-09-12 — Dokümantasyon: uçtan uca HR ürün mimarisi ve geliştirme yol haritası
 
 **Kapsam:** **yalnız doküman.** Bu sürümde **hiçbir kod, migration, veritabanı değişikliği veya
