@@ -258,15 +258,22 @@ def test_m7_katalog_ile_donmus_kopya_ayrismaz() -> None:
     m14_delta = {"leave.request.cancel", "leave.balance.read"}
     p1a_dept_manager_delta = {"employee.history.read"}
     p1a_tenant_officer_delta = {"employee.history.read", "org.workplace.read"}
+    # P5a V1 (fazla mesai talep/onay temeli): dört kod (bkz. `rbac/0013_p5a_overtime_permissions`).
+    p5a_delta = {
+        "overtime.request.create",
+        "overtime.request.read",
+        "overtime.request.approve",
+        "overtime.request.cancel",
+    }
 
     assert (
         set(DEPT_MANAGER_PERMISSIONS) - set(m7.DEPT_MANAGER_PERMISSIONS)
-        == m14_delta | p1a_dept_manager_delta
+        == m14_delta | p1a_dept_manager_delta | p5a_delta
     )
     assert set(m7.DEPT_MANAGER_PERMISSIONS) - set(DEPT_MANAGER_PERMISSIONS) == set()
     assert (
         set(TENANT_OFFICER_PERMISSIONS) - set(m7.TENANT_OFFICER_PERMISSIONS)
-        == m14_delta | p1a_tenant_officer_delta
+        == m14_delta | p1a_tenant_officer_delta | p5a_delta
     )
     assert set(m7.TENANT_OFFICER_PERMISSIONS) - set(TENANT_OFFICER_PERMISSIONS) == set()
     assert LEGACY_ROLE_CODE_MAP == {m7.LEGACY_ROLE_CODE: m7.TARGET_ROLE_CODE}

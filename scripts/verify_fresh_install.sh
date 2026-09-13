@@ -360,14 +360,14 @@ if [ "$(tablo_var "$FRESH_DB" "hr.roles")" = "$VAR" ]; then
     bekle "kapsam tipleri (M8: OD5)" \
         "$(sql_demo "SELECT string_agg(code || ':' || scope_type, ',' ORDER BY code) FROM hr.roles")" \
         "dept_manager:UNIT,employee:SELF,hr_manager:TENANT,tenant_admin:TENANT,tenant_officer:TENANT"
-    # İzin sayıları M14 (izin modülü) + P1-A (OD61) sonrası hedef katalogtur: kiracı
-    # tarafı kod sayısı 29 → 33 → 41 (platform.* kodları kiracı rollerine verilmez).
-    bekle "tenant_admin izinleri (hedef katalog, M14+P1-A sonrası)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "41"
-    bekle "dept_manager hedef izin seti (§6.2 DY, M14+P1-A sonrası)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "17"
-    bekle "tenant_officer hedef izin seti (§6.2 ŞYT, M14+P1-A sonrası)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "23"
+    # İzin sayıları M14 + P1-A (OD61) + P5a V1 (fazla mesai) sonrası hedef katalogtur:
+    # kiracı tarafı kod sayısı 29 → 33 → 41 → 45 (platform.* kodları kiracı rollerine verilmez).
+    bekle "tenant_admin izinleri (hedef katalog, P5a sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "45"
+    bekle "dept_manager hedef izin seti (§6.2 DY, P5a sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "21"
+    bekle "tenant_officer hedef izin seti (§6.2 ŞYT, P5a sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "27"
     bekle "scope_type kapalı küme kısıtı (M8)" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.roles'::regclass AND conname='roles_scope_type_valid'")" "1"
     bekle "scope_org_unit_id kolonu (M9)" \
@@ -391,8 +391,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.departments")" = "$VAR" ]; then
         bekle "hr.$tablo tenant_isolation politikası" \
             "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_policies WHERE schemaname='hr' AND tablename='$tablo' AND policyname='tenant_isolation'")" "1"
     done
-    bekle "hr şemasında FORCE RLS tablo sayısı (P1-A sonrası: 23)" \
-        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "23"
+    bekle "hr şemasında FORCE RLS tablo sayısı (P5a sonrası: 24)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "24"
     bekle "OD27: company_id/legal_entity_id kolonu YOK" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND column_name IN ('company_id','legal_entity_id')")" "0"
     bekle "M9 tamamlama: user_roles.scope_org_unit_id → departments FK" \
@@ -446,8 +446,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.leave_types")" = "$VAR" ]; then
             "$(sql_deger "$FRESH_DB" "SELECT ((c.relrowsecurity AND c.relforcerowsecurity)::text || ':' || (SELECT count(*) FROM pg_policies p WHERE p.schemaname='hr' AND p.tablename='$tablo' AND p.policyname='tenant_isolation')) FROM pg_class c WHERE c.oid='hr.$tablo'::regclass")" \
             "true:1"
     done
-    bekle "kiracı verisi taşıyan FORCE RLS tablosu (12 → 19 → 23)" \
-        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "23"
+    bekle "kiracı verisi taşıyan FORCE RLS tablosu (12 → 19 → 23 → 24)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "24"
 
     # M14 veritabanı guard'ları (döngü/negatif bakiye/durum makinesi/onay sırası).
     for tetik in trg_leave_policy_rules_overlap trg_leave_balances_nonnegative \
@@ -484,8 +484,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.leave_types")" = "$VAR" ]; then
     # İzin kataloğu: M14 ile eklenen dört kod ve matris izin sayıları.
     bekle "izin kataloğu M14 kodları" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions WHERE code IN ('leave.request.cancel','leave.request.approve.override','leave.balance.read','leave.balance.manage')")" "4"
-    bekle "izin kataloğu toplam (P1-A sonrası)" "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")" "47"
-    for cift in "tenant_admin:41" "tenant_officer:23" "hr_manager:30" "dept_manager:17" "employee:8"; do
+    bekle "izin kataloğu toplam (P5a sonrası)" "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")" "51"
+    for cift in "tenant_admin:45" "tenant_officer:27" "hr_manager:33" "dept_manager:21" "employee:11"; do
         rol="${cift%%:*}"
         adet="${cift##*:}"
         bekle "varsayılan rol izin sayısı ($rol)" \
@@ -882,12 +882,12 @@ P1A_INDEX_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE
 bekle "P1-A index sayısı (6c-11)" "$P1A_INDEX_SAYISI" "8"
 
 RLS_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity AND n.nspname IN ('hr','public')")"
-bekle "RLS + FORCE tablo sayısı (6c-11)" "$RLS_SAYISI" "23"
+bekle "RLS + FORCE tablo sayısı (6c-11 + P5a)" "$RLS_SAYISI" "24"
 
 IZIN_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")"
-bekle "izin katalogu toplamı (6c-11)" "$IZIN_SAYISI" "47"
+bekle "izin katalogu toplamı (6c-11 + P5a)" "$IZIN_SAYISI" "51"
 
-for rol_ve_sayi in "tenant_admin:41" "hr_manager:30" "tenant_officer:23" "dept_manager:17" "employee:8"; do
+for rol_ve_sayi in "tenant_admin:45" "hr_manager:33" "tenant_officer:27" "dept_manager:21" "employee:11"; do
     ROL="${rol_ve_sayi%%:*}"; BEKLENEN="${rol_ve_sayi##*:}"
     SAYI="$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id=rp.role_id WHERE r.code='$ROL' AND r.deleted_at IS NULL")"
     bekle "$ROL izin sayısı (6c-11)" "$SAYI" "$BEKLENEN"
@@ -914,6 +914,86 @@ fi
 if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$APP_ROLE'")" = "1" ]; then
     APP_DELETE="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM unnest(ARRAY['workplaces','employee_employment_terms','employee_assignments','form_field_definitions']) t(tablo) WHERE has_table_privilege('$APP_ROLE', 'hr.' || t.tablo, 'DELETE')")"
     bekle "uygulama rolünde DELETE yok (6c-11)" "$APP_DELETE" "0"
+fi
+
+# --- 6f/8) P5a V1: fazla mesai (talep + onay temeli) + izin hakkı akışı --------
+# Kapsam: tablo/RLS/FORCE/politika, CHECK'ler, durum + kiracı guard tetikleyicileri,
+# uygulama rolünün **asgari** yetkisi (SELECT/INSERT/UPDATE; DELETE/TRUNCATE yok),
+# platform rolünün erişimsizliği, izin kodları + rol izin sayıları, migration zinciri
+# ve uçtan uca sonda (izin hakkı yazımı + fazla mesai onayı; idempotent).
+bilgi "P5a V1 (6f): fazla mesai tablosu, guard'lar, yetkiler, izin kodları, sonda"
+
+if [ "$(tablo_var "$FRESH_DB" "hr.overtime_requests")" = "$VAR" ]; then
+    bekle "hr.overtime_requests RLS + FORCE + politika" \
+        "$(sql_deger "$FRESH_DB" "SELECT ((c.relrowsecurity AND c.relforcerowsecurity)::text || ':' || (SELECT count(*) FROM pg_policies p WHERE p.schemaname='hr' AND p.tablename='overtime_requests' AND p.policyname='tenant_isolation')) FROM pg_class c WHERE c.oid='hr.overtime_requests'::regclass")" \
+        "true:1"
+
+    # CHECK kısıtları: Django Meta kısıtları + ham SQL ile eklenen iki kısıt
+    # (açıklama uzunluğu, sunucu süre hesabı uyumu).
+    P5A_CHECK="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE connamespace='hr'::regnamespace AND conname IN ('overtime_requests_time_order','overtime_requests_minutes_positive','overtime_requests_minutes_max','overtime_requests_status_valid','overtime_requests_compensation_valid','overtime_requests_cancel_reason','overtime_requests_description_length','overtime_requests_minutes_match')")"
+    bekle "overtime CHECK kısıtı sayısı (6f)" "$P5A_CHECK" "8"
+    bekle "süre uyum kısıtı (sunucu hesabı = DB)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conname='overtime_requests_minutes_match' AND pg_get_constraintdef(oid) LIKE '%total_minutes%'")" "1"
+    bekle "açıklama uzunluk kısıtı (>= 5)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conname='overtime_requests_description_length'")" "1"
+    bekle "aynı gün/aralık kısmi benzersizliği" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname='overtime_requests_slot_uniq'")" "1"
+
+    for tetik in trg_overtime_requests_state trg_overtime_requests_employee_id_same_tenant \
+        trg_overtime_requests_created_by_id_same_tenant trg_overtime_requests_decided_by_id_same_tenant; do
+        bekle "fazla mesai tetikleyicisi $tetik" \
+            "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger WHERE tgname='$tetik' AND NOT tgisinternal")" "1"
+    done
+
+    # Uygulama rolü: asgari DML (SELECT/INSERT/UPDATE), silme yok (OD21 soft-delete).
+    bekle "app rolü hr.overtime_requests SELECT/INSERT/UPDATE" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$APP_ROLE','hr.overtime_requests','SELECT')::text || has_table_privilege('$APP_ROLE','hr.overtime_requests','INSERT')::text || has_table_privilege('$APP_ROLE','hr.overtime_requests','UPDATE')::text")" \
+        "truetruetrue"
+    bekle "app rolü hr.overtime_requests DELETE/TRUNCATE ALAMAZ" \
+        "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$APP_ROLE','hr.overtime_requests','DELETE')::text || has_table_privilege('$APP_ROLE','hr.overtime_requests','TRUNCATE')::text")" \
+        "falsefalse"
+    if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$PLATFORM_ROLE'")" = "1" ]; then
+        bekle "platform rolü hr.overtime_requests erişemez" \
+            "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','hr.overtime_requests','SELECT')::text || has_table_privilege('$PLATFORM_ROLE','hr.overtime_requests','INSERT')::text || has_table_privilege('$PLATFORM_ROLE','hr.overtime_requests','UPDATE')::text || has_table_privilege('$PLATFORM_ROLE','hr.overtime_requests','DELETE')::text")" \
+            "falsefalsefalsefalse"
+    else
+        bilgi "ATLANDI platform rolü yok: $PLATFORM_ROLE (6f)"
+    fi
+
+    # İzin kodları + rol dağılımı (P5a deltası).
+    bekle "fazla mesai izin kodları (4)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions WHERE code IN ('overtime.request.create','overtime.request.read','overtime.request.approve','overtime.request.cancel')")" "4"
+    for cift in "tenant_admin:45" "hr_manager:33" "tenant_officer:27" "dept_manager:21" "employee:11"; do
+        rol="${cift%%:*}"; adet="${cift##*:}"
+        bekle "P5a sonrası rol izin sayısı ($rol)" \
+            "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id=rp.role_id WHERE r.code='$rol' AND r.deleted_at IS NULL")" "$adet"
+    done
+    # Özel role verilebilirlik: onay izni devredilebilir (OD9 listesinde değildir).
+    bekle "overtime.request.approve devredilemez DEĞİL (OD9)" \
+        "$(sql_demo "SELECT count(*) FROM hr.permissions WHERE code='overtime.request.approve'")" "1"
+
+    # İzin hakkı: dönem başına tek hakediş kaydı (kısmi benzersizlik) korunuyor.
+    bekle "izin defteri dönem-hakediş benzersizliği (entitlement invariant)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname='leave_balance_entries_accrual_uniq'")" "1"
+
+    # Migration zinciri: P5a V1 migration'ları uygulanmış olmalı (sıfırdan kurulum).
+    P5A_MIGRATION="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.django_migrations WHERE (app='overtime' AND name IN ('0001_p5a_overtime_schema','0002_p5a_overtime_guards','0003_p5a_overtime_rls','0004_p5a_overtime_same_tenant_guards')) OR (app='rbac' AND name='0013_p5a_overtime_permissions') OR (app='leave' AND name='0005_p5a_overtime_approval_subject')")"
+    bekle "P5a V1 migration sayısı (6f)" "$P5A_MIGRATION" "6"
+    bekle "onay konusu 'overtime_request' kolonu (approval_steps)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND table_name='approval_steps' AND column_name='subject_kind'")" "1"
+
+    # Uçtan uca sonda (idempotent): izin hakkı + fazla mesai onayı.
+    FM1="$(django_owner manage.py shell < scripts/_overtime_probe.py 2>&1 | tail -1)"
+    FM2="$(django_owner manage.py shell < scripts/_overtime_probe.py 2>&1 | tail -1)"
+    kontrol_metni "fazla mesai sondası: izin hakkı yazıldı" "$FM1" "hak=14.0 kalan=14.0"
+    kontrol_metni "fazla mesai sondası: tek hakediş kaydı" "$FM1" "accrual=1"
+    kontrol_metni "fazla mesai sondası: talep onaylandı" "$FM1" "fm=approved"
+    kontrol_metni "fazla mesai sondası: süre sunucu hesabı" "$FM1" "sure=90"
+    bekle "fazla mesai sondası idempotent (ikinci çalıştırma aynı durum)" \
+        "$([ "$FM1" = "$FM2" ] && echo 1 || echo 0)" "1"
+else
+    bilgi "FAIL hr.overtime_requests tablosu YOK (P5a V1 uygulanmamış)"
+    HATA_VAR=1
 fi
 
 # --- 6c-7) Arayüz JS sözdizimi (node varsa) -----------------------------------

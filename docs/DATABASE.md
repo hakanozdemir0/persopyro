@@ -370,6 +370,68 @@ Bu veri **yerel geliştirme/duman testi** verisidir (`scripts/smoke.sh`);
 üretim verisi yoktur → veri migration'ları için gerçek veri hacmi riski düşüktür,
 ama plan bunu varsaymamalıdır.
 
+## A.11 P5a V1 sonrası güncel ölçüm (2026-09-13) — fazla mesai + izin hakkı
+
+> **Not:** A.1/A.2 kartları M-serisi ölçümleridir; A.10 (P1-A) ve bu bölüm (P5a V1)
+> **güncel** değerleri verir. Çelişki varsa bu bölüm geçerlidir.
+
+**Genel (canlı geliştirme veritabanı, salt okuma):**
+
+| Ölçüm | Değer |
+|---|---|
+| `hr`+`public` şemasında tablo | **38** (P1-A: 37) |
+| RLS + FORCE etkin tablo | **24** (23) |
+| İzin kataloğu (`hr.permissions`) | **51** (45 kiracı + 6 platform; P1-A: 47) |
+| Yeni tablo | `hr.overtime_requests` |
+| `hr` şemasında (internal olmayan) tetikleyici | **61** (P5a: +4) |
+| Uygulanan yeni migration | `overtime/0001–0004`, `leave/0005`, `rbac/0013` |
+
+**Tenant bazlı (kiracı bağlamı kurularak; `demo`):**
+
+| Ölçüm | Değer |
+|---|---|
+| Rol izin sayıları | `tenant_admin` 45 · `hr_manager` 33 · `tenant_officer` 27 · `dept_manager` 21 · `employee` 11 |
+
+### `hr.overtime_requests` (P5a V1 ✅)
+
+- **PURPOSE:** Fazla mesai bildirimi ve onay durumu (V1: talep + onay; kural/katsayı/ücret yok).
+- **PRIMARY KEY:** `id` (uuid) · **FOREIGN KEYS:** `tenant_id → tenants.id`,
+  `employee_id → employees.id`, `created_by_id/decided_by_id → users.id`
+- **TENANT ISOLATION:** `tenant_id = hr.current_tenant_id()` (tek politika `tenant_isolation`);
+  üç yabancı anahtar için **kiracılar arası guard tetikleyicisi** (`overtime/0004`)
+- **PERSONAL DATA LEVEL:** K0 (çalışan/karar referansı; serbest metin `description` ≤ 500)
+- **RLS:** ✅ etkin **+ FORCE** · **AUDIT REQUIREMENT:** yüksek (oluşturma/karar/iptal)
+- **Kolonlar (15):** `id, created_at, updated_at, deleted_at, work_date, start_time, end_time,
+  total_minutes, description, status, compensation_type, decided_at, decided_by_id,
+  canceled_at, cancel_reason, employee_id, tenant_id, created_by_id`
+- **Süre kaynağı:** `total_minutes` **yalnız sunucuda** `end_time - start_time` ile hesaplanır;
+  DB bunu `overtime_requests_minutes_match` `CHECK`'i ile **zorlar** (uygulama hatası DB'ye
+  yansımaz).
+- **CHECK kısıtları (8):** `time_order` (`end > start`), `minutes_positive` (> 0),
+  `minutes_max` (≤ 960), `status_valid` (`pending|approved|rejected|canceled`),
+  `compensation_valid` (boş veya `pay|time_off`), `cancel_reason` (iptalde zorunlu),
+  `description_length` (≥ 5), `minutes_match` (yukarıdaki uyum).
+- **Durum makinesi (DB tetikleyicisi `trg_overtime_requests_state`):** yalnız `pending` açılış;
+  `pending → approved|rejected|canceled`; terminal durumdan çıkış yok.
+- **İndeks/kısıt:** kısmi benzersizlik `overtime_requests_slot_uniq`
+  (`tenant, employee, work_date, start_time` — `deleted_at IS NULL`), indeksler
+  `(tenant, employee, work_date)` ve `(tenant, status)`.
+- **Yetki (ölçüldü):** uygulama rolü `persopyro_app` → `SELECT/INSERT/UPDATE` var,
+  `DELETE/TRUNCATE` **yok** (soft delete: OD21); `persopyro_platform` → erişim **yok**.
+- **Onay:** `hr.approval_steps` yeniden kullanılır (`subject_kind='overtime_request'`,
+  `leave/0005`); onay sırası birincil yönetici → İK (OD39 ile aynı model, OD62).
+
+### İzin hakkı (entitlement) — P5a V1 değişiklikleri
+
+- **Servis:** `set_leave_entitlement(actor, employee, leave_type, period_year, days, reason)` —
+  dönemde `accrual` kaydı yoksa **hakediş** yazar, varsa **gerekçeli düzeltme** (`adjustment`);
+  fark sıfırsa **hiçbir satır yazılmaz**. `reason` ≥ 5 karakter (servis + DB), aktör ve denetim
+  kaydı zorunlu; `leave.balance.manage` ∧ organizasyon kapsamı kapısı vardır.
+- **Değişmez (invariant):** bir bakiyede dönem başına **tek** `accrual` kaydı
+  (`leave_balance_entries_accrual_uniq`, kısmi benzersizlik) — manuel hak tanımlama, yıllık
+  hakediş ile **çakışmaz/çoğalmaz**. `scripts/verify_fresh_install.sh` (6f) ve
+  `tests/test_p5a_ui_entitlement.py` bunu ölçer.
+
 ---
 
 # B) HEDEF ŞEMA

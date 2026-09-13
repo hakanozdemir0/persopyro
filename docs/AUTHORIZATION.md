@@ -576,6 +576,43 @@ kodu + kapsam + adım sahipliği gerekir. Sıra atlanamaz (DB guard'ı + servis
 `current_step` seçimi); yetkili **override** (`leave.request.approve.override`)
 adımları kayıtlı gerekçeyle atlar ve denetim kaydı yazar.
 
+#### E-2. Fazla mesai (overtime) — P5a V1 ✅
+
+| İzin kodu | SA | PA | ŞİRKET YÖN. | ŞİRKET YETK. | DEPT. YÖN. | ÇALIŞAN |
+|---|---|---|---|---|---|---|
+| `overtime.request.read` | — | — | ● (TENANT) | ● (TENANT) | ● (UNIT) | ○ (SELF) |
+| `overtime.request.create` | — | — | ● (TENANT) | ● (TENANT) | ● (UNIT, kendi adına) | ○ (SELF) |
+| `overtime.request.approve` | — | — | ● (TENANT) | ● (TENANT) | ● (UNIT + ASSIGNED + SEPARATE_ACTOR) | — |
+| `overtime.request.cancel` | — | — | ● | ● | ● (UNIT) | ○ (SELF, onay öncesi) |
+
+**Uygulama (P5a V1 ✅, 2026-09-13):** dört kod katalogdadır
+(`rbac/0013_p5a_overtime_permissions`; `overtime.request.create|read|approve|cancel`).
+Yol haritası P5a'nın önerdiği `overtime.rule.manage` ve `overtime.balance.read`
+**bilinçli olarak eklenmedi** — kural motoru ve izin (TIME_OFF) karşılığı yazılmadığı için
+bu kodlar boş yetki olurdu; faz başlarken eklenecek. Ölçülen rol bağları (demo kiracısı):
+
+| Rol | Fazla mesai izinleri | Not |
+|---|---|---|
+| `tenant_admin` | 4/4 | — |
+| `tenant_officer` | 4/4 | — |
+| `dept_manager` | 4/4 | `UNIT` kapsamı: yalnız kendi birimi (ve alt birimleri) |
+| `hr_manager` | read, approve, cancel | **`create` yok**: V1'de talep **yalnız kendi adına** açılır; İK'nın çalışan kaydı olmadığından bu kod kullanılamazdı |
+| `employee` | create, read, cancel | **`approve` yok**: `SELF` kapsamda onay anlamsız + `SEPARATE_ACTOR` zaten yasaklar |
+
+Denetim kararı (`apps/overtime/services/authorization.py`):
+
+| İşlem | Koşullar (uygulanan) |
+|---|---|
+| Bildirim oluşturma | `overtime.request.create` ∧ aynı kiracı ∧ **yalnız kendi çalışan kaydı** (`SELF`); çalışan aktif olmalı; süre sunucuda |
+| Görme | `overtime.request.read` ∧ aynı kiracı ∧ (`SELF` ∨ organizasyon kapsamı ∨ karar verebildiği adım) |
+| Onay/red | `overtime.request.approve` ∧ aynı kiracı ∧ (`ASSIGNED` ∨ **TENANT** kapsam) ∧ `SEPARATE_ACTOR` (kendi talebine karar veremez) ∧ kapsam |
+| İptal | `overtime.request.cancel` ∧ aynı kiracı ∧ (`SELF` yalnız onay öncesi ∨ kapsam); gerekçe zorunlu |
+
+**Onay yönlendirmesi:** izin modülüyle **aynı** model ve aynı altyapı (`hr.approval_steps`,
+`subject_kind='overtime_request'`): (1) birincil yönetici (`SEPARATE_ACTOR` ihlalinde atlanır),
+(2) yetkili rol adımı. Tenant geneli yetkili (ŞİRKET YÖN.) uygun adımda karar verebilir — bu
+davranış izin modülüyle **birebir aynıdır** (OD62).
+
 #### F. Vardiya ve devam
 
 | İzin kodu | SA | PA | ŞİRKET YÖN. | ŞİRKET YETK. | DEPT. YÖN. | ÇALIŞAN |
@@ -948,7 +985,7 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-13):** **OD1–OD7, OD9, OD16, OD19–OD31, OD35–OD38, OD41–OD43, OD58–OD61 KAPATILDI**; **OD8, OD10, OD12–OD15, OD17, OD18 AÇIK** (P1 LATER); **OD11 OBSOLETE**.
+**Durum (2026-09-13):** **OD1–OD7, OD9, OD16, OD19–OD31, OD35–OD38, OD41–OD43, OD58–OD64 KAPATILDI**; **OD8, OD10, OD12–OD15, OD17, OD18 AÇIK** (P1 LATER); **OD11 OBSOLETE**.
 Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
@@ -957,6 +994,8 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
 > **OD32–OD57** numaralı öneri listesi vardır. **2026-09-13 P1 turunda** bunlardan
 > **OD35, OD36, OD37, OD38, OD41, OD42, OD43 kapatılmış** ve bu dosyanın **§15**'ine
 > işlenmiştir; ayrıca **OD58–OD61** bu turda açılıp kapatılmıştır.
+> **P5a V1 turunda (2026-09-13)** **OD62–OD64** açılıp kapatılmıştır (fazla mesai onay modeli,
+> karşılık tipinin boş kalması, gece yarısı sınırı); bkz. §16.8.
 > **Hâlâ öneri olanlar:** OD32–OD34, OD39–OD40, OD44–OD57 (ilgili faz başlarken kapatılır).
 > **Durum (2026-09-13):** OD6, OD7, OD9, OD16, OD29, OD30, OD31, OD35–OD38, OD41–OD43,
 > OD58–OD61 **KAPALI**; OD8, OD10, OD12, OD13, OD14, OD15, OD17, OD18 **AÇIK (LATER —
@@ -2499,6 +2538,12 @@ OD29, OD30 ve OD31 yukarıdaki bölümlerinde **KAPALI** olarak işaretlenmişti
 `OD53–OD54` (ülke kuralı) · `OD55–OD56` (raporlama) · `OD57` (arşiv verisi).
 Bunlar **P1'i bloklamaz**; ilgili fazın başında kapatılır. Kaynak: `docs/HR_ROADMAP.md` §26.
 
+> **P5a V1 notu (2026-09-13):** `OD62–OD64` bu turda **açılıp kapatıldı** (V1 kararları).
+> Yukarıdaki listeden `OD32` (TIME_OFF yazımı), `OD33` (`overtime.pay.read`), `OD34` (katsayı
+> snapshot anı) ve `OD44` (yuvarlama) **V1 kapsamı dışındadır** ve açık kalır — `OD39` (onay
+> sırası) ile `OD40` (`attendance_records.overtime_minutes` ilişkisi) **V1'de uygulanan
+> davranışla tutarlıdır**: onay sırası OD62 ile kesinleşti, devam kaydı bağı V1'de yoktur.
+
 ### 16.6 P1 sonrası açık kalan kalan iş (doküman notu)
 
 - **Self-service düzenleme (item 13):** **LATER** — P1'de çalışan yalnız okur; kişisel veri
@@ -2508,3 +2553,51 @@ Bunlar **P1'i bloklamaz**; ilgili fazın başında kapatılır. Kaynak: `docs/HR
   bağlanır. P1 formunda "belge" bölümü **yalnız bilgilendirme** olarak yer alabilir.
 - **P1'de ücret alanı yok (item 18):** maaş/ücret P6 `hr.employee_compensation` ile gelir;
   P1 formunda ücret bölümü **gösterilmez** (bağımlılık notu: P6).
+
+---
+
+## 16.8 P5a V1 kararları (KAPALI ✅ — 2026-09-13)
+
+Fazla mesai V1 uygulamasında ortaya çıkan üç davranış sorusu **karara bağlanmıştır**;
+yeni açık karar (❓) **bırakılmamıştır**. Şema/kod karşılığı: `apps/overtime/`,
+`docs/DATABASE.md` A.11, `docs/HR_ROADMAP.md` §11/P5a.
+
+#### OD62 — Fazla mesai onay zinciri izin modülüyle aynı mı? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR — V1:** Onay zinciri **mevcut izin onay modeliyle aynıdır**: (1) çalışanın
+  **birincil yöneticisi** (`employee_manager`, `SEPARATE_ACTOR` ihlalinde atlanır),
+  (2) **yetkili rol** adımı. Yeni onay motoru **yazılmaz**; `hr.approval_steps`
+  yeniden kullanılır (`subject_kind='overtime_request'`).
+- **KARAR — tenant geneli yetkili:** `TENANT` kapsamlı yetkili (ŞİRKET YÖN.), adım sahibi
+  olmasa da **uygun adımda** karar verebilir (izin modülüyle birebir aynı davranış).
+  `UNIT` kapsamlı yönetici yalnız kapsamı içindeki çalışanın talebine karar verir;
+  kapsam dışı → **404**.
+- **KARAR — kendi talebine karar verilemez** (`SEPARATE_ACTOR`); çalışan şablonuna
+  `overtime.request.approve` **verilmez**.
+- **Gerekçe:** Aynı iş kuralı için iki farklı onay yolu bakım yükü ve tutarsız denetim izi
+  üretir; izin modülü üretimde çalışıyor ve OD39 önerisiyle de uyumludur.
+- **DB etkisi:** yok (mevcut `approval_steps`). **Migration:** `leave/0005` (kapalı küme
+  genişletmesi). **UI etkisi:** onay kuyruğunda adım açıklaması (`… — Yönetici (adım 1)`).
+
+#### OD63 — `compensation_type` V1'de nasıl davranır? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** Tenant politika/katsayı motoru gelene kadar `compensation_type` **NULL/boş
+  kalır** ve **arayüzde sahte `PAY`/`TIME_OFF` seçeneği gösterilmez**. Kolon kapalı
+  kümeye (`pay`|`time_off` veya boş) `CHECK` ile bağlıdır; **hiçbir hesaplama yapılmaz**.
+- **Gerekçe:** Karşılık tipi **kurala** bağlıdır (`hr.overtime_rules`, OD32/OD34);
+  kural olmadan kullanıcıya seçenek sunmak yanıltıcı olur ("desteklenmeyen sahte seçenek
+  gösterilmez" ilkesi).
+- **Migration:** yok. **Sonraki faz:** P5a kural motoru dilimi açıldığında `PAY`/`TIME_OFF`
+  kural seti ve snapshot kolonları eklenir (OD34).
+
+#### OD64 — Gece yarısını aşan fazla mesai V1'de nasıl ele alınır? — **KAPALI** ✅ (2026-09-13)
+
+- **KARAR:** V1'de **tek fazla mesai kaydı gece yarısını aşamaz** (`end_time > start_time`
+  aynı gün içinde olmalı; DB `CHECK` `overtime_requests_time_order`) ve günlük üst sınır
+  **16 saat**tir. Gece yarısını aşan çalışma **iki ayrı kayda** bölünür veya
+  bildirilmez.
+- **Gerekçe:** Vardiya/devam modülü (P4) ve çalışma takvimi olmadan gece yarısını aşan
+  aralığın hangi **iş gününe** yazılacağı belirsizdir (izin/tatil/hafta sonu etkisi);
+  yanlış güne yazmak onay ve raporlamayı bozar. Karar **vardiya/devam fazına** bırakıldı.
+- **Migration:** yok. **Sonraki faz:** P4 (`hr.shifts`, `hr.attendance_records`) ile birlikte
+  çok günlü aralık ve gün kırılımı değerlendirilir.

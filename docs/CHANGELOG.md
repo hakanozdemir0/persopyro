@@ -3,6 +3,116 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.38.0] — 2026-09-13 — P5a V1: fazla mesai talep/onay temeli + çalışan izin hakkı UX
+
+**Kapsam:** Kullanıcı testinde çıkan üç kullanılabilirlik sorununun düzeltilmesi + fazla mesai
+modülünün **V1 (talep + onay) temeli**. Tam kural/katsayı motoru, ücret (PAY) hesabı, TIME_OFF
+kredisi, devam kaydı bağı ve gece yarısını aşan kayıt bilinçli olarak **kapsam dışıdır** (aşağıda
+"KAPSAM DIŞI").
+**Baseline:** `c4794ff`, çalışma ağacı temiz, mevcut paket **473 passed** (P1-A ölçümü);
+P5a V1 sonrası **540 passed**.
+
+### EKLENEN
+
+- **`hr.overtime_requests`** (`apps/overtime`, yeni app): `employee_id`, `work_date`,
+  `start_time`, `end_time`, `total_minutes` (**sunucu hesaplar**), `description`, `status`,
+  `compensation_type` (boş kalır), `decided_at`/`decided_by`, `canceled_at`, `cancel_reason`,
+  `created_by`, audit. Kısmi benzersizlik `overtime_requests_slot_uniq` (aynı çalışan + gün +
+  başlangıç saati, silinmemiş), indeksler `(tenant, employee, work_date)` + `(tenant, status)`.
+- **DB guard'ları (savunma derinliği):** 8 `CHECK` kısıtı — `time_order` (`end > start`),
+  `minutes_positive` (> 0), `minutes_max` (≤ 960 dk = 16 saat), `status_valid` (kapalı küme),
+  `compensation_valid` (kapalı küme/boş), `cancel_reason` (zorunluluk koşulu),
+  `description_length` (≥ 5 karakter) ve **`minutes_match`** (kolondaki süre, `end - start`
+  ile birebir uyuşmalı — uygulama hatası olsa bile DB reddeder). Ayrıca durum geçişlerini
+  dayatan **state trigger** (`trg_overtime_requests_state`): yalnız `pending` açılış,
+  `pending → approved|rejected|canceled` geçişleri; terminal durumdan çıkış yok.
+- **RLS + FORCE** (`overtime/0003`): tek politika `tenant_isolation` (`USING`/`WITH CHECK`),
+  kiracılar arası FK'ler için **3 guard tetikleyicisi** (`0004`).
+- **Overtime izinleri (4 kod):** `overtime.request.create|read|approve|cancel` — adlar
+  yol haritası P5a listesindendir; `overtime.rule.manage` / `overtime.balance.read`
+  **eklenmedi** (kural motoru ve bakiye karşılığı yokken ölü yetki olurdu).
+- **Fazla mesai servisleri:** `create_overtime_request` (süre sunucuda, 0/negatif ve >16 saat
+  reddi, gelecek tarih reddi, aynı gün çakışma reddi), `decide_overtime_request`
+  (kendi talebine karar veremez), `cancel_overtime_request`, `current_step` — onay için
+  `hr.approval_steps` **yeniden kullanılır** (yeni onay motoru yazılmadı, `subject_kind`
+  kapalı kümesine `overtime_request` eklendi: `leave/0005`).
+- **İzin hakkı (entitlement) servisi:** `set_leave_entitlement` — dönemde hakediş kaydı yoksa
+  **hakediş** (`accrual`), varsa **gerekçeli düzeltme** (`adjustment`) yazar; fark sıfırsa
+  **hiçbir şey yazmaz** (`degisiklik_yok`). `amount` + **`reason` (≥ 5 karakter, zorunlu)**,
+  aktör + denetim kaydı; `leave.balance.manage` ∧ organizasyon kapsamı kapısı. Frontend bakiye
+  kolonunu **doğrudan ezmez**.
+- **Panel (ESS) üç kart:** masaüstünde **tek satırda eşit yükseklik** — *Bilgilerim* (ad soyad,
+  çalışan no, unvan, birim, yönetici, işe giriş), *Yıllık izin bakiyem* (hak/kullanılan/
+  bekleyen/kalan), *İzin taleplerim* (son 5 kayıt + "Tümünü gör"). `base.html`'de `.grid-esit`
+  (`align-items: stretch` + `.kart-govde` esnemesi + `.kart-dip` alt şerit).
+- **Çalışan detayında "İzin Hakları" bölümü:** bakiye kullanan **tüm aktif izin türleri**
+  (hak tanımlanmamışsa `—`) + "Hak tanımla / Düzelt" akışı; yeni uç
+  `POST /test-ui/api/employees/<uuid>/entitlements`.
+- **Fazla Mesai sekmesi** (`/test-ui/`): çalışan bildirimi (tarih, başlangıç/bitiş saati,
+  açıklama), kendi kayıtları (durum + sunucu süresi) ve onay kuyruğu (adım/adım 1-2 akışı).
+
+### DEĞİŞEN
+
+- **Ayrı "İzin Bakiyeleri" sekmesi kaldırıldı**; hak yönetimi çalışan detayına taşındı.
+  Backend bakiye/defter servisleri ve `GET /test-ui/api/balances` ucunun **davranışı
+  korundu** (regresyon testi var) — yalnız arayüz akışı sadeleştirildi.
+- **Yeni çalışana hak tanımlanamıyordu (hata):** kök neden, liste ucunun yalnız **var olan**
+  `leave_balances` satırlarını döndürmesiydi → hiç bakiyesi olmayan yeni çalışanda "hak tanımla"
+  girişi hiç üretilmiyordu. Liste, bakiye kullanan **tüm** izin türlerini döndürecek şekilde
+  değiştirildi (`_izin_haklari_listesi`).
+- **İzin kataloğu 47 → 51** (45 kiracı + 6 platform). Rol hedefleri:
+  `tenant_admin` 41→**45**, `hr_manager` 30→**33**, `tenant_officer` 23→**27**,
+  `dept_manager` 17→**21**, `employee` 8→**11**. Migration: `rbac/0013_p5a_overtime_permissions`
+  (izin kayıtları + sistem rol senkronu; özel roller değişmez).
+- **`scripts/02_grant_app_privileges.sql`:** yeni tabloya yalnız `SELECT/INSERT/UPDATE`
+  (soft delete: OD21); `DELETE`/`TRUNCATE` **verilmez**.
+- `config/settings.py`: `INSTALLED_APPS`'e `apps.overtime`; `apps/leave/models.py`:
+  `ApprovalSubjectKind.OVERTIME_REQUEST`.
+
+### DOĞRULANAN
+
+- **Testler: 540 passed / 0 failed** (`bash scripts/run_tests.sh`). Bu pakette eklenen test
+  dosyaları: `tests/test_p5a_overtime.py` (14 test — durum makinesi, süre hesabı, kapsam,
+  izolasyon), `tests/test_p5a_ui_entitlement.py` (14 test — panel kartları, entitlement
+  servisi/uçları, yıl dönümü çakışması). İzin kataloğu büyüdüğü için mevcut paketlerin
+  **sayı pinleyen** ölçüm testleri de ölçülen yeni değerlere güncellendi
+  (`tests/test_p1a_people_lifecycle.py`, `tests/test_rbac_scope_m7_m9.py`).
+  `ruff check .` → **All checks passed**; `bandit`, `manage.py check`,
+  `makemigrations --check --dry-run` temiz.
+- **`scripts/verify_fresh_install.sh`** yeni **6f** adımı: tablo/RLS/FORCE/politika, 8 `CHECK`,
+  4 tetikleyici, app rolü `SELECT/INSERT/UPDATE` var + `DELETE/TRUNCATE` yok, platform rolü
+  erişemez, 4 izin kodu, rol izin sayıları, entitlement defteri benzersizliği, **6 migration
+  zinciri** ve **uçtan uca idempotent sonda** (`scripts/_overtime_probe.py`: izin hakkı yazımı
+  + fazla mesai onayı). **Sonuç: `SONUÇ: OK — sıfırdan kurulum doğrulandı` (0 FAIL,
+  geçici veritabanı temizlendi).**
+  Paketle birlikte mevcut adımların sayı beklentileri de güncellendi (RLS+FORCE 23 → **24**,
+  izin kataloğu 47 → **51**, rol izin sayıları).
+- **Uçtan uca (gerçek tarayıcı, temiz test sunucusu `127.0.0.1:8010`):** giriş → ESS paneli
+  **üç kart, eşit yükseklik** (621 px; Bilgilerim'de çalışan no/unvan/birim/yönetici/işe giriş
+  dolu) → yeni çalışan (EMP-000012) → **izin hakkı tanımlama 5 gün** → **düzeltme 14 gün**
+  (delta 9, `available_days=14.0`, sonraki hakediş 13.09.2027) → gerekçesiz istek **400** →
+  fazla mesai bildirimi 21:00–22:30 (**90 dk, sunucu hesabı**) → yönetici onayı (adım 1) →
+  İK onayı (adım 2) → **onaylandı** (her iki adım `approved`) → aynı gün/aralık için ikinci
+  bildirim **400** (çakışma guard'ı) → iptal akışı (**canceled**, tekrar iptal **409**) → çıkış.
+- Ölçüm (canlı DB): `hr`+`public` tablo 38 (P1-A: 37), RLS+FORCE **24** (23),
+  izin kataloğu **51** (47), `overtime_requests` tetikleyici 4, `CHECK` 8.
+
+### KAPSAM DIŞI (LATER — kod yazılmadı)
+
+Fazla mesai **katsayı/kural motoru** (`hr.overtime_rules`, `hr.overtime_entries`, dilimleme),
+**PAY** hesabı, **TIME_OFF** izin kredisi (`overtime_credit` defter kaydı), ücret/maaş
+entegrasyonu (P6), **devam kaydı bağı** (`attendance_record_id`), **gece yarısını aşan** kayıt
+(vardiya/devam fazı), bildirim/e-posta, belge zorunluluğu.
+
+### AÇIK GÜVENLİK BULGUSU (bu pakete dahil edilmedi)
+
+Kilitli hesap uyarısı yok + kilit süresi dolduğunda `failed_login_count` sıfırlanmıyor
+(`apps/accounts/backends.py`) — `docs/SECURITY.md` §5.1'de **açık bulgu** olarak izlenir;
+davranış değişikliği (kullanıcıya farklı yanıt) ayrı bir karar gerektirdiği için bu pakete
+karıştırılmadı.
+
+---
+
 ## [0.37.0] — 2026-09-13 — P1-A: People lifecycle veri modeli + izin altyapısı (KOD)
 
 **Kapsam:** P1'in **ilk uygulama paketi** (P1-A). Şema, izin kataloğu, RLS/guard altyapısı ve

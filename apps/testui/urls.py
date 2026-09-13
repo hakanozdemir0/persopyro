@@ -100,6 +100,24 @@ urlpatterns = [
         api.EmployeeBalanceView.as_view(),
         name="test-ui-employee-balances",
     ),
+    # İzin hakkı tanımlama/düzeltme (mutlak gün + gerekçe; servis katmanına gider).
+    path(
+        "api/employees/<str:employee_id>/entitlements",
+        api.EmployeeEntitlementView.as_view(),
+        name="test-ui-employee-entitlements",
+    ),
+    # Fazla mesai (P5a V1): bildirim, karar ve iptal.
+    path("api/overtime", api.OvertimeListView.as_view(), name="test-ui-overtime"),
+    path(
+        "api/overtime/<str:overtime_id>/decision",
+        api.OvertimeDecisionView.as_view(),
+        name="test-ui-overtime-decision",
+    ),
+    path(
+        "api/overtime/<str:overtime_id>/cancel",
+        api.OvertimeCancelView.as_view(),
+        name="test-ui-overtime-cancel",
+    ),
     path("api/leave-requests", api.LeaveRequestListView.as_view(), name="test-ui-leave-requests"),
     path(
         "api/leave-requests/<str:request_id>/decision",

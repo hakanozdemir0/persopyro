@@ -107,7 +107,34 @@ devir (carryover) işi ve API uç noktaları.
 
 ---
 
-## 5. Vardiya ve devam takibi
+---
+
+## 5. Fazla mesai (overtime) — V1 ✅
+
+Durum: **Uygulandı (P5a V1 ✅ 2026-09-13)** — talep + onay temeli çalışıyor.
+Fazla mesainin **katsayı/kural motoru, ücret (PAY) hesabı ve izin (TIME_OFF) karşılığı
+yazılmadı** (LATER: `docs/HR_ROADMAP.md` P5a/P5b).
+
+- **Talep (`overtime_requests`):** tarih, başlangıç/bitiş saati, açıklama (≥ 5 karakter),
+  durum. Süre (**dakika**) **sunucuda** `end - start` ile hesaplanır; **0/negatif**, 16
+  saatten uzun, gelecek tarihli ve aynı gün çakışan kayıtlar reddedilir — frontend'den
+  gelen süre değeri **kabul edilmez**.
+- **Durum kümesi (kapalı):** `pending` → `approved` | `rejected` | `canceled`. Veritabanı
+  tetikleyicisi yalnız bu geçişleri kabul eder; terminal durumdan çıkış ve `pending`
+  dışında açılış **DB seviyesinde** engellenir.
+- **Onay:** mevcut `approval_steps` altyapısı yeniden kullanılır — önce birincil yönetici,
+  ardından İK adımı. Çalışan **kendi talebine karar veremez**; karar kapsam içi yetkili
+  tarafından verilir (kapsam dışı → 404).
+- **Karşılık tipi (`compensation_type`):** kural/karşılık motoru gelene kadar **boş kalır**;
+  arayüzde sahte "Ücret / İzin" seçeneği **gösterilmez**.
+- **Gece yarısını aşan** kayıt V1'de tek bildirimle ifade edilemez (vardiya/devam fazına
+  bırakıldı).
+- **İzole ve denetlenebilir:** kiracı izolasyonu RLS + FORCE ile zorunlu; her işlem
+  denetim kaydına yazılır (`overtime.request.create|approve_step|approve|reject|cancel`).
+- **Arayüz (test paneli):** çalışan bildirim formu + kendi kayıtları, yönetici onay kuyruğu
+  (adım bilgisiyle).
+
+## 6. Vardiya ve devam takibi
 
 Durum: Tasarlandı (veri modeli mevcut)
 
@@ -122,7 +149,7 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 6. Evrak ve belge yönetimi
+## 7. Evrak ve belge yönetimi
 
 Durum: Tasarlandı (veri modeli mevcut)
 
@@ -137,7 +164,7 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 7. İşe alım (recruitment)
+## 8. İşe alım (recruitment)
 
 Durum: Tasarlandı (veri modeli mevcut)
 
@@ -150,7 +177,7 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 8. Performans değerlendirme
+## 9. Performans değerlendirme
 
 Durum: Tasarlandı (veri modeli mevcut)
 
@@ -161,7 +188,7 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 9. Bordro (maaş) kayıtları
+## 10. Bordro (maaş) kayıtları
 
 Durum: Planlandı / kısmen tasarlandı
 
@@ -176,7 +203,7 @@ alınır.
 
 ---
 
-## 10. Abonelik ve faturalama
+## 11. Abonelik ve faturalama
 
 Durum: Tasarlandı (veri modeli mevcut)
 
@@ -187,7 +214,7 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 11. Denetim (audit) ve raporlama
+## 12. Denetim (audit) ve raporlama
 
 Durum: Tasarlandı (veri modeli mevcut)
 
@@ -198,7 +225,7 @@ Durum: Tasarlandı (veri modeli mevcut)
 
 ---
 
-## 12. Geliştirme/test arayüzü (`/test-ui/`) — manuel test paneli
+## 13. Geliştirme/test arayüzü (`/test-ui/`) — manuel test paneli
 
 Durum: Uygulandı (yalnızca geliştirme/test; üretim özelliği değildir)
 
@@ -227,7 +254,15 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   ekranda bloklar alt alta düşer, kart içi geniş tablolar kendi içinde kayar
   (sayfada yatay kaydırma oluşmaz). Yeni bağımlılık eklenmez.
 - İzin: talep oluşturma (gün sayısı sunucuda hesaplanır), kendi talepleri,
-  "Bekleyen İzinler" ekranı, Onayla/Reddet (red için gerekçe), iptal.
+  "Bekleyen İzinler" ekranı, Onayla/Reddet (red için gerekçe), iptal. **Ayrı "İzin
+  Bakiyeleri" sekmesi yok** — hak yönetimi çalışan detayındaki "İzin Hakları" bölümünde.
+- **Fazla Mesai sekmesi:** çalışan bildirim formu (tarih, başlangıç/bitiş saati, açıklama;
+  süre **sunucuda**), kendi kayıtları (durum + süre) ve karar bekleyen adım bilgisiyle
+  onay kuyruğu; iptal gerekçesiyle (red gerekçesi zorunlu). Karşılık tipi seçenekleri
+  **gösterilmez** (kural motoru yok).
+- **ESS paneli (üç kart):** masaüstünde tek satırda eşit yükseklikte *Bilgilerim*,
+  *Yıllık izin bakiyem*, *İzin taleplerim* (`grid-esit`; kart gövdesi esner, alt şerit
+  hizalı kalır). Talep kartı son 5 kaydı gösterir + "Tümünü gör".
 - **Onay beklenen kişi:** onay kuyruğunda satırın **sıradaki onaylayıcısı** adı + unvanıyla
   gösterilir (`Mehmet Demir — Finans Müdürü`); çok adımlıysa sıralı liste
   (`1. … — Bekliyor`, `2. … — Sonraki adım`). Kaynak `approval_steps`; arayüz tahmin etmez.
@@ -237,16 +272,22 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
   işe giriş zorunludur; çalışan + kullanıcı **tek atomik işlemde** yazılır (biri başarısızsa
   hiçbiri). Parola yanıtta/log'da görünmez. Çalışanlar ekranı *Çalışan Ara / Liste* ve
   *Yeni Çalışan* alt bölümlerine ayrılmıştır.
-- **İzin Hakları / İzin Bakiyeleri ekranı:** çalışan detayında izin türü · yıllık hak ·
-  kullanılan · bekleyen · kalan · **sonraki hakediş** (işe giriş yıl dönümü) görünür; ayrı
-  ana sekmede kapsam süzgeçli bakiye tablosu (filtre: çalışan/birim/izin türü/düşük-tükendi)
-  ve **servis katmanı üzerinden** düzeltme (hak ekle / hak düş / düzeltme / politikadan
-  hakediş) bulunur — gerekçe zorunlu, defter + denetim kaydı yazılır.
+- **İzin Hakları (çalışan detayında):** `Çalışanlar → Detay` içinde, bakiye kullanan **tüm
+  aktif izin türleri** için izin türü · yıllık hak · kullanılan · bekleyen · kalan ·
+  **sonraki hakediş** (işe giriş yıl dönümü) görünür; hak **servis katmanı üzerinden**
+  tanımlanır/düzeltilir (`set_leave_entitlement`) — gerekçe zorunlu, `accrual`/`adjustment`
+  defter kaydı + denetim yazılır, frontend bakiye kolonunu **doğrudan ezmez**. Hak
+  tanımlanmamış tür `—` ile listelenir (yeni çalışanda giriş kaybolmaz).
+  Ayrı "İzin Bakiyeleri" sekmesi **kaldırıldı**; backend bakiye/defter servisleri korunur.
 - **Panel operasyonel özeti:** toplam çalışan, bugün izinde, 7 gün içinde izne çıkacak,
   bekleyen onay kartları; altta bekleyen talepler, yaklaşan izinler ve bakiyesi kritik
   (kalan ≤ 3 gün) çalışanlar tablosu.
-- **Planlanan (kod yazılmadı):** fazla mesai (overtime) modülü ve tenant tarafından
-  yapılandırılabilen onboarding formu `docs/HR_ROADMAP.md` içinde tasarlanmıştır.
+- **Çalışan self-service paneli (üç kart, eşit yükseklik):** masaüstünde tek satırda
+  *Bilgilerim* (ad soyad, çalışan no, unvan, birim, yönetici, işe giriş) ·
+  *Yıllık izin bakiyem* (hak/kullanılan/bekleyen/kalan) · *İzin taleplerim*
+  (izin türü/tarih/gün/durum; son 5 kayıt + "Tümünü gör").
+- **Planlanan (kod yazılmadı):** tenant tarafından yapılandırılabilen onboarding formu
+  `docs/HR_ROADMAP.md` içinde tasarlanmıştır. (Fazla mesai **V1 uygulandı** → §5.)
 - Kapsam testi görünür: Finans müdürü Finans + Muhasebe'yi görür, İnsan Kaynakları
   çalışanını/talebini **görmez ve onaylayamaz**.
 - **Yıllık izin görünürlüğü:** çalışan kendi panelinde, yetkili kullanıcı çalışan
@@ -340,7 +381,7 @@ Tailwind) **kurulmaz** — Django şablonu + vanilla JS/CSS kullanılır.
 - Kalıcılık: demo kullanıcılar/parolalar yalnız demo/bootstrap betiğinde üretilir;
   migration'lara parola konmaz, depoya gerçek secret yazılmaz.
 
-## 13. Öncelik sırası (önerilen)
+## 14. Öncelik sırası (önerilen)
 
 1. Kiracı + kimlik/RBAC (ürünün güvenlik temeli)
 2. Organizasyon + çalışan kaydı
@@ -362,9 +403,9 @@ Her modül bitmeden sonraki modüle geçilmez; sıra değişikliği gerekçesiyl
 > (bkz. §22 fazlandırma, §20 HR görev matrisi). Bu doküman uygulanmış özellikleri anlatır;
 > plan içeriği burada tekrar edilmez.
 >
-> **Ölçüm notu (2026-09-12):** §5 (vardiya/devam), §6 (evrak), §9 (bordro) başlıkları
+> **Ölçüm notu (2026-09-12):** §6 (vardiya/devam), §7 (evrak), §10 (bordro) başlıkları
 > **tasarlanmış ama kodlanmamıştır** (izin kodları ve DB tasarımı var, uygulama yok);
-> §7 (işe alım) ve §8 (performans) **hiç başlanmamıştır** ve V1 kapsamı dışındadır.
+> §8 (işe alım) ve §9 (performans) **hiç başlanmamıştır** ve V1 kapsamı dışındadır.
 >
 > **P1 durumu (2026-09-13):** blocker kararlar **KAPALI**; **P1-A (veri modeli + izin altyapısı)
 > ✅ UYGULANDI** — yeni tablolar (`workplaces`, `employee_employment_terms`,

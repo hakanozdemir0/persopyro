@@ -118,6 +118,22 @@ def api_client() -> APIClient:
 
 
 @pytest.fixture
+def csrf_client(settings):  # noqa: ANN001, ANN201
+    """
+    Test arayüzü **açık** ve CSRF doğrulaması **etkin** istemci.
+
+    `TEST_UI_ENABLED` yalnız bu fixture'ı isteyen testlerde açılır (kapı davranışını
+    ölçen testler varsayılanı kullanmaya devam eder). `CSRF_COOKIE_SECURE=False`:
+    test istemcisi çerezi http üzerinden taşır (gerçek tarayıcı akışı).
+    """
+    from django.test import Client  # noqa: PLC0415
+
+    settings.TEST_UI_ENABLED = True
+    settings.CSRF_COOKIE_SECURE = False
+    return Client(enforce_csrf_checks=True)
+
+
+@pytest.fixture
 def izinli_kullanici():
     """
     Kullanıcıya verilen izin kodlarıyla bir rol atar.

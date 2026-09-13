@@ -605,9 +605,15 @@ class LeaveRequest(TenantScopedModel):
 
 
 class ApprovalSubjectKind(models.TextChoices):
-    """Onay adımı konusu (genel `approval_steps` tablosu)."""
+    """
+    Onay adımı konusu (genel `approval_steps` tablosu).
+
+    P5a: fazla mesai talepleri aynı tabloyu kullanır (`overtime_request`) — ikinci bir
+    onay tablosu açılmaz (OD39: onay sırası izin modülüyle aynı altyapıdadır).
+    """
 
     LEAVE_REQUEST = "leave_request", "İzin talebi"
+    OVERTIME_REQUEST = "overtime_request", "Fazla mesai talebi"
 
 
 class ApprovalStepStatus(models.TextChoices):

@@ -49,6 +49,15 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("leave.balance.read", "İzin bakiyelerini görme", "leave"),
     ("leave.balance.manage", "İzin bakiyesi düzeltme", "leave"),
     ("leave.type.manage", "İzin türü ve politikası yönetimi", "leave"),
+    # Fazla mesai (P5a V1: talep + onay temeli; kural/ücret motoru ileriki faz)
+    ("overtime.request.create", "Fazla mesai bildirimi oluşturma", "overtime"),
+    ("overtime.request.read", "Fazla mesai taleplerini görme", "overtime"),
+    (
+        "overtime.request.approve",
+        "Fazla mesai talebini onaylama/reddetme",
+        "overtime",
+    ),
+    ("overtime.request.cancel", "Fazla mesai bildirimi iptali", "overtime"),
     # Vardiya ve devam
     ("shift.read", "Vardiyaları görme", "shift"),
     ("shift.assign", "Vardiya atama", "shift"),
@@ -141,6 +150,11 @@ DEPT_MANAGER_PERMISSIONS: tuple[str, ...] = (
     "document.read",  # G: ◐ (UNIT + POLICY_OK)
     "document.upload",  # G: ◐ (UNIT, çalışanı adına)
     "employee.history.read",  # D: ● (UNIT) — P1/OD61: atama geçmişi birim kapsamında
+    # P5a/§11 + §19 (MSS): fazla mesai — onay birincil yöneticide, karar kayıtlıdır.
+    "overtime.request.create",  # §18 ESS: kendi bildirimi
+    "overtime.request.read",  # §19 MSS: ekip kayıtları (UNIT)
+    "overtime.request.approve",  # §19 MSS: UNIT + ASSIGNED + SEPARATE_ACTOR
+    "overtime.request.cancel",  # §11: kapsam içi iptal
 )
 
 #: ŞYT (şirket yetkilisi) sütunu — TENANT kapsamlı modül yetkileri.
@@ -171,6 +185,11 @@ TENANT_OFFICER_PERMISSIONS: tuple[str, ...] = (
     "document.delete",  # G: ◐ (kendi yüklediği)
     "employee.history.read",  # D: ● — P1/OD61
     "org.workplace.read",  # C: ● — P1/OD61
+    # P5a/§11: fazla mesai — şirket yetkilisi talep açar, karara bağlar, iptal eder.
+    "overtime.request.create",
+    "overtime.request.read",
+    "overtime.request.approve",
+    "overtime.request.cancel",
 )
 
 DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
@@ -213,6 +232,10 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "leave.request.read",
             "leave.request.approve",
             "leave.type.manage",
+            # P5a/§11: İK, yönetici adımından sonraki onay adımının sahibidir (OD39).
+            "overtime.request.read",
+            "overtime.request.approve",
+            "overtime.request.cancel",
             "shift.read",
             "shift.assign",
             "shift.schedule.manage",
@@ -241,6 +264,10 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "leave.request.create",
             "leave.request.cancel",
             "leave.balance.read",
+            # P5a/§18 ESS: çalışan kendi fazla mesaisini bildirir/görür/iptal eder.
+            "overtime.request.create",
+            "overtime.request.read",
+            "overtime.request.cancel",
             "shift.read",
             "document.read",
         ],

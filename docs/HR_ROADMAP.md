@@ -103,7 +103,7 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 
 | Yetenek | Kanıt |
 |---|---|
-| Kiracı izolasyonu + PostgreSQL RLS (FORCE) | Ölçüldü (canlı DB): `hr`+`public` şemasında **33 tablo**, bunların **19**'unda `relrowsecurity` açık, tek politika `tenant_isolation` (`USING`/`WITH CHECK` = `hr.current_tenant_id()`); `hr.*` tablolar `tenant_id` + politika; `verify_fresh_install.sh` RLS adımları |
+| Kiracı izolasyonu + PostgreSQL RLS (FORCE) | Ölçüldü (canlı DB): `hr`+`public` şemasında **38 tablo**, bunların **24**'ünde `relrowsecurity` + `relforcerowsecurity` açık, tek politika `tenant_isolation` (`USING`/`WITH CHECK` = `hr.current_tenant_id()`); `hr.*` tablolar `tenant_id` + politika; `verify_fresh_install.sh` RLS adımları |
 | Veritabanı rolleri ayrımı (owner/app/platform) | `scripts/bootstrap.sh`, `scripts/02_grant_app_privileges.sql`, `tests/test_database_roles.py` |
 | Kimlik doğrulama (oturum + API token) | `apps/accounts`, `apps/platform`; `tests/test_api_auth.py`, `test_api_tokens_db_guards.py` |
 | RBAC + organizasyon kapsamı + self-elevation yasağı | `apps/rbac/services/roles.py`, `tests/test_rbac_scope_m7_m9.py` |
@@ -116,8 +116,9 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 | Hakediş (idempotent) + yıl dönümü yenilemesi | `accrue_leave_entitlements`, `next_accrual_date`, `manage.py accrue_leave_entitlements` |
 | Bakiye + append-only defter + manuel düzeltme (gerekçeli, audit'li) | `hr.leave_balances`, `hr.leave_balance_entries`, `adjust_leave_balance` |
 | İzin talebi akışı (talep, çok adımlı onay, red, iptal, iade, override) | `hr.leave_requests`, `hr.approval_steps`, `tests/test_leave_m14_*.py` |
+| **Fazla mesai V1 — talep + onay temeli** (süre sunucu hesabı, durum makinesi, DB guard'ları) | `hr.overtime_requests`, `apps/overtime/services/`, `tests/test_p5a_overtime.py`; katsayı/PAY/TIME_OFF **LATER** |
 | Geliştirme/test arayüzü (kapsam görünürlüğü, çıkışın oturumu kapatması) | `apps/testui`, `tests/test_testui.py` (104 test) |
-| Sıfırdan kurulum doğrulaması | `scripts/verify_fresh_install.sh` (6c-1…6c-10) |
+| Sıfırdan kurulum doğrulaması | `scripts/verify_fresh_install.sh` (6c-1…6c-11 + 6f fazla mesai/izin hakkı invariant'ları) |
 
 **Sınıf 2 — Kısmen uygulanmış (parçası var, tamamlanmadı)**
 
@@ -127,19 +128,19 @@ bash scripts/verify_fresh_install.sh # VERIFY_EXIT=0
 | İzin belge zorunluluğu | `leave_types.requires_document` + `leave_requests.document_ref` (UUID) | **belge modülü yok** → dosya yüklenemez/doğrulanamaz |
 | Devir (carry-forward) | `leave_balances.carried_forward_days` kolonu (kalan hesabına giriyor) | **onu yazan servis yok** (yıl sonu devir kuralı yok) |
 | İzin gün hesabı | `calculate_requested_days` (takvim günü, yarım gün) | hafta sonu/resmi tatil/çalışma takvimi yok |
-| Self service (çalışan) | izin talebi + bakiye + kendi kaydı | fazla mesai, belge, bordro belgesi, bilgi değişiklik talebi |
-| Manager self service | ekip görünürlüğü + izin onayı + ekip bakiyesi | ekip takvimi, fazla mesai onayı, vardiya, değişiklik talepleri |
-| Dashboard | panel kartları (toplam/izinde/yaklaşan/bekleyen/kritik bakiye) | görev, belge, deneme süresi, sözleşme, bordro kartları |
+| Self service (çalışan) | izin talebi + bakiye + kendi kaydı + **fazla mesai bildirimi (V1)** | fazla mesai katsayı/PAY karşılığı, belge, bordro belgesi, bilgi değişiklik talebi |
+| Manager self service | ekip görünürlüğü + izin onayı + ekip bakiyesi + **fazla mesai onayı (V1)** | ekip takvimi, vardiya, değişiklik talepleri |
+| Dashboard | panel kartları (toplam/izinde/yaklaşan/bekleyen/kritik bakiye) + **ESS üç kartı (bilgilerim/bakiye/taleplerim, eşit yükseklik)** | görev, belge, deneme süresi, sözleşme, bordro kartları |
 | Raporlama | ekran içi tablolar + filtreler | merkezî export servisi, XLSX, asınk üretim, güvenli indirme |
-| Yetki kataloğu ↔ modül | **39** izin kodu (33 kiracı + 6 platform; `shift`/`attendance`/`document` izinleri var) | ilgili modüller yok (bkz. §1.2 notu) |
+| Yetki kataloğu ↔ modül | **51** izin kodu (45 kiracı + 6 platform; `shift`/`attendance`/`document` izinleri var) | ilgili modüller yok (bkz. §1.2 notu) |
 | Uluslararasılaştırma | `USE_TZ`, tek TZ; Türkçe metinler | i18n altyapısı, çoklu dil, çoklu para birimi |
 
 **Sınıf 3 — Yalnız planlanmış (tasarım var/başlanmadı)**
 
-Fazla mesai · yapılandırılabilir onboarding formu · onboarding/offboarding görev listeleri ·
-bildirim/e-posta (outbox) · belge yönetimi · ücret/maaş geçmişi · bordro hazırlığı · ülke kural
-motoru · TR hesaplamaları · merkezî raporlama/Excel · devam/vardiya + çalışma takvimi ·
-görev merkezi (tam hâli).
+Fazla mesai **katsayı/kural motoru + PAY + TIME_OFF karşılığı** · yapılandırılabilir onboarding
+formu · onboarding/offboarding görev listeleri · bildirim/e-posta (outbox) · belge yönetimi ·
+ücret/maaş geçmişi · bordro hazırlığı · ülke kural motoru · TR hesaplamaları · merkezî
+raporlama/Excel · devam/vardiya + çalışma takvimi · görev merkezi (tam hâli).
 **Kanıt:** ilgili modüller için `apps/` altında paket, `models.py` veya `services/` **yok**;
 yalnız izin kodları ve doküman taslakları var (§1.2 notu).
 
@@ -540,6 +541,7 @@ deseniyle aynı yaklaşım).
 | `contract.expiring` / `probation.ending` | job (30/7 gün) | İK | P1/P9 |
 | `attendance.shift_changed` | vardiya atandı/değişti | çalışan | P4 |
 | `overtime.request.submitted` / `.decided` | talep/karar | yönetici/çalışan | P5a |
+| Uygulanan (V1): `overtime.request.create`, `overtime.request.approve_step`, `overtime.request.approve`, `overtime.request.reject`, `overtime.request.cancel` | talep/karar | yönetici/çalışan | P5a ✅ |
 | `payroll.period.ready` | dönem girdileri hazır | payroll hazırlık rolü | P6 |
 | `report.ready` | asınk rapor bitti | isteyen kullanıcı | P8 |
 | `auth.password_reset` / `auth.invite` | mevcut akış | kullanıcı | P2 |
@@ -736,8 +738,22 @@ Kural: **bir gün için ya `leave` ya `present`** olur.
 
 ## 11. Fazla mesai (overtime) — ayrıntılı tasarım
 
-**Durum: hiç başlanmamış.** Ayrıntılı şema/kural modeli **`docs/HR_ROADMAP.md` §2**'de
-üretilmişti; burada tam kapsam ve **karar noktaları** ile bütünleştirilir.
+> **Durum (2026-09-13): V1 (talep + onay temeli) ✅ UYGULANDI.** Uygulanan kısım: yukarıdaki
+> talep akışının **1–3** maddeleri (`hr.overtime_requests`, süre **sunucu hesabı**, aynı gün
+> çakışma reddi, mevcut `hr.approval_steps` ile yönetici → İK onay zinciri, iptal, durum
+> makinesi + DB `CHECK`/tetikleyici guard'ları, RLS + FORCE, 4 izin kodu). **Uygulanmayan
+> (LATER):** §9.2 kural tabloları (`hr.overtime_rules`, `hr.overtime_entries`, dilimleme),
+> onay anında katsayı/karşılık snapshot'ı (OD34), PAY hesabı (P5b), TIME_OFF kredisi (OD32/OD44),
+> devam kaydı bağı (`attendance_record_id`, P4) ve **gece yarısını aşan** kayıt (V1'de tek
+> bildirim gece yarısını aşamaz — aşağıda OD64).
+>
+> V1'in tasarımdan bilinçli sapmaları: `status` kümesinde **`draft` yok** (kapalı küme
+> `pending|approved|rejected|canceled`), `reason_code`, `compensation_type_snapshot`,
+> `pay_multiplier_snapshot`, `time_off_minutes_snapshot`, `approved_at`, `leave_balance_id`
+> ve `attendance_record_id` kolonları **açılmadı** (karşılık kuralı yokken ölü kolon olurdu).
+>
+> Ayrıntılı şema/kural modeli **`docs/HR_ROADMAP.md` §2**'de üretilmişti; burada tam kapsam ve
+> **karar noktaları** ile bütünleştirilir.
 
 ### 9.1 Talep akışı
 
@@ -1260,6 +1276,17 @@ kod içinde `apps/` paketleri + **servis katmanı** ile korunur. Mikroservis **y
 
 ---
 ### P5a — Fazla mesai: talep + kural + izin karşılığı (TIME_OFF)
+
+> **V1 ✅ UYGULANDI (2026-09-13) — yalnız "talep + onay temeli" dilimi.** Uygulanan:
+> `hr.overtime_requests` (RLS/FORCE + 8 CHECK + durum/kurum guard tetikleyicileri), sunucu
+> süre hesabı, yönetici → İK onay zinciri (`hr.approval_steps` yeniden kullanıldı),
+> `overtime.request.create|read|approve|cancel` izinleri, ESS bildirim + onay arayüzü,
+> denetim olayları.
+> **LATER (bu faz içinde henüz yok):** `hr.overtime_rules` + `hr.overtime_entries` (katsayı
+> motoru/dilimleme, OD34), **TIME_OFF** kredisi (OD32/OD44), `overtime.rule.manage` /
+> `overtime.balance.read` izinleri, `recompute_overtime` işi, `attendance_record_id` bağı (P4)
+> ve gece yarısını aşan kayıt (OD64). `overtime.pay.*` **P5b**'dedir.
+
 - **Amaç:** fazla mesai kaydı ve izin karşılığı; ücret hesabı **yok**.
 - **Kullanıcıya görünen sonuç:** çalışan girer, yönetici onaylar, izin kredisi bakiyeye düşer.
 - **DB (yeni):** `hr.overtime_rules`, `hr.overtime_requests`, `hr.overtime_entries`.

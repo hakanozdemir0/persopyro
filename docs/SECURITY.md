@@ -434,6 +434,22 @@ kiracıda yeni giriş `403`; mevcut token/oturum `403` (`tenant_unavailable`); t
 doğrulama katmanı ayrıca doğrudan `401` verir (katman testi). `scripts/smoke.sh`
 gerçek HTTP üzerinden askıdaki kiracı girişinde **403** doğrular.
 
+**F12 — Kilit süresi dolduğunda `failed_login_count` sıfırlanmıyor (Düşük, AÇIK).**
+Ölçüm (2026-09-13, gerçek kullanıcı testi): `apps/accounts/backends.py` içindeki kilit
+kontrolü `lockout_until` geçmişse girişe izin veriyor, ancak **`failed_login_count`
+sıfırlanmıyor**. Sonuç: 15 dakikalık kilit dolduktan sonra **tek** hatalı parola denemesi
+sayaç eşiği (5) yeniden aştığı için hesap **anında yeniden 15 dakika** kilitlenir; ayrıca
+kullanıcı kilitli olduğunu **ayırt edemez** (kilitli hesap ile hatalı parola aynı `401
+{"code":"invalid_credentials"}` yanıtını verir — bu, hesap numaralandırmasını önlemek için
+**bilinçli** bir tasarımdır ve değiştirilmesi ayrı bir karar gerektirir).
+- **Etki:** kullanılabilirlik/operasyonel (kullanıcı 1 hatalı denemede tekrar kilitlenir);
+  gizlilik etkisi yoktur, kilit mekanizması fiilen **sıkılaşır** (bypass yoktur).
+- **Bu pakete (P5a V1) alınmadı:** davranış değişikliği giriş akışına ve muhtemelen
+  kullanıcıya "kilitli" bilgisinin açılmasına dokunur → ayrı karar + ayrı paket gerekir.
+- **Öneri (kapatma yolu):** `lockout_until` süresi geçmişse `failed_login_count`'u **0'a
+  çek** (kilit penceresi kapandığında pencere sıfırlanır) ve testi ekle; "kilitli" bilgisinin
+  kullanıcıya gösterilmesi ise ayrı OD olarak değerlendirilir.
+
 ## 6. Ayrıcalıklı erişim güvenliği (platform ve destek)
 
 Bu bölüm, sistemin en yüksek riskli kod yolunu tanımlar: kiracı sınırını aşan
@@ -780,3 +796,29 @@ Açık olanlar:
 açıklık yaratmıyor**; aksine iki bilinen boşluğu kapatıyor (PII yazma izni ayrımı, erişim kesme).
 Açık kalan güvenlik konuları **P1 kapsamı dışıdır**: MFA (OD10, LATER), ülke/veri yurt dışı aktarım
 kuralları (P7), belge zararlı yazılım taraması (P3).
+
+---
+
+## 16. P5a V1 güvenlik notu — fazla mesai + izin hakkı (2026-09-13)
+
+> **Kapsam:** `hr.overtime_requests` (yeni tablo), `set_leave_entitlement` servisi,
+> `overtime.request.*` izinleri, ESS panel/çalışan detayı arayüz değişiklikleri.
+> Kaynak: `docs/AUTHORIZATION.md` §6.2/E-2 ve §16.8 (OD62–OD64), `docs/DATABASE.md` A.11.
+
+| Kontrol | Uygulama |
+|---|---|
+| **Kiracı izolasyonu** | Yeni tabloda RLS **+ FORCE** ve tek politika `tenant_isolation`; üç yabancı anahtar (`employee_id`, `created_by_id`, `decided_by_id`) için **kiracılar arası guard tetikleyicisi** (`overtime/0004`) — ölçüldü: RLS `true/true`, 3 guard + 1 durum tetikleyicisi |
+| **Asgari veritabanı yetkisi** | Uygulama rolü yalnız `SELECT/INSERT/UPDATE`; `DELETE`/`TRUNCATE` **yok** (OD21 soft delete). `persopyro_platform` rolü tabloya **erişemez** (ölçüldü) |
+| **Sunucu tarafı doğrulama** | Süre (`total_minutes`) yalnız **sunucuda** hesaplanır ve DB `CHECK` (`minutes_match`) ile **zorlanır**; 0/negatif, > 16 saat, gelecek tarih ve aynı gün çakışma reddedilir. İstemciden gelen süre **kabul edilmez** |
+| **Durum bütünlüğü** | Kapalı durum kümesi + **DB tetikleyicisi**: yalnız `pending` açılış, `pending → approved\|rejected\|canceled`; terminal durumdan çıkış ve doğrudan `approved` açılış engellenir (uygulama hatası DB'ye yansımaz) |
+| **Yetki ayrımı (en az yetki)** | `overtime.request.create` **yalnız kendi adına**; `approve` çalışan şablonuna **verilmez**; `SEPARATE_ACTOR` ile **kendi talebine karar verilemez**; karar `izin ∧ kapsam ∧ adım` üçlüsünden geçer, kapsam dışı → **404** (varlık sızdırılmaz) |
+| **İzin hakkı yazımı** | Arayüz bakiye kolonunu **doğrudan ezmez**: `set_leave_entitlement` üzerinden `accrual`/`adjustment` defter kaydı yazılır. **Gerekçe ≥ 5 karakter zorunlu** (servis + DB), aktör ve denetim kaydı zorunlu; `leave.balance.manage` ∧ kapsam kapısı |
+| **Denetim izi** | Oluşturma/karar/iptal `log_action` ile yazılır (`overtime.request.create`, `.approve_step`, `.approve`, `.reject`, `.cancel`); serbest metin ve PII **yazılmaz** |
+| **Hesap numaralandırma** | Fazla mesai ve hak yönetimi uçları, mevcut kimlik doğrulama/CSRF/oturum davranışını değiştirmez; kapsam dışı kaynaklar **404** döner |
+
+**Yeni açıklık (güvenlik bulgusu) — bu turda üretilmedi:** P5a V1 ölçümlerinde yeni bir açıklık
+**bulunmadı**; tablo/rol/yetki ölçümleri `scripts/verify_fresh_install.sh` (6f) adımıyla her
+kurulumda otomatik doğrulanır. Bu paket dışında bırakılan bilinen açıklık: **F12** (§5.1 — kilit
+sayacı sıfırlanmıyor; bu pakete karıştırılmadı). Açık kalan ilgili konular: `overtime_rules`
+katsayı motoru (P5a LATER), PAY (P5b), TIME_OFF kredisi (OD32/OD44) — hiçbiri yazılmadığı için
+yeni yüzey üretmez.

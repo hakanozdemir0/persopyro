@@ -208,6 +208,34 @@ BEGIN
     END LOOP;
 END $$;
 
+-- 10) Fazla mesai tablosu (P5a V1) -------------------------------------------
+-- OD21: fazla mesai talebinde silme **soft-delete**tir (`deleted_at`); runtime yolunda
+-- fiziksel silme yoktur → `DELETE`/`TRUNCATE` geri alınır (mevcut desen: blok 7/8/9).
+-- DİKKAT: Bu blok "ALL TABLES" satırından SONRA gelir; aksi hâlde geniş DML yetkisi
+-- bu daraltmayı sessizce geri alırdı (api_tokens/permissions dersinde ölçüldü).
+-- Aynı daraltma `apps/overtime/migrations/` içindeki RLS/guard migration'larıyla
+-- hizalıdır; bu betik migrate'ten sonra çalışır ve yeni kurulumda da aynı sonucu verir.
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['overtime_requests']
+    LOOP
+        IF to_regclass('hr.' || t) IS NOT NULL THEN
+            EXECUTE format('REVOKE DELETE, TRUNCATE ON hr.%I FROM persopyro_app', t);
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE ON hr.%I TO persopyro_app', t);
+        END IF;
+    END LOOP;
+END $$;
+
+-- Platform rolü (`persopyro_platform`) fazla mesai tablosuna **erişemez** (allowlist).
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'persopyro_platform')
+       AND to_regclass('hr.overtime_requests') IS NOT NULL THEN
+        REVOKE ALL ON hr.overtime_requests FROM persopyro_platform;
+    END IF;
+END $$;
+
 -- Platform rolü (`persopyro_platform`) bu HR tablolarına **erişemez**: izin kataloğu
 -- (`hr.permissions`) dışında hr şemasında yetkisi yoktur (allowlist: 03_platform_roles.sql).
 -- Savunma amaçlı açık REVOKE (rol varsa) — fail-safe, yeni tablo eklendiğinde de korunur.

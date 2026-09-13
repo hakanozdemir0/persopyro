@@ -82,6 +82,24 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: var(--gap); align-items: start; }
     .grid-2 > *, .grid-3 > *, .grid-auto > *, .split > * { min-width: 0; }
+    /* ÜÇ ANA KART (ESS paneli): aynı satırda **eşit yükseklik** ve benzer görsel ağırlık.
+       `align-items: stretch` + kart gövdesinin esnemesi (`.kart-govde`) kısa/uzun içerik
+       farkını dengeler; içerik az olan kart satır yüksekliğinden kopuk görünmez. */
+    .grid-esit { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--gap); align-items: stretch; }
+    .grid-esit > * { min-width: 0; }
+    .grid-esit > .card { display: flex; flex-direction: column; margin-bottom: 0; }
+    .grid-esit > .card > .kart-govde { flex: 1 1 auto; }
+    /* Bakiyem kartı: hak / kullanılan / bekleyen / kalan — dört eşit kutu. */
+    .hak-izgara { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .hak-izgara.ikili { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .hak-kutu { background: #f7f9fc; border: 1px solid var(--line); border-radius: var(--r-sm);
+      padding: 8px 10px; text-align: center; }
+    .hak-kutu .etiket { font-size: 11px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: .03em; display: block; }
+    .hak-kutu .deger { font-size: 18px; font-weight: 650; }
+    .hak-kutu.vurgu { background: #eef4ff; border-color: #cfdcf5; }
+    .kart-dip { margin-top: auto; padding-top: 10px; }
     /* Kart içindeki alt bölüm kartı (form grupları: İş bilgileri / Giriş hesabı). */
     .card.ic { margin: 0; background: #fbfcfe; box-shadow: none; padding: 12px 14px; }
     .card.ic h4 { margin-top: 0; }
@@ -344,10 +362,11 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     @media (max-width: 1180px) {
       .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-esit { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .split { grid-template-columns: minmax(0, 300px) minmax(0, 1fr); }
     }
     @media (max-width: 980px) {
-      .grid-2, .grid-3, .grid-4 { grid-template-columns: minmax(0, 1fr); }
+      .grid-2, .grid-3, .grid-4, .grid-esit { grid-template-columns: minmax(0, 1fr); }
       .split { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 640px) {

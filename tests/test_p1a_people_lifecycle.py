@@ -178,7 +178,10 @@ def test_t1_sekiz_yeni_izin_kodu_katalogda() -> None:
     mevcut = set(Permission.objects.filter(code__in=YENI_IZINLER).values_list("code", flat=True))
     assert mevcut == set(YENI_IZINLER)
 
-    assert len(ALL_PERMISSION_CODES) == 41
+    # P1-A sonrası 41; P5a V1 (fazla mesai talep/onay temeli) 4 kod ekledi → 45.
+    # Ölçülen değer: `permission_catalog.PERMISSIONS` (kiracı kodu) — migration
+    # `rbac/0013_p5a_overtime_permissions` aynı seti mevcut kurulumlara uygular.
+    assert len(ALL_PERMISSION_CODES) == 45
     assert len(PLATFORM_PERMISSIONS) == 6
 
 
@@ -193,12 +196,17 @@ def test_t2_platform_rolleri_yeni_tenant_izinlerini_almaz() -> None:
 
 
 def test_t3_varsayilan_rol_setleri_dokumanla_uyumlu(tenant_a) -> None:  # noqa: ANN001
-    """OD61 hedef sayıları: 41 / 30 / 23 / 17 / 8."""
-    assert len(DEFAULT_ROLE_TEMPLATES["tenant_admin"]["permissions"]) == 41
-    assert len(DEFAULT_ROLE_TEMPLATES["hr_manager"]["permissions"]) == 30
-    assert len(DEFAULT_ROLE_TEMPLATES["tenant_officer"]["permissions"]) == 23
-    assert len(DEFAULT_ROLE_TEMPLATES["dept_manager"]["permissions"]) == 17
-    assert len(DEFAULT_ROLE_TEMPLATES["employee"]["permissions"]) == 8
+    """
+    Hedef sayılar — **P5a V1 sonrası** (P1-A: 41/30/23/17/8; fazla mesai +4/+3/+4/+4/+3).
+
+    Ölçüm kaynağı: `permission_catalog.DEFAULT_ROLE_TEMPLATES` (canlı katalog) ve
+    `rbac/0013_p5a_overtime_permissions` (donmuş kopya) — ikisi eşit olmalıdır.
+    """
+    assert len(DEFAULT_ROLE_TEMPLATES["tenant_admin"]["permissions"]) == 45
+    assert len(DEFAULT_ROLE_TEMPLATES["hr_manager"]["permissions"]) == 33
+    assert len(DEFAULT_ROLE_TEMPLATES["tenant_officer"]["permissions"]) == 27
+    assert len(DEFAULT_ROLE_TEMPLATES["dept_manager"]["permissions"]) == 21
+    assert len(DEFAULT_ROLE_TEMPLATES["employee"]["permissions"]) == 11
 
     # Servis, şablonları DB'ye aynı sayılarla yazar (RLS: kiracı bağlamı zorunlu).
     with tenant_context(tenant_a.id):

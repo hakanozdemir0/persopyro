@@ -343,6 +343,137 @@ def adjust_leave_balance(
     return balance
 
 
+def set_leave_entitlement(
+    *,
+    actor,
+    employee: Employee,
+    leave_type: LeaveType,
+    period_year: int,
+    days: Decimal,
+    reason: str,
+) -> dict:
+    """
+    Dönem izin hakkını **mutlak gün değeriyle** tanımlar veya düzeltir.
+
+    Neden gerekli (bildirim): yeni oluşturulmuş bir çalışana arayüzden "hak tanımlama"
+    akışı net değildi; mevcut `adjust_leave_balance` **delta** (`+2`) ister ve dönem
+    hakediş kaydı olmayan çalışanda ne yazılacağı belirsiz kalıyordu. Bu servis
+    **mevcut altyapıyı** kullanır ve iki durumu tek kapıda, denetimli biçimde çözer:
+
+      * Dönem için **`accrual` defter kaydı yoksa** → girilen gün **hakediş** olarak
+        yazılır (dönem başına tek kayıt; DB kısmi benzersizliği çift hakedişi engeller).
+      * Kayıt **varsa** → fark, gerekçeli **`adjustment`** olarak yazılır (sessiz
+        üzerine yazma yok; `adjustment` için gerekçe DB `CHECK`'i ile de zorunludur).
+      * Fark sıfırsa **hiçbir şey yazılmaz** (`degisiklik_yok`) — arayüz "kaydettim"
+        diyemez, çünkü yazılacak bir şey yoktur.
+
+    Değer, "hak" kolonlarının toplamıdır (`entitled + carried_forward + adjustment`),
+    böylece **hak − kullanılan − bekleyen = kalan** eşitliği bozulmaz.
+
+    `leave.balance.manage` izni + kapsam gerekir (`can_manage_balances`); negatif
+    bakiye üretilecekse politikaya bakılır (izin yoksa fail-closed).
+
+    Döner: `{"durum", "delta", "hak_toplam", "balance"}` — arayüz gerçek sonucu gösterir.
+    """
+    if not can_manage_balances(actor, employee):
+        raise LeaveAuthorizationError(
+            "İzin hakkı tanımlamak/düzeltmek için 'leave.balance.manage' izni ve kapsam gerekir."
+        )
+    gerekce = (reason or "").strip()
+    if len(gerekce) < 5:
+        raise LeaveError("İzin hakkı işlemi için anlamlı bir gerekçe zorunludur.")
+    hedef = Decimal(days if days is not None else "")
+    if hedef < SIFIR:
+        raise LeaveBalanceError("İzin hakkı negatif olamaz.")
+
+    with transaction.atomic():
+        balance = LeaveBalance.objects.select_for_update().get(
+            pk=get_or_create_balance(
+                employee=employee, leave_type=leave_type, period_year=period_year
+            ).pk
+        )
+        mevcut_toplam = (
+            Decimal(balance.entitled_days)
+            + Decimal(balance.carried_forward_days)
+            + Decimal(balance.adjustment_days)
+        )
+        fark = hedef - mevcut_toplam
+        if fark == SIFIR:
+            return {
+                "durum": "degisiklik_yok",
+                "delta": str(SIFIR),
+                "hak_toplam": str(mevcut_toplam),
+                "balance": balance,
+            }
+
+        hakedis_var = LeaveBalanceEntry.objects.filter(
+            balance=balance,
+            entry_kind=BalanceEntryKind.ACCRUAL,
+            period_year=period_year,
+        ).exists()
+
+        if not hakedis_var:
+            # İlk hakediş: defter sözleşmesi gereği ACCRUAL kaydı `entitled_days`'i değiştirir.
+            if Decimal(balance.entitled_days) + fark < SIFIR:
+                raise LeaveBalanceError(
+                    "Bu dönemde hakediş kaydı yok ve girilen değer mevcut düzeltmelerin "
+                    "altında kalıyor; bu durumda 'düzeltme' işlemi kullanılmalıdır."
+                )
+            balance.entitled_days = Decimal(balance.entitled_days) + fark
+            balance.save(update_fields=["entitled_days", "updated_at"])
+            _defter_yaz(
+                balance=balance,
+                entry_kind=BalanceEntryKind.ACCRUAL,
+                delta=fark,
+                actor=actor,
+                reason=gerekce,
+            )
+            durum = "hakedis_tanimlandi"
+            eylem = "leave.balance.accrual"
+        else:
+            yeni_kalan = hedef - Decimal(balance.used_days) - Decimal(balance.reserved_days)
+            if yeni_kalan < SIFIR:
+                policy = _aktif_politika(leave_type)
+                if policy is None or not policy.allow_negative_balance:
+                    raise LeaveBalanceError(
+                        "Bu işlem negatif bakiye üretirdi; politika negatif bakiyeye izin "
+                        "vermiyor."
+                    )
+            balance.adjustment_days = Decimal(balance.adjustment_days) + fark
+            balance.save(update_fields=["adjustment_days", "updated_at"])
+            _defter_yaz(
+                balance=balance,
+                entry_kind=BalanceEntryKind.ADJUSTMENT,
+                delta=fark,
+                actor=actor,
+                reason=gerekce,
+            )
+            durum = "duzeltme"
+            eylem = "leave.balance.adjustment"
+
+        log_action(
+            tenant_id=balance.tenant_id,
+            action=eylem,
+            user=actor,
+            table_name="leave_balances",
+            record_id=balance.pk,
+            changes={
+                "employee_no": employee.employee_no,
+                "leave_type": leave_type.code,
+                "period_year": period_year,
+                "hedef_hak": str(hedef),
+                "delta": str(fark),
+                "has_reason": True,
+            },
+        )
+        return {
+            "durum": durum,
+            "delta": str(fark),
+            "hak_toplam": str(hedef),
+            "balance": balance,
+        }
+
+
 __all__ = [
     "accrue_leave_entitlements",
     "adjust_leave_balance",
@@ -350,4 +481,5 @@ __all__ = [
     "next_accrual_date",
     "period_year_for",
     "service_months",
+    "set_leave_entitlement",
 ]

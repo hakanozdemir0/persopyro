@@ -121,6 +121,8 @@ INSTALLED_APPS = [
     "apps.organization",
     # İzin yönetimi (M14; OD21/OD24/OD5 kapalı).
     "apps.leave",
+    # Fazla mesai — P5a V1 (talep + onay temeli; kural/ücret motoru ileriki faz).
+    "apps.overtime",
     # Manuel test arayüzü (yalnızca geliştirme/test; model içermez, migration üretmez).
     "apps.testui",
     # Platform katmanı (OD3/OD20/OD22/OD25): AYRI GÜVENLİK SINIRI — kiracı

@@ -34,6 +34,7 @@ from apps.leave.services.balances import (
     next_accrual_date,
     period_year_for,
     service_months,
+    set_leave_entitlement,
 )
 from apps.leave.services.base import (
     LeaveAuthorizationError,
@@ -93,6 +94,7 @@ __all__ = [
     "mark_leave_taken",
     "period_year_for",
     "service_months",
+    "set_leave_entitlement",
     "submit_leave_request",
     "update_leave_policy",
     "update_leave_type",

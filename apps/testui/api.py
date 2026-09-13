@@ -38,7 +38,9 @@ from apps.leave.leave_type_catalog import LeaveCategory
 from apps.leave.models import (
     ApprovalStep,
     ApprovalStepStatus,
+    BalanceEntryKind,
     LeaveBalance,
+    LeaveBalanceEntry,
     LeavePolicy,
     LeaveRequest,
     LeaveRequestStatus,
@@ -71,6 +73,7 @@ from apps.leave.services.balances import (
     get_or_create_balance,
     next_accrual_date,
     period_year_for,
+    set_leave_entitlement,
 )
 from apps.organization.models import BloodType, Department, Employee, Position
 from apps.organization.services import (
@@ -86,6 +89,30 @@ from apps.organization.services import (
     soft_delete_department,
     sub_tree_department_ids,
     update_department,
+)
+from apps.overtime.models import (
+    OVERTIME_MAX_MINUTES,
+    OvertimeRequest,
+    OvertimeStatus,
+)
+from apps.overtime.services import (
+    OvertimeAuthorizationError,
+    OvertimeError,
+    OvertimeStateError,
+    OvertimeValidationError,
+    can_approve_overtime,
+    can_cancel_overtime,
+    can_create_overtime_for,
+    can_view_overtime,
+    cancel_overtime_request,
+    create_overtime_request,
+    decide_overtime_request,
+)
+from apps.overtime.services import (
+    current_step as current_overtime_step,
+)
+from apps.overtime.services import (
+    user_employee as overtime_user_employee,
 )
 from apps.rbac.models import (
     ORG_SCOPED_ROLE_SCOPE_TYPES,
@@ -132,10 +159,21 @@ class TestUiErrors:
     """Servis hatalarını HTTP kodlarına ve anlaşılır mesaja çevirir."""
 
     #: Durum/kural çakışması olarak raporlanan hatalar (409).
-    CAKISMA = (LeaveStateError, LeavePolicyError, LeaveBalanceError, OrganizationTreeError)
+    CAKISMA = (
+        LeaveStateError,
+        LeavePolicyError,
+        LeaveBalanceError,
+        OrganizationTreeError,
+        OvertimeStateError,
+    )
     #: Yetki/kapsam reddi olarak raporlanan hatalar (403). `RoleAssignmentError`
     #: self-elevation/kapsam/izin redlerini taşır (Python `PermissionError` alt sınıfı).
-    YETKI = (LeaveAuthorizationError, OrganizationAuthorizationError, RoleAssignmentError)
+    YETKI = (
+        LeaveAuthorizationError,
+        OrganizationAuthorizationError,
+        RoleAssignmentError,
+        OvertimeAuthorizationError,
+    )
 
     @classmethod
     def cevap(cls, hata: Exception) -> Response:
@@ -176,7 +214,7 @@ class TestUiErrors:
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-        if isinstance(hata, (LeaveError, OrganizationError)):
+        if isinstance(hata, (LeaveError, OrganizationError, OvertimeError)):
             return Response(
                 {"error": {"code": "bad_request", "message": str(hata), "detail": ""}},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -237,6 +275,26 @@ def _tarih(deger, alan: str):  # noqa: ANN001, ANN202
         return date.fromisoformat(str(deger))
     except ValueError as hata:
         raise LeaveError(f"'{alan}' GG-AA-YYYY biçiminde olmalı.") from hata
+
+
+def _saat(deger, alan: str):  # noqa: ANN001, ANN202
+    """
+    `HH:MM` (veya `HH:MM:SS`) metnini saat nesnesine çevirir.
+
+    Fazla mesai saatleri **yerel duvar saati**dir (`work_date` + saat); dönüşüm
+    yapılmaz, süre iki saat arasındaki farktan sunucuda hesaplanır.
+    """
+    from datetime import datetime
+
+    if not deger:
+        raise OvertimeValidationError(f"'{alan}' zorunludur.")
+    metin = str(deger).strip()
+    for bicim in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(metin, bicim).time()  # noqa: DTZ007 - duvar saati
+        except ValueError:
+            continue
+    raise OvertimeValidationError(f"'{alan}' SS:DD biçiminde olmalıdır.")
 
 
 def _sayi(deger):  # noqa: ANN001, ANN202
@@ -681,6 +739,215 @@ def _bakiye_ozeti(bakiye: LeaveBalance) -> dict:  # noqa: ANN001
     }
 
 
+def _izin_haklari_listesi(employee, yil: int) -> list[dict]:  # noqa: ANN001
+    """
+    Çalışanın dönem **izin hakları** — bakiye kaydı OLMAYAN türler de listelenir.
+
+    NEDEN (bildirim): "yeni oluşturulmuş çalışana izin hakkı eklenemedi". Kaynak neden,
+    arayüzün yalnızca **var olan** `leave_balances` satırlarını listelemesiydi: yeni
+    çalışanda hiç satır olmadığı için "hak tanımla" düğmesi de hiç görünmüyordu.
+    Artık satır kümesi **bakiye kullanan aktif izin türleri** üzerinden kurulur; değerler
+    varsa `leave_balances`'tan gelir (türetilmiş `kalan` = `available_days` üretilen kolon).
+
+    Ek alanlar:
+      * `hakedis_tanimli` → dönem için defterde `accrual` kaydı var mı (ilk tanımlama
+        mı, düzeltme mi olduğunu arayüz sunucudan öğrenir; tahmin etmez).
+      * `hak_toplam` → `entitled + carried_forward + adjustment` (hak − kullanılan −
+        bekleyen = kalan eşitliği korunur).
+    """
+    satirlar: list[dict] = []
+    turler = LeaveType.objects.filter(
+        deleted_at__isnull=True, status=RecordStatus.ACTIVE, uses_balance=True
+    ).order_by("code")
+    for tur in turler:
+        bakiye = (
+            LeaveBalance.objects.filter(
+                employee=employee, leave_type=tur, period_year=yil, deleted_at__isnull=True
+            )
+            .select_related("leave_type")
+            .first()
+        )
+        if bakiye is None:
+            satirlar.append(
+                {
+                    "leave_type_id": str(tur.pk),
+                    "leave_type": tur.name,
+                    "leave_type_code": tur.code,
+                    "period_year": yil,
+                    "hakedis_var": False,
+                    "hakedis_tanimli": False,
+                    "hak_toplam": None,
+                    "entitled_days": None,
+                    "carried_forward_days": None,
+                    "adjustment_days": None,
+                    "used_days": None,
+                    "reserved_days": None,
+                    "kalan": None,
+                    "sonraki_hakedis_metin": None,
+                    "mesaj": "Bu dönem için hak tanımlanmamış.",
+                }
+            )
+            continue
+        hak_toplam = (
+            Decimal(bakiye.entitled_days)
+            + Decimal(bakiye.carried_forward_days)
+            + Decimal(bakiye.adjustment_days)
+        )
+        hakedis_tanimli = LeaveBalanceEntry.objects.filter(
+            balance=bakiye, entry_kind=BalanceEntryKind.ACCRUAL, period_year=yil
+        ).exists()
+        sonraki = next_accrual_date(employee.hire_date) if employee.hire_date else None
+        satirlar.append(
+            {
+                "leave_type_id": str(tur.pk),
+                "leave_type": tur.name,
+                "leave_type_code": tur.code,
+                "period_year": yil,
+                "hakedis_var": True,
+                "hakedis_tanimli": hakedis_tanimli,
+                "hak_toplam": str(hak_toplam),
+                "entitled_days": str(bakiye.entitled_days),
+                "carried_forward_days": str(bakiye.carried_forward_days),
+                "adjustment_days": str(bakiye.adjustment_days),
+                "used_days": str(bakiye.used_days),
+                "reserved_days": str(bakiye.reserved_days),
+                "kalan": str(bakiye.available_days),
+                "sonraki_hakedis_metin": sonraki.strftime("%d.%m.%Y") if sonraki else None,
+                "mesaj": "",
+            }
+        )
+    return satirlar
+
+
+# --- Fazla mesai (P5a V1) -----------------------------------------------------
+
+
+def _sure_metin(dakika: int | None) -> str | None:
+    """Dakikayı okunabilir süreye çevirir (arayüz hesap yapmaz)."""
+    if dakika is None:
+        return None
+    saat, kalan = divmod(int(dakika), 60)
+    if saat and kalan:
+        return f"{saat} sa {kalan} dk"
+    if saat:
+        return f"{saat} sa"
+    return f"{kalan} dk"
+
+
+def _adim_onaylayici(adim) -> dict:  # noqa: ANN001
+    """
+    Karar bekleyen adımın onaylayıcısı — **sunucu kaynak-doğru** (arayüz tahmin etmez).
+
+    Adım ya bir kişiye (birincil yönetici) ya da bir role (İK) bağlıdır; iki durum da
+    okunabilir tek etikete indirgenir.
+    """
+    if adim is None:
+        return {"etiket": None, "tur": None, "ad": None, "rol": None}
+    if adim.approver_user_id is not None:
+        gosterim = _onaylayici_gosterimi(adim.approver_user)
+        return {
+            "etiket": gosterim["etiket"],
+            "tur": "kisi",
+            "ad": gosterim["ad"],
+            "rol": gosterim["unvan"],
+        }
+    rol_adi = (
+        Role.objects.filter(code=adim.approver_role_code).values_list("name", flat=True).first()
+        or adim.approver_role_code
+    )
+    return {"etiket": rol_adi, "tur": "rol", "ad": None, "rol": rol_adi}
+
+
+def _fazla_mesai_adimlari(talep) -> list[dict]:  # noqa: ANN001
+    """Talebin onay adımları (sıra, onaylayıcı, durum) — onay izi görünür kalır."""
+    adimlar = (
+        ApprovalStep.objects.filter(
+            subject_kind="overtime_request",
+            subject_id=talep.pk,
+            deleted_at__isnull=True,
+        )
+        .select_related("approver_user")
+        .order_by("step_no")
+    )
+    return [
+        {
+            "step_no": adim.step_no,
+            "status": adim.status,
+            "status_label": adim.get_status_display(),
+            "onaylayici": _adim_onaylayici(adim),
+            "guncel": adim.status == ApprovalStepStatus.PENDING,
+        }
+        for adim in adimlar
+    ]
+
+
+def _fazla_mesai_ozeti(talep, user) -> dict:  # noqa: ANN001
+    """Fazla mesai kaydı özeti (kişisel veri içermez; süre sunucudan gelir)."""
+    adim = current_overtime_step(talep)
+    adimlar = _fazla_mesai_adimlari(talep)
+    return {
+        "id": str(talep.pk),
+        "employee_id": str(talep.employee_id),
+        "employee_no": talep.employee.employee_no,
+        "employee": _calisan_etiketi(talep.employee),
+        "department": talep.employee.department.name if talep.employee.department_id else None,
+        "work_date": talep.work_date.isoformat(),
+        "start_time": talep.start_time.strftime("%H:%M"),
+        "end_time": talep.end_time.strftime("%H:%M"),
+        "saat_araligi": (
+            f"{talep.start_time.strftime('%H:%M')} - {talep.end_time.strftime('%H:%M')}"
+        ),
+        "total_minutes": talep.total_minutes,
+        "sure_metin": _sure_metin(talep.total_minutes),
+        "description": talep.description,
+        "status": talep.status,
+        "status_label": talep.get_status_display(),
+        "compensation_type": talep.compensation_type,
+        "onaylayici": _adim_onaylayici(adim),
+        "karar_bekleyen_adim": adim.step_no if adim is not None else None,
+        "onay_adimlari": adimlar,
+        "kendi_kaydim": talep.employee.user_id is not None
+        and str(talep.employee.user_id) == str(getattr(user, "pk", None)),
+        "can_cancel": can_cancel_overtime(user, talep),
+        "can_decide": adim is not None and can_approve_overtime(user, talep),
+        "decided_at": talep.decided_at.isoformat() if talep.decided_at else None,
+        "karar_veren": (
+            _onaylayici_gosterimi(talep.decided_by)["etiket"] if talep.decided_by_id else None
+        ),
+        "cancel_reason": talep.cancel_reason or None,
+        "created_at": talep.created_at.isoformat(),
+    }
+
+
+def _fazla_mesai_getir(user, talep_id):  # noqa: ANN001
+    """Kapsamdaki/kendi fazla mesai kaydı; görünmüyorsa **404** (varlık sızdırılmaz)."""
+    kimlik = _uuid(talep_id, "overtime_id")
+    talep = (
+        OvertimeRequest.objects.filter(pk=kimlik, deleted_at__isnull=True)
+        .select_related("employee__department", "employee__user", "decided_by")
+        .first()
+    )
+    if talep is None or not can_view_overtime(user, talep):
+        raise Http404("fazla_mesai_kapsam_disi")
+    return talep
+
+
+def _gorunur_fazla_mesailer(user):  # noqa: ANN001, ANN202
+    """
+    Aktörün görebildiği fazla mesai kayıtları (kapsam süzgeci **sunucuda**).
+
+    Kiracı sınırı RLS ile zaten kapalıdır; burada izin + kapsam uygulanır.
+    """
+    if not user_has_permission(user, "overtime.request.read"):
+        return []
+    kayitlar = (
+        OvertimeRequest.objects.filter(deleted_at__isnull=True)
+        .select_related("employee__department", "employee__user", "decided_by")
+        .order_by("-work_date", "-start_time")[:200]
+    )
+    return [t for t in kayitlar if can_view_overtime(user, t)]
+
+
 # --- uç noktalar --------------------------------------------------------------
 
 
@@ -847,6 +1114,25 @@ class DashboardView(TestUiView):
             if can_view_leave_request(user, talep):
                 durum_sayilari[talep.status] = durum_sayilari.get(talep.status, 0) + 1
 
+        # Fazla mesai özeti (P5a V1): panel kalabalıklaştırılmaz, yalnız iki sayı döner.
+        #   * `bekleyen`       → kullanıcının **kendi** onay bekleyen bildirimi
+        #   * `karar_bekleyen` → kullanıcının karara bağlayabileceği bildirim sayısı
+        fazla_mesai = {"bekleyen": 0, "karar_bekleyen": 0}
+        if user_has_permission(user, "overtime.request.read"):
+            gorunur_fm = _gorunur_fazla_mesailer(user)
+            fazla_mesai["bekleyen"] = sum(
+                1
+                for t in gorunur_fm
+                if t.status == OvertimeStatus.PENDING
+                and calisan is not None
+                and t.employee_id == calisan.pk
+            )
+            fazla_mesai["karar_bekleyen"] = sum(
+                1
+                for t in gorunur_fm
+                if t.status == OvertimeStatus.PENDING and can_approve_overtime(user, t)
+            )
+
         return Response(
             {
                 "data": {
@@ -863,8 +1149,13 @@ class DashboardView(TestUiView):
                             calisan.department.name if calisan and calisan.department_id else None
                         ),
                         "employee_no": calisan.employee_no if calisan is not None else None,
+                        # İşe giriş tarihi "Bilgilerim" kartında gösterilir (bildirim).
+                        "hire_date": (
+                            calisan.hire_date.isoformat() if calisan and calisan.hire_date else None
+                        ),
                         "annual": _yillik_ozet(calisan, yil),
                     },
+                    "fazla_mesai": fazla_mesai,
                     "pii_gorunur": user_has_permission(user, "employee.sensitive.read"),
                     "upcoming_requests": yaklasanlar,
                     "decided_requests": karara_baglananlar,
@@ -872,6 +1163,14 @@ class DashboardView(TestUiView):
                     "balances": bakiyeler,
                     "annual": _yillik_ozet(calisan, yil),
                     "my_requests": kendi_talepleri,
+                    # "İzin taleplerim" kartı yalnız son kayıtları gösterir; toplam sayı
+                    # sunucudan gelir ki arayüz "Tümünü gör" gerekip gerekmediğini
+                    # tahmin etmesin.
+                    "my_requests_count": (
+                        calisan.leave_requests.filter(deleted_at__isnull=True).count()
+                        if calisan is not None
+                        else 0
+                    ),
                     "pending_requests": onay_bekleyen,
                     "pending_count": len(onay_bekleyen),
                     # Panel üst özet kartları (her değer kapsam süzgecinden geçer).
@@ -2310,6 +2609,13 @@ class EmployeeDetailView(TestUiView):
             # İzin hakları bölümü: bakiye düzenleme yetkisi/kapsamı (karar backend'de).
             "bakiye_okunabilir": user_has_permission(request.user, "leave.balance.read"),
             "bakiye_yonetilebilir": can_manage_balances(request.user, calisan),
+            # İzin hakları: bakiye kaydı OLMAYAN türler de satır olarak döner
+            # (bildirim: yeni çalışanda "hak tanımla" hiç görünmüyordu).
+            "izin_haklari": (
+                _izin_haklari_listesi(calisan, yil)
+                if user_has_permission(request.user, "leave.balance.read")
+                else []
+            ),
             "sonraki_hakedis": next_accrual_date(calisan.hire_date).isoformat(),
             "sonraki_hakedis_metin": next_accrual_date(calisan.hire_date).strftime("%d.%m.%Y"),
             "yetki_gorunur": user_has_permission(request.user, "role.manage"),
@@ -2550,6 +2856,184 @@ class LeaveRequestCancelView(TestUiView):
         return Response({"data": _talep_ozeti(sonuc, request.user)})
 
 
+class EmployeeEntitlementView(TestUiView):
+    """
+    İzin hakkı tanımlama/düzeltme — **mutlak gün** ile, servis katmanı üzerinden.
+
+    Arayüz bakiye **yazmaz**: `set_leave_entitlement` çağrılır (ilk kez → hakediş
+    defter kaydı; sonrasında → gerekçeli düzeltme). Gerekçe zorunludur; sonuç
+    sunucudan döner (`durum`), böylece "kaydettim" ile "yazılacak bir şey yoktu"
+    karışmaz.
+    """
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        calisan = _kapsamdaki_calisan(request.user, employee_id)
+        veri = request.data
+        tur_yil = period_year_for()
+        yil = int(veri.get("period_year") or tur_yil)
+        try:
+            tur = LeaveType.objects.filter(
+                pk=_uuid(veri.get("leave_type_id"), "leave_type_id"),
+                tenant_id=request.user.tenant_id,
+                deleted_at__isnull=True,
+            ).first()
+            if tur is None:
+                raise LeaveError("İzin türü seçilmelidir.")
+            if not tur.uses_balance:
+                raise LeaveError(
+                    "Yalnız bakiye kullanan izin türleri için hak tanımlanır."
+                )
+            try:
+                gun = Decimal(str(veri.get("days")).replace(",", "."))
+            except (InvalidOperation, TypeError, ValueError) as hata:
+                raise LeaveError(
+                    "Hak gün sayısı sayı olmalıdır (ör. 14 veya 14.5)."
+                ) from hata
+            sonuc = set_leave_entitlement(
+                actor=request.user,
+                employee=calisan,
+                leave_type=tur,
+                period_year=yil,
+                days=gun,
+                reason=str(veri.get("reason") or ""),
+            )
+        except (LeaveError, LeaveAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        mesajlar = {
+            "hakedis_tanimlandi": "İzin hakkı tanımlandı.",
+            "duzeltme": "İzin hakkı güncellendi.",
+            "degisiklik_yok": "Değişiklik yok: girilen değer mevcut hakkın aynısı.",
+        }
+        return Response(
+            {
+                "data": {
+                    "durum": sonuc["durum"],
+                    "mesaj": mesajlar.get(sonuc["durum"], "İşlem tamamlandı."),
+                    "delta": sonuc["delta"],
+                    "hak_toplam": sonuc["hak_toplam"],
+                    "employee_no": calisan.employee_no,
+                },
+                "meta": {"izin_haklari": _izin_haklari_listesi(calisan, yil)},
+            }
+        )
+
+
+class OvertimeListView(TestUiView):
+    """
+    Fazla mesai: kendi kayıtlarım (çalışan) / kapsamımdaki kayıtlar (yönetici) + bildirim.
+
+    * `GET` → izin `overtime.request.read`; satırlar `SELF` ∨ kapsam ile süzülür
+      (kapsam dışı çalışanın kaydı **hiç dönmez**; varlık sızdırılmaz).
+    * `POST` → izin `overtime.request.create` ve **yalnız kendi çalışan kaydı** için
+      (V1 sınırı; başka çalışan adına bildirim açılamaz). Süre sunucuda hesaplanır.
+    """
+
+    def get(self, request):  # noqa: ANN001
+        user = request.user
+        durum = str(request.query_params.get("status") or "").strip()
+        kendi = overtime_user_employee(user)
+        kayitlar = _gorunur_fazla_mesailer(user)
+        if durum in dict(OvertimeStatus.choices):
+            kayitlar = [t for t in kayitlar if t.status == durum]
+        satirlar = [_fazla_mesai_ozeti(t, user) for t in kayitlar]
+        benim = [s for s in satirlar if s["kendi_kaydim"]]
+        return Response(
+            {
+                "data": satirlar,
+                "meta": {
+                    "can_create": kendi is not None
+                    and can_create_overtime_for(user, kendi),
+                    "employee_id": str(kendi.pk) if kendi is not None else None,
+                    "employee_no": kendi.employee_no if kendi is not None else None,
+                    "kendi_kayitlarim": benim,
+                    "durum_sayilari": {
+                        kod: sum(1 for s in satirlar if s["status"] == kod)
+                        for kod in dict(OvertimeStatus.choices)
+                    },
+                    "karar_bekleyen": [s for s in satirlar if s["can_decide"]],
+                    "max_minutes": OVERTIME_MAX_MINUTES,
+                    "kayit_sayisi": len(satirlar),
+                    # Form varsayılanı: bugünün tarihi sunucudan gelir (istemci saati
+                    # farklı olabilir; gelecek tarih zaten reddedilir).
+                    "today": timezone.localdate().isoformat(),
+                },
+            }
+        )
+
+    def post(self, request):  # noqa: ANN001
+        user = request.user
+        kendi = overtime_user_employee(user)
+        if kendi is None:
+            return TestUiErrors.cevap(
+                OvertimeValidationError(
+                    "Bu kullanıcıya bağlı bir çalışan kaydı yok; fazla mesai bildirimi "
+                    "açılamaz."
+                )
+            )
+        veri = request.data
+        try:
+            talep = create_overtime_request(
+                actor=user,
+                employee=kendi,
+                work_date=_tarih(veri.get("work_date"), "work_date"),
+                start_time=_saat(veri.get("start_time"), "start_time"),
+                end_time=_saat(veri.get("end_time"), "end_time"),
+                description=str(veri.get("description") or ""),
+                # İstemci süre gönderirse **yalnızca doğrulanır** (yazılmaz).
+                client_total_minutes=veri.get("total_minutes"),
+            )
+        except (OvertimeError, OvertimeAuthorizationError, OvertimeValidationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {"data": _fazla_mesai_ozeti(talep, user)}, status=status.HTTP_201_CREATED
+        )
+
+
+class OvertimeDecisionView(TestUiView):
+    """Fazla mesai kararı (onay/ret) — izin + adım sahipliği + farklı aktör sunucuda."""
+
+    def post(self, request, overtime_id: str):  # noqa: ANN001
+        talep = _fazla_mesai_getir(request.user, overtime_id)
+        karar = str(request.data.get("decision", "")).strip()
+        if karar not in (OvertimeStatus.APPROVED, OvertimeStatus.REJECTED):
+            return Response(
+                {
+                    "error": {
+                        "code": "bad_request",
+                        "message": "Karar 'approved' veya 'rejected' olmalıdır.",
+                        "detail": "",
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            sonuc = decide_overtime_request(
+                actor=request.user,
+                talep=talep,
+                decision=karar,
+                reason=str(request.data.get("reason", "")).strip(),
+            )
+        except (OvertimeError, OvertimeAuthorizationError, OvertimeValidationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _fazla_mesai_ozeti(sonuc, request.user)})
+
+
+class OvertimeCancelView(TestUiView):
+    """Onay bekleyen fazla mesai bildirimini iptal eder (gerekçe zorunlu)."""
+
+    def post(self, request, overtime_id: str):  # noqa: ANN001
+        talep = _fazla_mesai_getir(request.user, overtime_id)
+        try:
+            sonuc = cancel_overtime_request(
+                actor=request.user,
+                talep=talep,
+                reason=str(request.data.get("reason", "")).strip(),
+            )
+        except (OvertimeError, OvertimeAuthorizationError, OvertimeValidationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _fazla_mesai_ozeti(sonuc, request.user)})
+
+
 __all__ = [
     "ApprovalStep",
     "DashboardView",
@@ -2557,6 +3041,7 @@ __all__ = [
     "DepartmentListView",
     "DepartmentMoveView",
     "EmployeeBalanceView",
+    "EmployeeEntitlementView",
     "EmployeeListView",
     "EmployeeMoveView",
     "LeaveRequestCancelView",
@@ -2564,6 +3049,9 @@ __all__ = [
     "LeaveRequestListView",
     "LookupView",
     "MeView",
+    "OvertimeCancelView",
+    "OvertimeDecisionView",
+    "OvertimeListView",
     "TestUiView",
     "kapsamdaki_calisanlar",
 ]
