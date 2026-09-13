@@ -661,7 +661,9 @@ listesi uygulanır.
 > `hr.employee_employment_terms`, `hr.employee_assignments`, `hr.form_field_definitions`)
 > **mevcut `apps/organization` uygulamasında** yaşar; ayrı bir `apps/people` açılmaz (aynı bounded
 > context: kiracı → organizasyon → çalışan). Belge (P3) ve bildirim (P2) kendi uygulamalarını alır.
-> Kod yazılmadı; karar kaydı: `docs/AUTHORIZATION.md` §16, tasarım: `docs/HR_ROADMAP.md` §28.
+> **P1-A ✅ uygulandı (2026-09-13):** dört tablo `apps/organization` içinde oluşturuldu
+> (`organization/0014–0018`, `accounts/0006`, `rbac/0012`); RLS+FORCE ve guard'lar mevcut
+> standartla uygulandı. Karar kaydı: `docs/AUTHORIZATION.md` §16, tasarım: `docs/HR_ROADMAP.md` §28.
 
 ## 23. Özet: neden bu yığın
 

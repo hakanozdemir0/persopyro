@@ -39,10 +39,12 @@ from django.db import DatabaseError, connection, transaction
 from django.utils import timezone
 
 from apps.audit.services import log_action
+from apps.organization.employee_form_catalog import EMPLOYEE_FORM_FIELDS
 from apps.organization.models import (
     Department,
     Employee,
     EmployeeManager,
+    FormFieldDefinition,
     ManagerRelationType,
     Position,
     RecordStatus,
@@ -680,3 +682,42 @@ def sub_tree_department_ids(department: Department) -> frozenset[uuid.UUID]:
     if cozulen is None:
         raise OrganizationError("Birim alt ağacı çözülemedi (silinmiş veya kiracı dışı).")
     return cozulen
+
+def ensure_default_form_fields(tenant) -> int:  # noqa: ANN001
+    """
+    Kiracı için onboarding formu **varsayılan alan yapılandırmasını** üretir (idempotent).
+
+    P1-A/OD38: form yapısı koddaki katalogdan türetilir; bu fonksiyon her alan için bir
+    **başlangıç satırı** yazar (görünür/zorunlu/sıra/bölüm/kilit seviyesi/veri sınıfı
+    katalogdan gelir). Tenant sonradan bu satırları **override** eder; eksik satır varsa
+    eklenir, **mevcut satırlar değiştirilmez** (tenant ayarı ezilmez).
+
+    Nerede çağrılır: kiracı **provizyonu** sırasında (`create_default_roles` ile aynı akış).
+    Bugün `scripts/_demo_data.py` çağırır; P1-B'de kiracı oluşturma servisine bağlanacaktır.
+
+    Döner: bu çağrıda **oluşturulan** satır sayısı (0 = zaten kurulu).
+
+    Kiracı bağlamı **zorunludur** (RLS): çağıran `tenant_context` içinde olmalıdır.
+    """
+    olusan = 0
+    for alan in EMPLOYEE_FORM_FIELDS:
+        _, yaratildi = FormFieldDefinition.objects.get_or_create(
+            tenant=tenant,
+            form_code="employee_onboarding",
+            field_code=alan.code,
+            deleted_at__isnull=True,
+            defaults={
+                "section_code": alan.section_code,
+                "section_label": alan.section_label,
+                "sort_order": alan.sort_order,
+                "is_visible": alan.default_visible,
+                "is_required": alan.default_required,
+                "label_override": "",
+                "helper_text": "",
+                "lock_level": alan.lock_level,
+                "data_class": alan.data_class,
+            },
+        )
+        if yaratildi:
+            olusan += 1
+    return olusan

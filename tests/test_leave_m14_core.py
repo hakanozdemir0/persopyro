@@ -479,8 +479,15 @@ def test_m14_deleted_ve_pasif_calisan_talep_olusturamaz(tenant_a, user_a) -> Non
         lot["personel"].save(update_fields=["deleted_at"])
     assert can_create_leave_request_for(lot["personel_user"], lot["personel"]) is False
 
+    # P1-A/OD41: `status='terminated'` artık terminal alanları zorunlu kılar
+    # (`termination_date` + `termination_reason_code` — DB CHECK).
     ayrilmis = calisan(
-        tenant_a, lot["birimler"]["ik"], no="IK-9", status=EmployeeStatus.TERMINATED
+        tenant_a,
+        lot["birimler"]["ik"],
+        no="IK-9",
+        status=EmployeeStatus.TERMINATED,
+        termination_date=timezone.localdate(),
+        termination_reason_code="resignation",
     )
     with pytest.raises(LeaveStateError, match="durumundaki çalışan"):
         create_leave_request(

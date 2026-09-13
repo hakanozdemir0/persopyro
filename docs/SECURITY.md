@@ -755,7 +755,13 @@ Açık olanlar:
 
 ## 14. People lifecycle güvenlik kararları — P1 (2026-09-13, karar KAPALI)
 
-> Bu bölüm **kararı** kaydeder; kod P1 uygulama turunda yazılır. Kaynak: `docs/AUTHORIZATION.md`
+> **UYGULAMA DURUMU:** şema/altyapı **uygulandı (P1-A)**: `users.auth_version` kolonu,
+> 4 yeni tabloda RLS + FORCE + kiracılar arası guard'lar, `employee.sensitive.write` kodu,
+> devredilemez kod listesi katalogda. **P1-B'de uygulanacak:** erişim kesme akışı
+> (login reddi + token iptali + `auth_version` artırımı), "yazma ⇒ okuma" servis kuralı,
+> form konfigürasyon uçlarında A/K3 doğrulamaları.
+>
+> Bu bölüm **kararı** kaydeder. Kaynak: `docs/AUTHORIZATION.md`
 > §16 (OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38, OD41–OD43, OD58–OD61); tasarım: `HR_ROADMAP.md` §28.
 
 | Karar | Gerekçe / etki |

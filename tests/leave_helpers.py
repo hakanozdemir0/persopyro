@@ -78,7 +78,14 @@ def calisan(
     user=None,  # noqa: ANN001
     hire_date: date | None = None,
     status: str = EmployeeStatus.ACTIVE,
+    **ek,  # noqa: ANN003
 ) -> Employee:
+    """Çalışan oluşturur; ek alanlar (`termination_date`,
+    `termination_reason_code` …) geçirilebilir.
+
+    P1-A/OD41: `status='terminated'` DB `CHECK`'i terminal alanları zorunlu kıldığı için
+    bu alanları geçirebilmek gerekir.
+    """
     with tenant_context(tenant.id):
         return Employee.objects.create(
             tenant=tenant,
@@ -87,6 +94,7 @@ def calisan(
             employee_no=no,
             hire_date=hire_date or date(2020, 1, 1),
             status=status,
+            **ek,
         )
 
 

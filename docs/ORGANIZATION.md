@@ -241,7 +241,7 @@ işe alımda bir kez üretilir ve saklanır). Sicil numarası **kimlik değildir
 `disability_status`, `biometric_ref` ve **kan grubu** — `blood_type`, migration
 0012; sağlık verisi sayıldığı için şifreli, kapalı küme A+/A-/B+/B-/AB+/AB-/0+/0-).
 
-### 7.1 İstihdam koşulları, işyeri ve geçmiş — 🔜 **P1 (karar KAPALI 2026-09-13)**
+### 7.1 İstihdam koşulları, işyeri ve geçmiş — ✅ **P1-A UYGULANDI (2026-09-13)**
 
 | Kavram | Nerede | Not |
 |---|---|---|
@@ -251,6 +251,12 @@ işe alımda bir kez üretilir ve saklanır). Sicil numarası **kimlik değildir
 | **Yönetici geçmişi** | mevcut `hr.employee_manager` (etkili tarihli) | **Yeni sistem kurulmaz**; değişimde eski ilişki kapanır, yenisi açılır |
 | **Maaş geçmişi** | P6 `hr.employee_compensation` | P1'de ücret alanı **yok** |
 | **Ülkeye özgü alanlar** | kural setleri (P7) + koşullu form görünürlüğü + belge türleri (P3) | `employees` tablosuna ülke bazlı kolon **eklenmez** |
+
+**Uygulama (P1-A ✅):** tablolar `organization/0014_p1a_people_lifecycle` ile oluşturuldu;
+RLS+FORCE (`0016_rls_p1a`), kiracılar arası guard'lar (`0017`), "soft-delete edilmiş
+birim/pozisyon/işyeri yeni **açık** satırda kullanılamaz" guard'ı (`0018`) ve mevcut
+çalışanlar için atama backfill'i (`0015`) uygulandı. **Servisler ve arayüz P1-B/P1-C'de
+gelecek** — bugün bu tablolara yazan bir HR ucu yoktur.
 
 Kesin şema, durum makinesi, form politikası ve izin seti: `docs/HR_ROADMAP.md` **§28**;
 karar kayıtları: `docs/AUTHORIZATION.md` **§16**.

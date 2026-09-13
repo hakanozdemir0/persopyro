@@ -330,6 +330,33 @@ ihtiyaç **yeni migration** ile eklenir. Bu belgedeki hiçbir iş kalemi mevcut
 migration dosyasını düzenlemez (tek istisna yok — `0002` daha önce bir kez
 düzeltilmişti ve o hata sıfırdan kurulumu bozmuştu; tekrarlanmayacak).
 
+## A.10 P1-A sonrası güncel ölçüm (2026-09-13)
+
+**Genel (canlı geliştirme veritabanı, salt okuma):**
+
+| Ölçüm | Değer |
+|---|---|
+| `hr`+`public` şemasında tablo | **37** (P1-A öncesi 33) |
+| RLS + FORCE etkin tablo | **23** (öncesi 19) |
+| İzin kataloğu (`hr.permissions`) | **47** (41 kiracı + 6 platform; öncesi 39) |
+| Yeni tablolar | `workplaces`, `employee_employment_terms`, `employee_assignments`, `form_field_definitions` |
+
+**Tenant bazlı (kiracı bağlamı kurularak; `demo`):**
+
+| Ölçüm | Değer |
+|---|---|
+| Çalışan | 9 (5'i kullanıcıya bağlı; çoklu bağlı kullanıcı **0**) |
+| `employee_assignments` | **9** açık atama (backfill) |
+| `employee_employment_terms` | 0 (bilinçli: uydurma veri yazılmadı — ilk satır P1-B'de) |
+| `workplaces` | 0 (kiracı kendi işyerini P1-B/P1-C arayüzünden açacak; backfill işyeri uydurmaz) |
+| `form_field_definitions` | **33** (katalogdaki tüm alanlar; 8'i A seviyesi zorunlu). **Yeni kiracı provizyonu** bu satırları `ensure_default_form_fields(tenant)` ile üretir (`apps/organization/services.py`; `create_default_roles` ile aynı akış, idempotent) — migration backfill'i yalnız **mevcut** kiracıları kapsar |
+| Rol izin sayıları | `tenant_admin` 41 · `hr_manager` 30 · `tenant_officer` 23 · `dept_manager` 17 · `employee` 8 |
+
+> **Not (drift düzeltmesi):** senkron öncesi `demo` kiracısında `hr_manager` şablondan sapmıştı
+> (33 izin; `tenant.manage`, `role.manage`, `user.manage`, `employee.delete`, `billing.manage`,
+> `leave.balance.manage`, `document.delete` gibi katalog dışı kodlar). OD16 gereği
+> `rbac/0012` senkronu ile **30**'a indirildi; özel roller (`ik_sorumlusu`) **değiştirilmedi**.
+
 ## A.9 Mevcut veri durumu (ölçüldü, kiracı bağlamı kurularak)
 
 ```
@@ -535,9 +562,14 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 
 ### `hr.workplaces` / `hr.employee_employment_terms` / `hr.employee_assignments` / `hr.form_field_definitions` 🔜 **P1 — karar KAPALI (2026-09-13)**
 
-> **Durum:** tasarım **kesinleşti** (kararlar: `docs/AUTHORIZATION.md` §16 / OD58–OD61 ve OD35–OD43;
-> kesin veri modeli: `docs/HR_ROADMAP.md` §28.1). **Kod ve migration yazılmadı.**
-> P1.0 = people lifecycle + form konfigürasyonu; P1.1 = onboarding görev/checklist tabloları (§5).
+> **Durum: ✅ UYGULANDI (P1-A, 2026-09-13)** — şema + izin altyapısı + RLS + guard + backfill.
+> Migration'lar: `organization/0014_p1a_people_lifecycle` (şema), `0015_p1a_backfill` (veri),
+> `0016_rls_p1a` (RLS+FORCE), `0017_p1a_same_tenant_guards`, `0018_p1a_open_ref_guard`;
+> `accounts/0006_p1a_people_lifecycle` (`users.auth_version`); `rbac/0012_p1a_permissions_roles`
+> (8 izin + sistem rol senkronu).
+> **P1-B/P1-C bekliyor:** lifecycle servisleri/uçları (terminate/suspend), form konfigürasyon uçları,
+> çalışan geçmişi ekranı, bildirim/e-posta, belge, bordro, offboarding — bunlar bu turda **yazılmadı**.
+> P1.1 (onboarding görev/checklist tabloları, §5) henüz uygulanmadı.
 
 | Tablo | Kolonlar (özet) | Kısıt | RLS |
 |---|---|---|---|

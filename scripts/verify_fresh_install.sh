@@ -360,14 +360,14 @@ if [ "$(tablo_var "$FRESH_DB" "hr.roles")" = "$VAR" ]; then
     bekle "kapsam tipleri (M8: OD5)" \
         "$(sql_demo "SELECT string_agg(code || ':' || scope_type, ',' ORDER BY code) FROM hr.roles")" \
         "dept_manager:UNIT,employee:SELF,hr_manager:TENANT,tenant_admin:TENANT,tenant_officer:TENANT"
-    # İzin sayıları M14 (izin modülü) sonrası hedef katalogtur: kiracı tarafı kod
-    # sayısı 29 → 33 (platform.* kodları kiracı rollerine verilmez).
-    bekle "tenant_admin izinleri (hedef katalog, M14 sonrası)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "33"
-    bekle "dept_manager hedef izin seti (§6.2 DY, M14 sonrası)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "16"
-    bekle "tenant_officer hedef izin seti (§6.2 ŞYT, M14 sonrası)" \
-        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "21"
+    # İzin sayıları M14 (izin modülü) + P1-A (OD61) sonrası hedef katalogtur: kiracı
+    # tarafı kod sayısı 29 → 33 → 41 (platform.* kodları kiracı rollerine verilmez).
+    bekle "tenant_admin izinleri (hedef katalog, M14+P1-A sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_admin'")" "41"
+    bekle "dept_manager hedef izin seti (§6.2 DY, M14+P1-A sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'dept_manager'")" "17"
+    bekle "tenant_officer hedef izin seti (§6.2 ŞYT, M14+P1-A sonrası)" \
+        "$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id = rp.role_id WHERE r.code = 'tenant_officer'")" "23"
     bekle "scope_type kapalı küme kısıtı (M8)" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE conrelid='hr.roles'::regclass AND conname='roles_scope_type_valid'")" "1"
     bekle "scope_org_unit_id kolonu (M9)" \
@@ -391,8 +391,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.departments")" = "$VAR" ]; then
         bekle "hr.$tablo tenant_isolation politikası" \
             "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_policies WHERE schemaname='hr' AND tablename='$tablo' AND policyname='tenant_isolation'")" "1"
     done
-    bekle "hr şemasında FORCE RLS tablo sayısı (M10-M13 sonrası: 12)" \
-        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "19"
+    bekle "hr şemasında FORCE RLS tablo sayısı (P1-A sonrası: 23)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "23"
     bekle "OD27: company_id/legal_entity_id kolonu YOK" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND column_name IN ('company_id','legal_entity_id')")" "0"
     bekle "M9 tamamlama: user_roles.scope_org_unit_id → departments FK" \
@@ -446,8 +446,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.leave_types")" = "$VAR" ]; then
             "$(sql_deger "$FRESH_DB" "SELECT ((c.relrowsecurity AND c.relforcerowsecurity)::text || ':' || (SELECT count(*) FROM pg_policies p WHERE p.schemaname='hr' AND p.tablename='$tablo' AND p.policyname='tenant_isolation')) FROM pg_class c WHERE c.oid='hr.$tablo'::regclass")" \
             "true:1"
     done
-    bekle "kiracı verisi taşıyan FORCE RLS tablosu (12 → 19)" \
-        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "19"
+    bekle "kiracı verisi taşıyan FORCE RLS tablosu (12 → 19 → 23)" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relkind='r' AND c.relforcerowsecurity")" "23"
 
     # M14 veritabanı guard'ları (döngü/negatif bakiye/durum makinesi/onay sırası).
     for tetik in trg_leave_policy_rules_overlap trg_leave_balances_nonnegative \
@@ -484,8 +484,8 @@ if [ "$(tablo_var "$FRESH_DB" "hr.leave_types")" = "$VAR" ]; then
     # İzin kataloğu: M14 ile eklenen dört kod ve matris izin sayıları.
     bekle "izin kataloğu M14 kodları" \
         "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions WHERE code IN ('leave.request.cancel','leave.request.approve.override','leave.balance.read','leave.balance.manage')")" "4"
-    bekle "izin kataloğu toplam" "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")" "39"
-    for cift in "tenant_admin:33" "tenant_officer:21" "hr_manager:22" "dept_manager:16" "employee:8"; do
+    bekle "izin kataloğu toplam (P1-A sonrası)" "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")" "47"
+    for cift in "tenant_admin:41" "tenant_officer:23" "hr_manager:30" "dept_manager:17" "employee:8"; do
         rol="${cift%%:*}"
         adet="${cift##*:}"
         bekle "varsayılan rol izin sayısı ($rol)" \
@@ -860,6 +860,61 @@ rm -f "$CEREZ"
 kill "$SUNUCU_PID" 2>/dev/null || true
 wait "$SUNUCU_PID" 2>/dev/null || true
 SUNUCU_PID=""
+
+# --- 6c-11) P1-A: People lifecycle şeması + izin altyapısı --------------------
+bilgi "P1-A şeması (6c-11): yeni tablolar, kolonlar, CHECK/index, RLS, izin katalogu"
+
+YENI_TABLO_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='r' AND n.nspname='hr' AND c.relname IN ('workplaces','employee_employment_terms','employee_assignments','form_field_definitions')")"
+bekle "P1-A yeni tablo sayısı (6c-11)" "$YENI_TABLO_SAYISI" "4"
+
+YENI_KOLON_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND ((table_name='employees' AND column_name IN ('notice_end_date','termination_reason_code','termination_note')) OR (table_name='users' AND column_name='auth_version'))")"
+bekle "P1-A yeni kolon sayısı (6c-11)" "$YENI_KOLON_SAYISI" "4"
+
+# DİKKAT: Django `CheckConstraint` → `pg_constraint`, `UniqueConstraint` → **benzersiz index**
+# (`pg_indexes`) olarak oluşur; ikisi ayrı ölçülür (ölçülerek düzeltildi).
+P1A_CHECK_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_constraint WHERE connamespace='hr'::regnamespace AND conname IN ('employees_notice_after_termination','employees_termination_reason_valid','employees_terminated_fields_required','workplaces_country_code_format','workplaces_timezone_not_blank','workplaces_type_valid','workplaces_status_valid','ffd_field_code_known','ffd_form_code_valid','ffd_lock_level_valid','ffd_data_class_valid','ffd_locked_fields_forced','ffd_k3_not_required','eet_date_range_valid','eet_employment_type_valid','eet_working_model_valid','eet_contract_type_valid','eet_contract_range_valid','ea_date_range_valid')")"
+bekle "P1-A CHECK kısıtı sayısı (6c-11)" "$P1A_CHECK_SAYISI" "19"
+
+P1A_UNIQ_INDEX_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname IN ('employees_user_active_uniq','workplaces_tenant_code_uniq','eet_employee_open_uniq','ea_employee_open_uniq','ffd_tenant_form_field_uniq')")"
+bekle "P1-A kısmi benzersizlik index sayısı (6c-11)" "$P1A_UNIQ_INDEX_SAYISI" "5"
+
+P1A_INDEX_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname IN ('workplaces_tenant_status_idx','workplaces_tenant_country_idx','eet_tenant_emp_from_idx','eet_tenant_workplace_idx','ea_tenant_emp_from_idx','ea_tenant_dept_idx','ea_tenant_position_idx','ffd_tenant_form_sort_idx')")"
+bekle "P1-A index sayısı (6c-11)" "$P1A_INDEX_SAYISI" "8"
+
+RLS_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity AND n.nspname IN ('hr','public')")"
+bekle "RLS + FORCE tablo sayısı (6c-11)" "$RLS_SAYISI" "23"
+
+IZIN_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions")"
+bekle "izin katalogu toplamı (6c-11)" "$IZIN_SAYISI" "47"
+
+for rol_ve_sayi in "tenant_admin:41" "hr_manager:30" "tenant_officer:23" "dept_manager:17" "employee:8"; do
+    ROL="${rol_ve_sayi%%:*}"; BEKLENEN="${rol_ve_sayi##*:}"
+    SAYI="$(sql_demo "SELECT count(*) FROM hr.role_permissions rp JOIN hr.roles r ON r.id=rp.role_id WHERE r.code='$ROL' AND r.deleted_at IS NULL")"
+    bekle "$ROL izin sayısı (6c-11)" "$SAYI" "$BEKLENEN"
+done
+
+FORM_ALAN_SAYISI="$(sql_demo "SELECT count(*) FROM hr.form_field_definitions")"
+bekle "form alan yapılandırması (6c-11)" "$FORM_ALAN_SAYISI" "33"
+
+ACIK_ATAMA_SAYISI="$(sql_demo "SELECT count(*) FROM (SELECT employee_id FROM hr.employee_assignments WHERE effective_to IS NULL AND deleted_at IS NULL GROUP BY employee_id HAVING count(*) > 1) x")"
+bekle "çoklu açık atama (0 olmalı, 6c-11)" "$ACIK_ATAMA_SAYISI" "0"
+
+AUTH_VERSION="$(sql_demo "SELECT count(*) FROM hr.users WHERE auth_version <> 0")"
+bekle "auth_version sıfır olmayan kullanıcı (6c-11)" "$AUTH_VERSION" "0"
+
+# Platform rolü (varsa) yeni HR tablolarına erişemez.
+if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$PLATFORM_ROLE'")" = "1" ]; then
+    PLATFORM_ERISIM="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM unnest(ARRAY['workplaces','employee_employment_terms','employee_assignments','form_field_definitions']) t(tablo) WHERE has_table_privilege('$PLATFORM_ROLE', 'hr.' || t.tablo, 'SELECT') OR has_table_privilege('$PLATFORM_ROLE', 'hr.' || t.tablo, 'INSERT')")"
+    bekle "platform rolü yeni tablolara erişemiyor (6c-11)" "$PLATFORM_ERISIM" "0"
+else
+    bilgi "ATLANDI platform rolü yok: $PLATFORM_ROLE (6c-11)"
+fi
+
+# Uygulama rolü: DELETE verilmez (OD21 soft-delete).
+if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$APP_ROLE'")" = "1" ]; then
+    APP_DELETE="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM unnest(ARRAY['workplaces','employee_employment_terms','employee_assignments','form_field_definitions']) t(tablo) WHERE has_table_privilege('$APP_ROLE', 'hr.' || t.tablo, 'DELETE')")"
+    bekle "uygulama rolünde DELETE yok (6c-11)" "$APP_DELETE" "0"
+fi
 
 # --- 6c-7) Arayüz JS sözdizimi (node varsa) -----------------------------------
 # Neden: şablon içindeki gömülü JS yalnız tarayıcıda çalışır; bozuk bir şablon

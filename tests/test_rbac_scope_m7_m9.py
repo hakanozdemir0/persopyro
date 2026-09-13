@@ -251,11 +251,23 @@ def test_m7_katalog_ile_donmus_kopya_ayrismaz() -> None:
     setine sahip olur — sessiz yetki farkı.
     """
     # M14 (izin modülü) katalogu AUTHORIZATION §6.2 **E** bölümündeki iki kodla
-    # genişletti; fark yalnızca bu bilinçli delta olmalı (sessiz ayrışma yasak).
+    # genişletti; P1-A (OD61) ise üç kod ekledi. Fark, **yalnızca bu bilinçli
+    # deltalardan** oluşmalı (sessiz ayrışma yasak). Deltalar sırasıyla
+    # `rbac/0011_m14_leave_permissions` ve `rbac/0012_p1a_permissions_roles` ile
+    # mevcut kurulumlara da uygulanır.
     m14_delta = {"leave.request.cancel", "leave.balance.read"}
-    assert set(DEPT_MANAGER_PERMISSIONS) - set(m7.DEPT_MANAGER_PERMISSIONS) == m14_delta
+    p1a_dept_manager_delta = {"employee.history.read"}
+    p1a_tenant_officer_delta = {"employee.history.read", "org.workplace.read"}
+
+    assert (
+        set(DEPT_MANAGER_PERMISSIONS) - set(m7.DEPT_MANAGER_PERMISSIONS)
+        == m14_delta | p1a_dept_manager_delta
+    )
     assert set(m7.DEPT_MANAGER_PERMISSIONS) - set(DEPT_MANAGER_PERMISSIONS) == set()
-    assert set(TENANT_OFFICER_PERMISSIONS) - set(m7.TENANT_OFFICER_PERMISSIONS) == m14_delta
+    assert (
+        set(TENANT_OFFICER_PERMISSIONS) - set(m7.TENANT_OFFICER_PERMISSIONS)
+        == m14_delta | p1a_tenant_officer_delta
+    )
     assert set(m7.TENANT_OFFICER_PERMISSIONS) - set(TENANT_OFFICER_PERMISSIONS) == set()
     assert LEGACY_ROLE_CODE_MAP == {m7.LEGACY_ROLE_CODE: m7.TARGET_ROLE_CODE}
     assert DEFAULT_ROLE_TEMPLATES["dept_manager"]["permissions"] == list(

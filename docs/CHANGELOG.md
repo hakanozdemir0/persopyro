@@ -3,6 +3,101 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.37.0] — 2026-09-13 — P1-A: People lifecycle veri modeli + izin altyapısı (KOD)
+
+**Kapsam:** P1'in **ilk uygulama paketi** (P1-A). Şema, izin kataloğu, RLS/guard altyapısı ve
+mevcut veri backfill'i uygulandı. **P1-B/P1-C (lifecycle servisleri/uçları, form konfigürasyon
+uçları, geçmiş ekranı) bu turda yazılmadı**; terminate/suspend UI, bildirim, belge, bordro,
+offboarding kapsam dışıdır.
+**Baseline:** `c688ddd`, çalışma ağacı temiz, **473 passed**.
+
+### EKLENEN
+
+- **İzin kataloğu (+8 kod):** `employee.sensitive.write`, `employee.suspend`, `employee.terminate`,
+  `employee.restore`, `employee.history.read`, `employee.form.manage`, `org.workplace.read`,
+  `org.workplace.manage`. Katalog: **47** kod (41 kiracı + 6 platform).
+  Rol hedefleri: `tenant_admin` 41, `hr_manager` 30, `tenant_officer` 23, `dept_manager` 17,
+  `employee` 8. **`NON_DELEGABLE_PERMISSION_CODES`** (OD9) katalogda tanımlandı.
+  Migration: `rbac/0012_p1a_permissions_roles` (izin kayıtları + **sistem rol senkronu**).
+- **`hr.workplaces`** (OD58): `code`, `name`, `type` (`office|branch|remote|client_site`),
+  `country_code` (ISO alpha-2, CHECK), `city`, `address`, `timezone` (**IANA**, model validator +
+  CHECK), `status`; kısmi benzersizlik `(tenant, code) WHERE deleted_at IS NULL`.
+- **`hr.employee_employment_terms`** (OD60): etkili tarihli istihdam koşulları
+  (`employment_type`, `working_model`, `workplace_id`, `contract_type`, `contract_start_date`,
+  `contract_end_date`, `probation_end_date`, `reason`, `created_by`); **tek açık satır**
+  (kısmi benzersizlik) + tarih/ küme CHECK'leri. **Ücret alanı yok** (P6).
+- **`hr.employee_assignments`** (OD60): departman/pozisyon atama geçmişi; tek açık satır;
+  tarih CHECK'i; `(tenant, employee, effective_from)` / `(tenant, department)` /
+  `(tenant, position)` indeksleri.
+- **`hr.form_field_definitions`** (OD35/OD36/OD37/OD38): tenant override satırları;
+  `lock_level` + `data_class` **sunucu hesaplar**; DB `CHECK`'leri: bilinmeyen `field_code`
+  reddi, **A** seviyesi gizlenemez/opsiyonel yapılamaz, **K3** zorunlu yapılamaz.
+  Alan kataloğu koda eklendi (`apps/organization/employee_form_catalog.py`, 33 alan).
+- **`hr.employees` yaşam döngüsü kolonları** (OD41): `notice_end_date` (CHECK ≥ `termination_date`),
+  `termination_reason_code` (kapalı küme), `termination_note`; `status='terminated'` iken tarih +
+  neden **zorunlu** (DB CHECK); **`UNIQUE(user_id) WHERE deleted_at IS NULL AND status <> 'archived'`**
+  (OD59). `notice_period` **durum olarak eklenmedi** (türetilmiş etiket).
+- **`users.auth_version`** (OD59): `PositiveIntegerField` (negatif olamaz), varsayılan 0 —
+  erişim kesme altyapısı (uygulama P1-B'de).
+- **RLS + FORCE** (`organization/0016_rls_p1a`) yeni 4 tabloda; **kiracılar arası referans
+  guard'ları** (`0017_p1a_same_tenant_guards`) ve **"soft-delete edilmiş hedefe yeni açık kayıt
+  yazılamaz" guard'ı** (`0018_p1a_open_ref_guard`).
+- **Backfill** (`organization/0015_p1a_backfill`): mevcut (silinmemiş) her çalışan için
+  `department_id`/`position_id` + `hire_date` üzerinden **tek açık atama**; her kiracı için
+  **33 alan** form konfigürasyonu. Idempotent (kısmi indeks + `ON CONFLICT … WHERE`).
+  **`employee_employment_terms` için satır üretilmedi** (mevcut şemada istihdam tipi/modeli yok;
+  uydurma değer yazmak yanlış iş verisi olurdu) ve legacy çalışanlara **kullanıcı uydurulmadı**.
+- **Yetkiler:** `scripts/02_grant_app_privileges.sql` — yeni tablolarda `SELECT, INSERT, UPDATE`
+  (DELETE/TRUNCATE geri alındı, OD21) + platform rolü için açık `REVOKE ALL`.
+- **Testler:** `tests/test_p1a_people_lifecycle.py` (38 test): izin kataloğu/rol setleri,
+  devredilemez liste, işyeri izolasyonu + kısmi benzersizlik + timezone/ülke doğrulaması,
+  istihdam koşulları (tek açık kayıt, tarih aralığı, geçmiş korunumu, cross-tenant reddi),
+  atamalar (tek açık, cross-tenant, soft-delete hedef guard'ı, backfill idempotansı),
+  form alan kuralları (bilinmeyen kod, A kilidi, K3 zorunluluk reddi, tenant izolasyonu),
+  lifecycle CHECK'leri, auth_version, RLS/FORCE, guard trigger'ları, uygulama rolü yetkileri.
+- **`scripts/verify_fresh_install.sh` 6c-11:** yeni tablolar, kolonlar, kısıtlar, index'ler,
+  RLS+FORCE sayısı (23), izin sayısı (47), rol izin sayıları, form alanı (33), çoklu açık atama (0),
+  `auth_version`, platform erişim yasağı, uygulama rolünde DELETE yasağı.
+
+### DÜZELTİLEN (uygulama sırasında ölçülen hatalar)
+
+0. **`null=True` yerine boş dize (DJ001) + migration sırası:** `termination_reason_code` ve
+   `label_override` alanları proje kuralı gereği `blank=True, default=""` yapıldı
+   (`organization/0019_p1a_reason_not_null`). Kolonu `NOT NULL` yapmadan önce mevcut NULL'ların
+   doldurulması ve **eski CHECK'lerin önce kaldırılması** gerekti (aksi halde `''` yazımı eski
+   kısıtı ihlal eder); doldurma da FORCE RLS nedeniyle kiracı bağlamında yapılır. Üç adım da
+   ölçülerek düzeltildi.
+
+1. **Backfill sessizce no-op oluyordu:** kaynak tablo `hr.employees` FORCE RLS olduğu için kiracı
+   bağlamı kurulmadan `SELECT` boş dönüyordu → migration `set_config('app.tenant_id', …)` ile
+   kiracı bazında çalışacak şekilde düzeltildi (0 → 9 atama).
+2. **`ON CONFLICT DO NOTHING` kısmi benzersizlikte idempotans sağlamıyor:** PostgreSQL kısmi
+   indeksi hedef belirtilmeden arbiter olarak kullanmaz → `ON CONFLICT (…) WHERE …` biçimine
+   geçildi (tekrar çalıştırma testi eklendi).
+3. **`rbac/0012` geri alma FK ihlaliyle düşüyordu:** `hr.role_permissions` FORCE RLS olduğu için
+   kiracı bağlamı olmadan DELETE hiçbir satır görmüyordu → geri alma da kiracı bazında çalışıyor.
+4. **`0018` guard fonksiyonu `acik uuid` bildirimi** tarih alanını okuyunca
+   `InvalidTextRepresentation` veriyordu → `text` yapıldı.
+5. **Dev veritabanında yetki sapması bulundu ve düzeltildi:** `demo` kiracısında `hr_manager`
+   şablondan sapmıştı (33 izin; `tenant.manage`, `role.manage`, `user.manage`, `employee.delete`,
+   `billing.manage`, `leave.balance.manage`, `document.delete` dahil). OD16 senkronu ile **30**'a
+   indirildi; özel roller dokunulmadı.
+6. **İki mevcut test yeni şemaya uyarlandı:** `test_m14_deleted_ve_pasif_calisan…` (terminated
+   çalışan artık tarih + neden taşır) ve `test_m7_katalog_ile_donmus_kopya_ayrismaz`
+   (P1-A deltası bilinçli delta olarak eklendi). Test yardımcısı `calisan(...)` ek alan kabul eder.
+
+### ÖLÇÜM (canlı dev DB; migration öncesi → sonrası)
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| Tablo (`hr`+`public`) | 33 | **37** |
+| RLS + FORCE tablo | 19 | **23** |
+| İzin kataloğu | 39 | **47** |
+| Yeni tablo | 0 | **4** |
+| `demo` rol izinleri | admin 33, hr_manager **33**, officer 21, dept_manager 16, employee 8 | admin **41**, hr_manager **30**, officer **23**, dept_manager **17**, employee 8 |
+| `demo` atama / form alanı | — | **9** / **33** |
+| Çalışan / kullanıcı | 9 / 6 | 9 / 6 (**veri kaybı yok**) |
+
 ## [0.36.0] — 2026-09-13 — P1 blocker kararları kapatıldı: People Lifecycle + Configurable Onboarding
 
 **Kapsam:** **yalnız doküman** — kod, migration, DB değişikliği ve yeni uç **yok**

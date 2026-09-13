@@ -188,6 +188,43 @@ BEGIN
     END IF;
 END $$;
 
+-- 9) P1-A (People lifecycle) tabloları --------------------------------------
+-- OD21: bu tablolarda silme **soft-delete**tir (`deleted_at`); runtime yolunda
+-- fiziksel silme yoktur → `DELETE`/`TRUNCATE` geri alınır (mevcut desen: blok 7/8).
+-- Tablolar: `workplaces` (OD58), `employee_employment_terms` / `employee_assignments`
+-- (OD60 geçmiş tabloları), `form_field_definitions` (OD38 form konfigürasyonu).
+-- DİKKAT: Bu blok "ALL TABLES" satırından SONRA gelir; aksi hâlde geniş DML yetkisi
+-- bu daraltmayı sessizce geri alırdı (api_tokens/permissions dersinde ölçüldü).
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['workplaces', 'employee_employment_terms',
+                             'employee_assignments', 'form_field_definitions']
+    LOOP
+        IF to_regclass('hr.' || t) IS NOT NULL THEN
+            EXECUTE format('REVOKE DELETE, TRUNCATE ON hr.%I FROM persopyro_app', t);
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE ON hr.%I TO persopyro_app', t);
+        END IF;
+    END LOOP;
+END $$;
+
+-- Platform rolü (`persopyro_platform`) bu HR tablolarına **erişemez**: izin kataloğu
+-- (`hr.permissions`) dışında hr şemasında yetkisi yoktur (allowlist: 03_platform_roles.sql).
+-- Savunma amaçlı açık REVOKE (rol varsa) — fail-safe, yeni tablo eklendiğinde de korunur.
+DO $$
+DECLARE t text;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'persopyro_platform') THEN
+        FOREACH t IN ARRAY ARRAY['workplaces', 'employee_employment_terms',
+                                 'employee_assignments', 'form_field_definitions']
+        LOOP
+            IF to_regclass('hr.' || t) IS NOT NULL THEN
+                EXECUTE format('REVOKE ALL ON hr.%I FROM persopyro_platform', t);
+            END IF;
+        END LOOP;
+    END IF;
+END $$;
+
 -- 6) Platform şeması (OD3/M1–M5) --------------------------------------------
 -- AYRICALIKLI SINIR: `persopyro_app` (kiracı runtime yolu) platform şemasını
 -- GÖREMEZ ve oradaki hiçbir tabloda yetkiye sahip olamaz. Bu bölüm bilinçli

@@ -33,6 +33,7 @@ from apps.leave.services import (
     create_leave_request,
     update_leave_policy,
 )
+from apps.organization.services import ensure_default_form_fields
 from apps.rbac.models import Role, UserRole
 from apps.rbac.services import create_default_roles
 from apps.tenancy.context import tenant_context
@@ -48,6 +49,8 @@ with tenant_context(TENANT_ID):
         defaults={"name": "Demo Şirket", "slug": "demo", "status": "active"},
     )
     roller = create_default_roles(kiracı)
+    # P1-A: onboarding formu varsayılan alan yapılandırması (idempotent).
+    ensure_default_form_fields(kiracı)
 
     kullanıcı, kullanıcı_olustu = User.objects.get_or_create(
         tenant=kiracı,
@@ -292,6 +295,7 @@ with tenant_context(ASKIDA_ID):
         askida.status = "suspended"
         askida.save(update_fields=["status", "updated_at"])
     create_default_roles(askida)
+    ensure_default_form_fields(askida)
     askida_kullanici, _ = User.objects.get_or_create(
         tenant=askida,
         email="askida@persopyro.test",

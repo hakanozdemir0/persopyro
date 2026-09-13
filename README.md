@@ -17,7 +17,7 @@ RLS ile kiracı izolasyonu) tamamlandı. Uygulama özellikleri henüz kodlanmad�
   PostgreSQL 18.6 (localhost), roller + `hr` şeması + RLS + kiracı dizini.
 - Çalışan: giriş/çıkış (oturum **ve** API token), MFA (TOTP), rol/izin yönetimi
   altyapısı, kiracı bağlamı istek hattı.
-- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9; **473 test yeşil** (2026-09-13 ölçümü); sıfırdan
+- Doğrulanmış: kiracı izolasyonu iddiaları A1–A9; **512 test yeşil** (2026-09-13 P1-A ölçümü); sıfırdan
   kurulum (boş veritabanı) ayrıca doğrulandı; şema Django migration'larının sahibi.
 - Kalan (faz 2, 3. dilim): parola sıfırlama + e-posta, MFA kayıt ucu, süresi
   geçmiş oturum/token temizliği, kullanıcı CRUD uçları

@@ -314,6 +314,16 @@ class User(UUIDModel, AbstractBaseUser):
     status = models.CharField(
         "durum", max_length=20, choices=UserStatus.choices, default=UserStatus.ACTIVE
     )
+    auth_version = models.PositiveIntegerField(
+        "kimlik doğrulama sürümü",
+        default=0,
+        help_text=(
+            "P1 (OD59): çalışan askıya alındığında/çıkış verildiğinde artırılır. Oturum "
+            "açılışında saklanan sürümle karşılaştırılır; uyuşmazsa oturum düşürülür "
+            "(Django'nun `session_auth_hash` mekanizması yalnız parola değişiminde "
+            "çalıştığı için açık bir sürüm alanı gerekir). Negatif olamaz."
+        ),
+    )
     is_staff = models.BooleanField(
         "yönetim paneline erişebilir (KULLANILMIYOR)",
         default=False,

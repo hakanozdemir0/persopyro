@@ -26,12 +26,20 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("org.department.read", "Departmanları görme", "org"),
     ("org.department.manage", "Departman yönetimi", "org"),
     ("org.position.manage", "Pozisyon yönetimi", "org"),
+    ("org.workplace.read", "İşyerlerini görme", "org"),
+    ("org.workplace.manage", "İşyeri oluşturma/güncelleme", "org"),
     # Çalışan
     ("employee.read", "Çalışanları görme", "employee"),
     ("employee.create", "Çalışan ekleme", "employee"),
     ("employee.update", "Çalışan güncelleme", "employee"),
-    ("employee.delete", "Çalışan silme/arşivleme", "employee"),
+    ("employee.delete", "Çalışan arşivleme (fiziksel silme DEĞİL — OD6)", "employee"),
     ("employee.sensitive.read", "Hassas çalışan verisini görme (maskesiz)", "employee"),
+    ("employee.sensitive.write", "Hassas çalışan verisini yazma (K2/K3)", "employee"),
+    ("employee.suspend", "Çalışanı askıya alma ve geri alma", "employee"),
+    ("employee.terminate", "İşten çıkış verme", "employee"),
+    ("employee.restore", "Askı/çıkış kaydını gerekçeli geri alma", "employee"),
+    ("employee.history.read", "İstihdam ve atama geçmişini görme", "employee"),
+    ("employee.form.manage", "Onboarding form yapılandırması", "employee"),
     # İzin
     ("leave.request.read", "İzin taleplerini görme", "leave"),
     ("leave.request.create", "İzin talebi oluşturma", "leave"),
@@ -132,6 +140,7 @@ DEPT_MANAGER_PERMISSIONS: tuple[str, ...] = (
     "attendance.manage",  # F: ◐ (UNIT, gerekçeli)
     "document.read",  # G: ◐ (UNIT + POLICY_OK)
     "document.upload",  # G: ◐ (UNIT, çalışanı adına)
+    "employee.history.read",  # D: ● (UNIT) — P1/OD61: atama geçmişi birim kapsamında
 )
 
 #: ŞYT (şirket yetkilisi) sütunu — TENANT kapsamlı modül yetkileri.
@@ -160,6 +169,8 @@ TENANT_OFFICER_PERMISSIONS: tuple[str, ...] = (
     "document.read",  # G: ● (TENANT)
     "document.upload",  # G: ●
     "document.delete",  # G: ◐ (kendi yüklediği)
+    "employee.history.read",  # D: ● — P1/OD61
+    "org.workplace.read",  # C: ● — P1/OD61
 )
 
 DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
@@ -191,6 +202,14 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "employee.create",
             "employee.update",
             "employee.sensitive.read",
+            "employee.sensitive.write",
+            "employee.suspend",
+            "employee.terminate",
+            "employee.restore",
+            "employee.history.read",
+            "employee.form.manage",
+            "org.workplace.read",
+            "org.workplace.manage",
             "leave.request.read",
             "leave.request.approve",
             "leave.type.manage",
@@ -227,3 +246,37 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
         ],
     },
 }
+
+# --- Devredilebilirlik (OD9 — kapalı 2026-09-13) ------------------------------
+#: Kiracı içinde **özel role verilemeyen** izin kodları.
+#:
+#: Gerekçe (OD9): yüksek etkili işlemler (arşivleme, işten çıkış, kişisel veri,
+#: form konfigürasyonu, bakiye, rol/kiracı/kullanıcı yönetimi, denetim) yalnızca
+#: **sistem rol şablonlarında** bulunur; özel rollerle yetki büyümesi engellenir.
+#: Servis katmanı bu kodları özel role eklemeye çalışırsa **reddeder** (fail-closed).
+NON_DELEGABLE_PERMISSION_CODES: frozenset[str] = frozenset(
+    {
+        "role.manage",
+        "tenant.manage",
+        "user.manage",
+        "employee.delete",
+        "employee.suspend",
+        "employee.terminate",
+        "employee.restore",
+        "employee.sensitive.read",
+        "employee.sensitive.write",
+        "employee.form.manage",
+        "leave.balance.manage",
+        "audit.read",
+    }
+)
+
+#: Özel role verilebilen kodlar (tümü eksi devredilemezler) — UI/matris için.
+DELEGABLE_PERMISSION_CODES: tuple[str, ...] = tuple(
+    kod for kod in ALL_PERMISSION_CODES if kod not in NON_DELEGABLE_PERMISSION_CODES
+)
+
+
+def is_delegable(permission_code: str) -> bool:
+    """Kod özel role verilebilir mi? (OD9 — bilinmeyen kod fail-closed: hayır.)"""
+    return permission_code in DELEGABLE_PERMISSION_CODES

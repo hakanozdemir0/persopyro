@@ -1163,10 +1163,13 @@ kod içinde `apps/` paketleri + **servis katmanı** ile korunur. Mikroservis **y
 - **Migration riski:** yok.
 
 ---
-### P1 — People lifecycle + yapılandırılabilir onboarding formu — **`implementation-ready` ✅ (2026-09-13)**
+### P1 — People lifecycle + yapılandırılabilir onboarding formu — **P1-A ✅ UYGULANDI · P1-B/C PENDING**
 
-- **Durum:** P1'i bloke eden tüm kararlar **KAPALI** (OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38,
-  OD41–OD43, **OD58–OD61**). Kesin tasarım: **§28**; karar kayıtları: `AUTHORIZATION.md` §16.
+- **Durum:** kararlar **KAPALI** (OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38, OD41–OD43,
+  **OD58–OD61**); **P1-A uygulandı** (şema + izin altyapısı; `organization/0014–0018`,
+  `accounts/0006`, `rbac/0012`). Kalan: **P1-B** (lifecycle servisleri/uçları: create/update/
+  move/status/terminate/suspend/restore + erişim kesme uygulaması), **P1-C** (form yapılandırma
+  uçları + arayüz). Kesin tasarım: **§28**; karar kayıtları: `AUTHORIZATION.md` §16.
 - **Amaç:** istihdam koşullarının (tip/model/işyeri/sözleşme/deneme) ve form yapılandırmasının
   gelmesi; işe girişin **tek atomik akışta** (çalışan + kullanıcı) tamamlanması; geçmişin
   sorgulanabilir olması.
@@ -1552,7 +1555,15 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 
 ## 28. P1 — People Lifecycle + Configurable Onboarding (KESİNLEŞTİRİLMİŞ TASARIM)
 
-> **Durum: `implementation-ready` ✅ (2026-09-13).** P1'i bloke eden açık kararların tamamı
+> **Durum: P1-A ✅ UYGULANDI, P1-B/P1-C PENDING (2026-09-13).**
+> **P1-A (veri modeli + izin altyapısı) tamamlandı:** 4 yeni tablo, `employees` yaşam döngüsü
+> kolonları + `users.auth_version` + kısmi benzersizlik, RLS+FORCE/guard'lar, backfill ve
+> 8 yeni izin kodu + sistem rol senkronu (migration'lar: `organization/0014–0018`,
+> `accounts/0006`, `rbac/0012`; **39** yeni test). Yeni kiracı provizyonu
+> (`ensure_default_form_fields`) form alanlarını katalogdan üretir. **P1-B/P1-C (lifecycle servisleri/uçları, form
+> konfigürasyon uçları, geçmiş ekranı) henüz yazılmadı.**
+>
+> **Karar durumu: `implementation-ready`** (aşağıdaki tasarım P1-A ile birebir uygulandı). P1'i bloke eden açık kararların tamamı
 > kapatıldı: **OD6, OD7, OD9, OD16, OD29, OD30, OD31** + yol haritası önerilerinden
 > **OD35, OD36, OD37, OD38, OD41, OD42, OD43** + bu turda açılıp kapatılan **OD58–OD61**.
 > Kararların gerekçe/etki kaydı: **`docs/AUTHORIZATION.md` §16**. Bu bölüm P1'in **kesin veri

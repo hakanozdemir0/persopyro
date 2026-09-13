@@ -366,8 +366,11 @@ Her modül bitmeden sonraki modüle geçilmez; sıra değişikliği gerekçesiyl
 > **tasarlanmış ama kodlanmamıştır** (izin kodları ve DB tasarımı var, uygulama yok);
 > §7 (işe alım) ve §8 (performans) **hiç başlanmamıştır** ve V1 kapsamı dışındadır.
 >
-> **P1 durumu (2026-09-13):** People lifecycle + yapılandırılabilir onboarding formu için
-> tüm blocker kararlar **KAPALI** → **`implementation-ready`**. Kapsam: çalışan oluşturma/güncelleme,
+> **P1 durumu (2026-09-13):** blocker kararlar **KAPALI**; **P1-A (veri modeli + izin altyapısı)
+> ✅ UYGULANDI** — yeni tablolar (`workplaces`, `employee_employment_terms`,
+> `employee_assignments`, `form_field_definitions`), çalışan yaşam döngüsü kolonları,
+> `users.auth_version`, 8 yeni izin kodu ve sistem rol senkronu. **Servisler/uçlar/arayüz
+> (P1-B/P1-C) henüz yok**; kullanıcıya görünen davranış bu turda değişmedi. Kapsam: çalışan oluşturma/güncelleme,
 > departman-pozisyon-yönetici değişikliği **geçmişli**, istihdam tipi/çalışma modeli/işyeri/sözleşme/
 > deneme süresi, durum makinesi (askıya alma/çıkış/arşiv), form alan politikası (A/B/C kilit seviyesi),
 > çalışan↔kullanıcı ilişkisi (hesap zorunlu, atomik). **P1 kapsamı dışı:** ücret (P6), belge (P3),
