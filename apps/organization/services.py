@@ -43,11 +43,14 @@ from apps.organization.employee_form_catalog import EMPLOYEE_FORM_FIELDS
 from apps.organization.models import (
     Department,
     Employee,
+    EmployeeAssignment,
+    EmployeeEmploymentTerms,
     EmployeeManager,
     FormFieldDefinition,
     ManagerRelationType,
     Position,
     RecordStatus,
+    Workplace,
 )
 from apps.rbac.models import ORG_SCOPED_ROLE_SCOPE_TYPES, UserRole
 from apps.rbac.services.permissions import user_has_permission
@@ -721,3 +724,270 @@ def ensure_default_form_fields(tenant) -> int:  # noqa: ANN001
         if yaratildi:
             olusan += 1
     return olusan
+
+
+# ========================= P1-B — GEÇMİŞ SERVİSLERİ =========================
+# Kaynak karar: OD60 (`docs/AUTHORIZATION.md` §16) + HR_ROADMAP §28.1/28.6.
+# Model: eski açık satır KAPANIR (`effective_to = yeni başlangıç - 1 gün`), yeni
+# satır açılır; üzerine YAZILMAZ. `employees.department_id/position_id` "güncel
+# değer" snapshot'ı aynı transaction içinde senkron tutulur (tek servis yolu).
+
+
+def _mevcut_atama_kilitle(employee: Employee) -> EmployeeAssignment | None:  # noqa: ANN001
+    return (
+        EmployeeAssignment.objects.select_for_update()
+        .filter(employee=employee, effective_to__isnull=True, deleted_at__isnull=True)
+        .order_by("-effective_from")
+        .first()
+    )
+
+
+@transaction.atomic
+def change_assignment(
+    *,
+    actor,  # noqa: ANN001
+    employee: Employee,  # noqa: ANN001
+    department: Department | None = None,  # noqa: ANN001
+    position: Position | None = None,  # noqa: ANN001
+    effective_from: dt.date | None = None,
+    reason: str = "",
+) -> tuple[EmployeeAssignment, dict]:
+    """
+    Departman ve/veya pozisyon değişikliği — **atama geçmişi** yazılır (OD60).
+
+    * Hedef birim/pozisyon aynı kiracıda ve soft-delete edilmemiş olmalıdır
+      (DB guard'ı da dayatır); başlangıç tarihi en az bugün olmalıdır
+      (geçmişe dönük atama P1'de desteklenmez).
+    * Eski açık atama kapanır (effective_to = yeni başlangıç − 1 gün);
+      aynı gün geçiş için eski satır aynı gün kapanır (DATE modeli: iki satır
+      aynı günü paylaşabilir, kapanış ≥ başlangıç CHECK'i bozulmaz).
+    * `employees.department_id/position_id` snapshot'ı aynı işlemde senkron edilir.
+    * Eski ve yeni değerler **aynıysa** no-op döner (audit yazılmaz).
+    """
+    _aktoru_dogrula(actor, "employee.update")
+    _ayni_kiracili_mi(actor, employee, "Atama değişikliği")
+    gerekce = (reason or "").strip()
+    if not gerekce:
+        raise OrganizationError("Atama değişikliği için gerekçe zorunludur.")
+    baslangic = effective_from or timezone.localdate()
+    if baslangic < timezone.localdate():
+        raise OrganizationError(
+            "Atama başlangıç tarihi geçmiş olamaz (geçmişe dönük yazım yok)."
+        )
+
+    hedef_birim = department
+    hedef_pozisyon = position
+    if hedef_birim is not None:
+        _ayni_kiracili_mi(actor, hedef_birim, "Atama değişikliği")
+        if hedef_birim.deleted_at is not None:
+            raise OrganizationError("Silinmiş birim yeni atamada kullanılamaz.")
+    if hedef_pozisyon is not None:
+        _ayni_kiracili_mi(actor, hedef_pozisyon, "Atama değişikliği")
+        if hedef_pozisyon.deleted_at is not None:
+            raise OrganizationError("Silinmiş pozisyon yeni atamada kullanılamaz.")
+
+    eski = _mevcut_atama_kilitle(employee)
+    eski_birim_id = eski.department_id if eski else employee.department_id
+    eski_pozisyon_id = eski.position_id if eski else employee.position_id
+
+    yeni_birim = hedef_birim.pk if hedef_birim is not None else eski_birim_id
+    yeni_pozisyon = hedef_pozisyon.pk if hedef_pozisyon is not None else eski_pozisyon_id
+    if yeni_birim is None:
+        raise OrganizationError("Çalışanın birimi boş olamaz; hedef birim verin.")
+
+    # No-op koşulu: **açık satır varken** değerler değişmemişse (satır yoksa
+    # backfill'siz/legacy çalışanda ilk satır mutlaka açılır — snapshot'la
+    # eşit olsa bile; yoksa geçmiş sorgusu boş kalır, OD60 riski).
+    if eski is not None and yeni_birim == eski_birim_id and yeni_pozisyon == eski_pozisyon_id:
+        return eski, {"degisiklik": False}
+
+    if eski is not None:
+        if eski.effective_from > baslangic:
+            raise OrganizationError(
+                "Yeni atama başlangıcı, mevcut açık atamanın başlangıcından önce olamaz "
+                f"(mevcut başlangıç: {eski.effective_from}). Aynı gün ikinci değişiklik "
+                "için yeni satır sonraki bir günden başlamalıdır."
+            )
+        # DATE modeli: kapanış `yeni başlangıç` gününe kadar geçerli; aynı gün
+        # iki satır üst üste binebilir (odak günü = yeni satır). Kapanış < başlangıç
+        # olsaydı CHECK (ea_date_range_valid) kırılırdı — o yüzden `= baslangic`.
+        eski.effective_to = baslangic
+        eski.save(update_fields=["effective_to", "updated_at"])
+
+    try:
+        yeni = EmployeeAssignment.objects.create(
+            tenant_id=employee.tenant_id,
+            employee=employee,
+            department_id=yeni_birim,
+            position_id=yeni_pozisyon,
+            effective_from=baslangic,
+            reason=gerekce[:200],
+            created_by=actor,
+        )
+    except DatabaseError as exc:
+        raise OrganizationError(
+            f"Atama geçmişi yazılamadı (kiracı/benzersizlik garantisi): {exc}"
+        ) from exc
+
+    # "Güncel değer" snapshot senkronu (tek servis yolu; OD60 risk notu).
+    degisen: list[str] = []
+    if employee.department_id != yeni_birim:
+        employee.department_id = yeni_birim
+        degisen.append("department")
+    if employee.position_id != yeni_pozisyon:
+        employee.position_id = yeni_pozisyon
+        degisen.append("position")
+    if degisen:
+        employee.save(update_fields=[*degisen, "updated_at"])
+
+    log_action(
+        tenant_id=employee.tenant_id,
+        action="employee.assignment.change",
+        user=actor,
+        table_name="employee_assignments",
+        record_id=yeni.pk,
+        changes={
+            "employee_id": str(employee.pk),
+            "old_department_id": str(eski_birim_id) if eski_birim_id else None,
+            "new_department_id": str(yeni_birim),
+            "old_position_id": str(eski_pozisyon_id) if eski_pozisyon_id else None,
+            "new_position_id": str(yeni_pozisyon) if yeni_pozisyon else None,
+            "effective_from": baslangic.isoformat(),
+            "reason": gerekce[:200],
+        },
+    )
+    invalidate_org_scope_cache(employee.tenant_id)
+    return yeni, {
+        "degisiklik": True,
+        "old_department_id": str(eski_birim_id) if eski_birim_id else None,
+        "new_department_id": str(yeni_birim),
+        "old_position_id": str(eski_pozisyon_id) if eski_pozisyon_id else None,
+        "new_position_id": str(yeni_pozisyon) if yeni_pozisyon else None,
+    }
+
+
+@transaction.atomic
+def change_employment_terms(
+    *,
+    actor,  # noqa: ANN001
+    employee: Employee,  # noqa: ANN001
+    employment_type: str | None = None,
+    working_model: str | None = None,
+    workplace: Workplace | None = None,  # noqa: ANN001
+    contract_type: str | None = None,
+    contract_start_date: dt.date | None = None,
+    contract_end_date: dt.date | None = None,
+    probation_end_date: dt.date | None = None,
+    effective_from: dt.date | None = None,
+    reason: str = "",
+) -> tuple[EmployeeEmploymentTerms, dict]:
+    """
+    İstihdam koşulu değişikliği — **yeni koşul satırı** açılır (OD60; ücret yok).
+
+    Mevcut açık satır kapatılır; boş bırakılan alanlar mevcut değerden devralınır.
+    `contract_end_date < contract_start_date` reddedilir (model CHECK'i de dayatır).
+    """
+    _aktoru_dogrula(actor, "employee.update")
+    _ayni_kiracili_mi(actor, employee, "İstihdam koşulu değişikliği")
+    gerekce = (reason or "").strip()
+    if not gerekce:
+        raise OrganizationError("İstihdam koşulu değişikliği için gerekçe zorunludur.")
+    baslangic = effective_from or timezone.localdate()
+    if baslangic < timezone.localdate():
+        raise OrganizationError("Koşul başlangıç tarihi geçmiş olamaz.")
+    if workplace is not None:
+        _ayni_kiracili_mi(actor, workplace, "İstihdam koşulu değişikliği")
+        if workplace.deleted_at is not None:
+            raise OrganizationError("Silinmiş işyeri yeni koşul satırında kullanılamaz.")
+    if (
+        contract_start_date is not None
+        and contract_end_date is not None
+        and contract_end_date < contract_start_date
+    ):
+        raise OrganizationError("Sözleşme bitişi, başlangıcından önce olamaz.")
+
+    mevcut = (
+        EmployeeEmploymentTerms.objects.select_for_update()
+        .filter(employee=employee, effective_to__isnull=True, deleted_at__isnull=True)
+        .order_by("-effective_from")
+        .first()
+    )
+
+    def _devral(eski_deger, yeni_deger):  # noqa: ANN001, ANN202
+        return yeni_deger if yeni_deger is not None else eski_deger
+
+    yeni_tip = _devral(mevcut.employment_type if mevcut else "", employment_type)
+    yeni_model = _devral(mevcut.working_model if mevcut else "", working_model)
+    yeni_sozlesme_tipi = _devral(mevcut.contract_type if mevcut else "", contract_type)
+    yeni_sozlesme_bas = _devral(
+        mevcut.contract_start_date if mevcut else None, contract_start_date
+    )
+    yeni_sozlesme_son = _devral(
+        mevcut.contract_end_date if mevcut else None, contract_end_date
+    )
+    yeni_deneme = _devral(mevcut.probation_end_date if mevcut else None, probation_end_date)
+    yeni_isyeri = workplace.pk if workplace is not None else (
+        mevcut.workplace_id if mevcut else None
+    )
+    if not yeni_tip or not yeni_model:
+        raise OrganizationError(
+            "İstihdam tipi ve çalışma modeli zorunludur (ilk koşul satırında belirtilmelidir)."
+        )
+
+    degisiklik = mevcut is None or (
+        mevcut.employment_type != yeni_tip
+        or mevcut.working_model != yeni_model
+        or mevcut.contract_type != yeni_sozlesme_tipi
+        or mevcut.contract_start_date != yeni_sozlesme_bas
+        or mevcut.contract_end_date != yeni_sozlesme_son
+        or mevcut.probation_end_date != yeni_deneme
+        or mevcut.workplace_id != yeni_isyeri
+    )
+    if not degisiklik:
+        return mevcut, {"degisiklik": False}
+
+    if mevcut is not None:
+        mevcut.effective_to = baslangic
+        mevcut.save(update_fields=["effective_to", "updated_at"])
+
+    try:
+        yeni = EmployeeEmploymentTerms.objects.create(
+            tenant_id=employee.tenant_id,
+            employee=employee,
+            effective_from=baslangic,
+            employment_type=yeni_tip,
+            working_model=yeni_model,
+            workplace_id=yeni_isyeri,
+            contract_type=yeni_sozlesme_tipi or "",
+            contract_start_date=yeni_sozlesme_bas,
+            contract_end_date=yeni_sozlesme_son,
+            probation_end_date=yeni_deneme,
+            reason=gerekce[:200],
+            created_by=actor,
+        )
+    except DatabaseError as exc:
+        raise OrganizationError(
+            f"İstihdam koşulu geçmişi yazılamadı: {exc}"
+        ) from exc
+
+    log_action(
+        tenant_id=employee.tenant_id,
+        action="employee.terms.change",
+        user=actor,
+        table_name="employee_employment_terms",
+        record_id=yeni.pk,
+        changes={
+            "employee_id": str(employee.pk),
+            "old_employment_type": mevcut.employment_type if mevcut else None,
+            "new_employment_type": yeni_tip,
+            "old_working_model": mevcut.working_model if mevcut else None,
+            "new_working_model": yeni_model,
+            "old_workplace_id": (
+                str(mevcut.workplace_id) if mevcut and mevcut.workplace_id else None
+            ),
+            "new_workplace_id": str(yeni_isyeri) if yeni_isyeri else None,
+            "effective_from": baslangic.isoformat(),
+            "reason": gerekce[:200],
+        },
+    )
+    return yeni, {"degisiklik": True}

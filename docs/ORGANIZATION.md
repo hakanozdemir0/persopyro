@@ -220,6 +220,30 @@ mesajı için).
 - İzinsiz geçiş **409** (fail-closed) + deneme audit'e yazılır; aynı duruma yazma **no-op** (200).
 - `suspended` çalışan **izin talebi açamaz** (OD42); askıdan önce açılmış talepler iptal edilmez.
 
+**Uygulama (P1-B ✅, 2026-09-14):** geçişler yalnız merkezi servis
+(`apps/organization/lifecycle.py`: `suspend_employee`, `restore_employee`,
+`terminate_employee`, `archive_employee`, `change_manager`) üzerinden yapılır;
+view/model `save()` yolu yoktur.
+
+- **Erişim kesme (OD59):** suspend/terminate/archive'da bağlı kullanıcı
+  `users.status='inactive'` yapılır, API token'ları iptal edilir
+  (mevcut `revoke_tokens_for_inactive_user`) ve `users.auth_version` artırılır;
+  restore'da kullanıcı tekrar `active` olur ama `auth_version` yine artar →
+  **eski oturum/token asla dirilmez**, yeni giriş zorunludur. Oturum açılışında
+  snapshot (`users.auth_version` / `api_tokens.auth_version_snapshot`)
+  `apps/accounts/auth_version.py` ile her istekte karşılaştırılır; uyuşmazlık
+  → oturum flush + `auth.session_revoked` audit + 401.
+- **Planlı çıkış (OD43):** `termination_date > bugün` ise durum korunur
+  (`employee.termination.schedule` audit'i yazılır, erişim kesilmez);
+  vadesi gelenleri terminated yapan idempotent komut:
+  `python manage.py process_employee_terminations` (çift çalıştırma duplicate
+  audit/token üretmez; scheduler bağlama P2/ops turunda).
+- **Aynı duruma yazma no-op** (audit/token üretilmez); eşzamanlı geçişler
+  `select_for_update` ile sıraya alınır.
+- `suspended`/`terminated` çalışan **yeni izin VE fazla mesai talebi açamaz**
+  (OD42; `apps/leave/services/*` + `apps/overtime/services/authorization.py`
+  kümesi yalnız `active`'e daraltıldı); geçmiş talepler okunabilir kalır.
+
 Kurallar (OD21): çalışan kaydı **fiziksel silinmez**; `deleted_at` + `status`
 kullanılır. Soft-delete edilmiş kaydın yeniden açılması açık bir `*.restore` izni ve
 denetim kaydı gerektirir (**sessiz yeniden etkinleştirme yasak**). Benzersizlikler
@@ -255,8 +279,15 @@ işe alımda bir kez üretilir ve saklanır). Sicil numarası **kimlik değildir
 **Uygulama (P1-A ✅):** tablolar `organization/0014_p1a_people_lifecycle` ile oluşturuldu;
 RLS+FORCE (`0016_rls_p1a`), kiracılar arası guard'lar (`0017`), "soft-delete edilmiş
 birim/pozisyon/işyeri yeni **açık** satırda kullanılamaz" guard'ı (`0018`) ve mevcut
-çalışanlar için atama backfill'i (`0015`) uygulandı. **Servisler ve arayüz P1-B/P1-C'de
-gelecek** — bugün bu tablolara yazan bir HR ucu yoktur.
+çalışanlar için atama backfill'i (`0015`) uygulandı. **Servisler ve arayüz P1-B ile
+uygulandı (2026-09-14):** `apps/organization/services.py` içinde `change_assignment`
+(eski açık satır kapanır, yenisi açılır; `employees.department_id/position_id`
+snapshot'ı aynı işlemde senkron) ve `change_employment_terms` (yeni koşul satırı;
+üzerine yazım yok); yönetici değişimi mevcut `set_primary_manager` altyapısı +
+`change_manager` (audit: `employee.manager.change`) ile. Birleşik **iş geçmişi**
+(`apps/organization/history.py::employee_history`) bu tabloları business-readable
+olaylara eşler (`Görev yeri değişti`, `İstihdam koşulları güncellendi`,
+`Yönetici değişti/atandı`, durum olayları) — PII değeri döndürülmez.
 
 Kesin şema, durum makinesi, form politikası ve izin seti: `docs/HR_ROADMAP.md` **§28**;
 karar kayıtları: `docs/AUTHORIZATION.md` **§16**.

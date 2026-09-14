@@ -52,10 +52,15 @@ def user_employee(user) -> Employee | None:
 
 
 def _aktif_calisan(employee: Employee | None) -> bool:
-    """Çalışan aktif mi (silinmemiş + `terminated`/`archived` değil)."""
+    """Çalışan talep **açabilir** mi (silinmemiş + yalnız `active`)?
+
+    OD42/OD43 (P1-B): `suspended` çalışan giriş yapamaz ve yeni izin talebi
+    **açamaz** (geçmiş talepler okunabilir kalır). `terminated`/`archived`
+    zaten kapalıdır. P1-A'daki `_aktif_calisan` adı korunur; küme daraltıldı.
+    """
     if employee is None or employee.deleted_at is not None:
         return False
-    return employee.status in (EmployeeStatus.ACTIVE, EmployeeStatus.SUSPENDED)
+    return employee.status == EmployeeStatus.ACTIVE
 
 
 def employee_in_scope(user, employee: Employee | None) -> bool:

@@ -45,10 +45,16 @@ def _ayni_kiracida(user, tenant_id) -> bool:
 
 
 def aktif_calisan(employee: Employee | None) -> bool:
-    """Çalışan aktif mi (silinmemiş + işten çıkmış/arşivli değil)."""
+    """
+    Çalışan fazla mesai **bildirebilir** mi (silinmemiş + yalnız `active`)?
+
+    P1-B (OD42/§19): `suspended` çalışan giriş yapamadığı ve yeni talep
+    açamadığı için burada da kapalıdır (P5a V1'de suspended'e izin veriliyordu;
+    küme `active`'e daraltıldı).
+    """
     if employee is None or employee.deleted_at is not None:
         return False
-    return employee.status in (EmployeeStatus.ACTIVE, EmployeeStatus.SUSPENDED)
+    return employee.status == EmployeeStatus.ACTIVE
 
 
 def can_create_overtime_for(actor, employee: Employee | None) -> bool:

@@ -619,7 +619,7 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 - **Kolonlar:** `id, created_at, updated_at, deleted_at, tenant_id, employee_id, manager_employee_id, relation_type, effective_from, effective_to, created_by_id`
 - **Doğrulanan tasarım:** `relation_type` kapalı küme `CHECK` (`primary`/`secondary`/`delegate`); `CHECK (employee_id <> manager_employee_id)`; `CHECK (effective_to IS NULL OR effective_to >= effective_from)`; `effective_from` zorunlu
 - **TENANT ISOLATION:** `tenant_id` + 3 guard (+ `trg_employee_manager_active_guard`: **silinmiş çalışan/yönetici ile yeni aktif ilişki kurulamaz**) · **PERSONAL DATA LEVEL:** K0
-- **RLS:** ✅ + FORCE · **AUDIT:** yüksek (`employee.primary_manager_set`, `employee.manager.close`)
+- **RLS:** ✅ + FORCE · **AUDIT:** yüksek (`employee.primary_manager_set`, `employee.manager.close`, `employee.manager.change`)
 - **İndeksler:** `(tenant_id, manager_employee_id)` ("ekibim"), `(tenant_id, employee_id)`
 
 ### `hr.workplaces` / `hr.employee_employment_terms` / `hr.employee_assignments` / `hr.form_field_definitions` 🔜 **P1 — karar KAPALI (2026-09-13)**
@@ -629,9 +629,13 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 > `0016_rls_p1a` (RLS+FORCE), `0017_p1a_same_tenant_guards`, `0018_p1a_open_ref_guard`;
 > `accounts/0006_p1a_people_lifecycle` (`users.auth_version`); `rbac/0012_p1a_permissions_roles`
 > (8 izin + sistem rol senkronu).
-> **P1-B/P1-C bekliyor:** lifecycle servisleri/uçları (terminate/suspend), form konfigürasyon uçları,
-> çalışan geçmişi ekranı, bildirim/e-posta, belge, bordro, offboarding — bunlar bu turda **yazılmadı**.
-> P1.1 (onboarding görev/checklist tabloları, §5) henüz uygulanmadı.
+> **P1-B ✅ UYGULANDI (2026-09-14):** lifecycle servisleri (`apps/organization/lifecycle.py`:
+> suspend/restore/terminate/archive/change_manager — state machine + erişim kesme),
+> geçmiş servisleri (`change_assignment`, `change_employment_terms`, `employee_history`),
+> test UI uçları (`/test-ui/api/employees/<id>/lifecycle/<islem>`, `/assignment`,
+> `/employment-terms`, `/manager`, `/history`) ve Çalışan Durumu / Geçmiş bölümleri.
+> **P1-C bekliyor:** form konfigürasyon uçları + arayüz, bildirim/e-posta, belge, bordro,
+> offboarding. P1.1 (onboarding görev/checklist tabloları, §5) henüz uygulanmadı.
 
 | Tablo | Kolonlar (özet) | Kısıt | RLS |
 |---|---|---|---|
@@ -648,6 +652,7 @@ ayrı bir katman eklenir ve **tenant izolasyon sınırının yerine geçmez** (O
 | `hr.employees` | `+ termination_reason_code varchar(40) NULL` (kapalı küme: `resignation\|employer_termination\|mutual_agreement\|contract_end\|retirement\|death\|other`), `+ termination_note text NULL` | İşten ayrılış nedeni (item 2); `status='terminated'` ise zorunlu |
 | `hr.employees` | **kısmi benzersizlik:** `UNIQUE(user_id) WHERE deleted_at IS NULL AND status <> 'archived'` | OD59: 1 kullanıcı ↔ en fazla 1 aktif çalışan kaydı |
 | `hr.users` | `+ auth_version integer NOT NULL DEFAULT 0` | OD59: askıya alma/çıkışta mevcut oturumları düşürme |
+| `hr.api_tokens` | `+ auth_version_snapshot integer NULL` (`accounts/0007`) | P1-B (OD59): token üretim anındaki sürüm; uyuşmazsa token 401 (NULL = eski token, kontrol yapılmaz) |
 
 **Kural:** `employees.department_id` / `position_id` **korunur** ("güncel değer" okuması) ve
 `hr.employee_assignments` ile **aynı servis yolundan** yazılır (çift kaynak ayrışması test edilir).

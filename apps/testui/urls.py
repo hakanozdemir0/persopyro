@@ -106,6 +106,32 @@ urlpatterns = [
         api.EmployeeEntitlementView.as_view(),
         name="test-ui-employee-entitlements",
     ),
+    # P1-B: yaşam döngüsü + geçmiş + atama/koşul/yönetici değişikliği uçları.
+    path(
+        "api/employees/<str:employee_id>/history",
+        api.EmployeeHistoryView.as_view(),
+        name="test-ui-employee-history",
+    ),
+    path(
+        "api/employees/<str:employee_id>/lifecycle/<str:islem>",
+        api.EmployeeLifecycleView.as_view(),
+        name="test-ui-employee-lifecycle",
+    ),
+    path(
+        "api/employees/<str:employee_id>/assignment",
+        api.EmployeeAssignmentChangeView.as_view(),
+        name="test-ui-employee-assignment",
+    ),
+    path(
+        "api/employees/<str:employee_id>/employment-terms",
+        api.EmployeeTermsChangeView.as_view(),
+        name="test-ui-employee-terms",
+    ),
+    path(
+        "api/employees/<str:employee_id>/manager",
+        api.EmployeeManagerChangeView.as_view(),
+        name="test-ui-employee-manager",
+    ),
     # Fazla mesai (P5a V1): bildirim, karar ve iptal.
     path("api/overtime", api.OvertimeListView.as_view(), name="test-ui-overtime"),
     path(

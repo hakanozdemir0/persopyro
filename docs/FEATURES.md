@@ -48,13 +48,20 @@ Detay: `AUTHORIZATION.md`
 
 ## 3. Organizasyon yönetimi
 
-Durum: Tasarlandı (veri modeli mevcut)
+Durum: Tasarlandı (veri modeli mevcut); **Çalışan yaşam döngüsü servisleri (P1-B) ✅ UYGULANDI (2026-09-14)**
 
 - Şirket kaydı (çok şirketli kiracı desteği)
 - Departman ağacı (hiyerarşi, döngü koruması)
 - Pozisyon/kadro yönetimi
 - Çalışan kaydı ve profili
-- Görev/pozisyon/ücret geçmişi
+- **Çalışan yaşam döngüsü (P1-B ✅):** merkezi state machine (`active/suspended/terminated/archived`)
+  — suspend / restore / terminate (anında + planlı) / archive; erişim kesme
+  (`auth_version` session invalidation + token revoke), `notice` türetilmiş etiket,
+  planlı çıkış komutu (`process_employee_terminations`), `suspended/terminated`
+  çalışanın leave/overtime talebi açamaması (OD42), geçmiş servisleri
+  (atama / istihdam koşulları / yönetici — etkin tarihli, tek açık satır) ve
+  business-readable **iş geçmişi** görünümü. Detay: `ORGANIZATION.md` §7
+- Görev/pozisyon/ücret geçmişi (atama + istihdam koşulları geçmişi P1-B ile uygulandı; ücret P6)
 - Acil durum kişileri
 - Organizasyon şeması görünümü (kişisel veri içermez)
 

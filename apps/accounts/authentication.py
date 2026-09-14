@@ -114,6 +114,12 @@ class ApiTokenAuthentication(BaseAuthentication):
             kullanici = kayit.user
             if not kullanici.is_active or kullanici.deleted_at is not None:
                 raise AuthenticationFailed("Kullanıcı aktif değil.")
+            # P1-B (OD59): auth_version butlanması ikinci savunma hattı — token
+            # iptal edilmemiş olsa bile sürüm uyuşmazsa erişim kesilir (401).
+            if kayit.auth_version_snapshot is not None and int(
+                kayit.auth_version_snapshot
+            ) != int(kullanici.auth_version):
+                raise AuthenticationFailed("Oturum geçersiz; yeni token alın.")
             ApiToken.objects.filter(pk=kayit.pk).update(last_used_at=timezone.now())
 
         return kullanici, kayit

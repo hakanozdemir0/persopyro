@@ -996,6 +996,58 @@ else
     HATA_VAR=1
 fi
 
+# --- 6g) P1-B: Employee lifecycle servisleri -----------------------------------
+# Kapsam: auth_version şeması (users + api token snapshot), lifecycle CHECK yapısı,
+# tek-current kısıtları, lifecycle audit action'ları, management command import,
+# RLS/FORCE/runtime privileges (P1-A adımlarıyla birlikte) ve izin kataloğu.
+bilgi "P1-B (6g): lifecycle servisleri invariantları"
+
+bekle "users.auth_version kolonu (6g): NOT NULL + CHECK >=0" \
+        "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns c JOIN pg_constraint p ON p.conrelid='hr.users'::regclass WHERE c.table_schema='hr' AND c.table_name='users' AND c.column_name='auth_version' AND c.is_nullable='NO' AND (p.conname LIKE '%auth_version%')")" "2"
+
+TOKEN_SNAPSHOT_KOLONU="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM information_schema.columns WHERE table_schema='hr' AND table_name='api_tokens' AND column_name='auth_version_snapshot'")"
+bekle "api_tokens.auth_version_snapshot kolonu (6g)" "$TOKEN_SNAPSHOT_KOLONU" "1"
+
+LIFECYCLE_CHECKS="$(sql_deger "$FRESH_DB" "SELECT (SELECT count(*) FROM pg_constraint WHERE connamespace='hr'::regnamespace AND conname IN ('employees_status_valid','employees_terminated_fields_required','employees_termination_reason_valid','employees_notice_after_termination','ea_date_range_valid','eet_date_range_valid','employee_manager_not_self','employee_manager_date_range_valid')) + (SELECT count(*) FROM pg_indexes WHERE schemaname='hr' AND indexname IN ('employees_user_active_uniq','ea_employee_open_uniq','eet_employee_open_uniq'))")"
+bekle "lifecycle CHECK/kısıt sayısı (6g)" "$LIFECYCLE_CHECKS" "11"
+
+LIFECYCLE_PERMS="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM hr.permissions WHERE code IN ('employee.suspend','employee.terminate','employee.restore','employee.history.read','employee.delete')")"
+bekle "lifecycle izin kodları (6g)" "$LIFECYCLE_PERMS" "5"
+
+# Management command + lifecycle modül importları: tırnak yuvalaması olmadan,
+# geçici python dosyası üzerinden (bash parse güvenliği).
+P1B_IMPORT_PY="$(mktemp)"
+"$PYTHON" - "$P1B_IMPORT_PY" <<'PY1B'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    """
+from django.core.management import get_commands
+from apps.organization.history import employee_history
+from apps.organization.lifecycle import (
+    IZINLI_GECISLER, suspend_employee, restore_employee,
+    terminate_employee, archive_employee, change_manager,
+)
+from apps.accounts.auth_version import oturum_auth_version_dogrula
+
+cmds = get_commands()
+assert 'process_employee_terminations' in cmds, 'command yuklu degil'
+assert IZINLI_GECISLER['archived'] == frozenset()
+assert 'archived' not in IZINLI_GECISLER['active']
+print('IMPORT_OK')
+""",
+    encoding="utf-8",
+)
+PY1B
+IMPORT_OUT="$(django_owner manage.py shell < "$P1B_IMPORT_PY" 2>&1 | tail -1)"
+rm -f "$P1B_IMPORT_PY"
+kontrol_metni "lifecycle modülleri + management command (6g)" "$IMPORT_OUT" "IMPORT_OK"
+
+# P1-A guard'ları (kiracılar arası referans koruması) lifecycle tablolarında kurulu.
+GUARD_SAYISI="$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hr' AND c.relname IN ('employee_assignments','employee_employment_terms','workplaces','employees') AND t.tgname LIKE '%same_tenant%' AND NOT t.tgisinternal")"
+bekle "lifecycle tabloları cross-tenant guard tetikleyicileri (6g)" "$GUARD_SAYISI" "10"
+
 # --- 6c-7) Arayüz JS sözdizimi (node varsa) -----------------------------------
 # Neden: şablon içindeki gömülü JS yalnız tarayıcıda çalışır; bozuk bir şablon
 # dizesi panelin sessizce boş kalmasına yol açar (yaşandı). `node --check` bunu

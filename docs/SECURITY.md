@@ -782,7 +782,7 @@ Açık olanlar:
 
 | Karar | Gerekçe / etki |
 |---|---|
-| **İşten çıkış/askıya alma = erişim kesme (zorunlu ilk adım)** | `users.status='inactive'` (mevcut `is_active` girişi reddeder) + **token iptali** (`revoke_tokens_for_inactive_user`) + **oturum düşürme** (`users.auth_version` artırımı; Django'nun `session_auth_hash` mekanizması yalnız parola değişiminde çalıştığı için açık sürüm alanı gerekir). `user_roles` satırları **silinmez**; pasif kullanıcı için izin çözümü **boş küme** döner |
+| **İşten çıkış/askıya alma = erişim kesme (zorunlu ilk adım)** | `users.status='inactive'` (mevcut `is_active` girişi reddeder) + **token iptali** (`revoke_tokens_for_inactive_user`) + **oturum düşürme** (`users.auth_version` artırımı; Django'nun `session_auth_hash` mekanizması yalnız parola değişiminde çalıştığı için açık sürüm alanı gerekir). `user_roles` satırları **silinmez**; pasif kullanıcı için izin çözümü **boş küme** döner. **P1-B ✅ (2026-09-14):** uygulanandı — `apps/organization/lifecycle.py` tüm geçişlerde bu üçlüyü uygular; token üretiminde `api_tokens.auth_version_snapshot` saklanır ve her istekte güncel sürümle karşılaştırılır (uyuşmazlık → 401; iptal edilmemiş token bile erişemez). Restore'da `auth_version` yine artar → **eski oturum/token asla dirilmez**; `auth.session_revoked` audit'i yazılır |
 | **Kişisel veri yazma için ayrı izin** | Yeni `employee.sensitive.write`; servis **"yazma ⇒ okuma"** kuralını uygular (write var, read yok → 403). K3 yazımı **iki kapıdan** geçer: `sensitive.write` ∧ `sensitive.read` ∧ organizasyon kapsamı |
 | **K3 alanlar formda zorunlu yapılamaz** | Sunucu, K3 kodları için `is_required=true` yazımını **400** ile reddeder (KVKK aşırı veri toplama). K3 alanlar gizlenebilir |
 | **Devredilemez izin listesi** | `role.manage`, `tenant.manage`, `user.manage`, `employee.delete`, `employee.suspend`, `employee.terminate`, `employee.restore`, `employee.sensitive.read`, `employee.sensitive.write`, `employee.form.manage`, `leave.balance.manage`, `audit.read` → **özel role verilemez** (400). Sistem rol şablonları muaf |
@@ -816,9 +816,8 @@ kuralları (P7), belge zararlı yazılım taraması (P3).
 | **Denetim izi** | Oluşturma/karar/iptal `log_action` ile yazılır (`overtime.request.create`, `.approve_step`, `.approve`, `.reject`, `.cancel`); serbest metin ve PII **yazılmaz** |
 | **Hesap numaralandırma** | Fazla mesai ve hak yönetimi uçları, mevcut kimlik doğrulama/CSRF/oturum davranışını değiştirmez; kapsam dışı kaynaklar **404** döner |
 
-**Yeni açıklık (güvenlik bulgusu) — bu turda üretilmedi:** P5a V1 ölçümlerinde yeni bir açıklık
-**bulunmadı**; tablo/rol/yetki ölçümleri `scripts/verify_fresh_install.sh` (6f) adımıyla her
+**Yeni açıklık (güvenlik bulgusu) — bu turda üretilmedi:** P1-B ölçümlerinde (43 lifecycle testi,
+fresh-install 6g invariantları, gerçek HTTP smoke) yeni bir açıklık **bulunmadı**. `auth_version`
+enforcement ve token snapshot doğrulamaları `scripts/verify_fresh_install.sh` (6g) adımıyla her
 kurulumda otomatik doğrulanır. Bu paket dışında bırakılan bilinen açıklık: **F12** (§5.1 — kilit
-sayacı sıfırlanmıyor; bu pakete karıştırılmadı). Açık kalan ilgili konular: `overtime_rules`
-katsayı motoru (P5a LATER), PAY (P5b), TIME_OFF kredisi (OD32/OD44) — hiçbiri yazılmadığı için
-yeni yüzey üretmez.
+sayacı sıfırlanmıyor; P1-B'ye karıştırılmadı, AÇIK kalıyor).

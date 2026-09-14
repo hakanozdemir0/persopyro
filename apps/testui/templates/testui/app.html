@@ -694,6 +694,8 @@ tıklanınca kapanır.
       <div class="alt-sekmeler">
         <button type="button" data-alt="liste" class="active">Çalışan Ara / Liste</button>
         <button type="button" data-alt="yeni">Yeni Çalışan</button>
+        <button type="button" data-alt="cikis">İşten Çıkış / Çıkış Süreci</button>
+        <button type="button" data-alt="askida">Askıya Alınanlar</button>
       </div>
       <section id="calisan-alt-liste" class="alt-bolum">
       <div class="card">
@@ -837,13 +839,47 @@ tıklanınca kapanır.
       </div>` : ""}
       </section>`;
 
-    // Çalışanlar alt navigasyonu: Liste | Yeni Çalışan (sayfa yığılmaz).
+    // Çalışanlar alt navigasyonu: Liste | Yeni | Çıkış süreci | Askıda.
+    const cikisVerisi = data.filter((c) => c.termination_date
+      || (c.lifecycle && c.lifecycle.ihbar_döneminde));
+    const askidaVerisi = data.filter((c) => c.status === "suspended");
+    const cikisSatirlari = cikisVerisi.map((c) => `<tr>
+        <td>${esc(c.employee_no)}</td><td>${esc(c.user_name || c.user_email) || yok}</td>
+        <td>${esc(c.department) || yok}</td>
+        <td>${esc((c.lifecycle && c.lifecycle.termination_date_display) || yok)}</td>
+        <td>${c.lifecycle && c.lifecycle.ihbar_döneminde
+          ? '<span class="pill">Çıkış sürecinde</span>' : yok}</td>
+        <td>${esc(c.status_label || c.status)}</td></tr>`).join("");
+    const askidaSatirlari = askidaVerisi.map((c) => `<tr>
+        <td>${esc(c.employee_no)}</td><td>${esc(c.user_name || c.user_email) || yok}</td>
+        <td>${esc(c.department) || yok}</td>
+        <td>${esc(c.status_label || c.status)}</td></tr>`).join("");
+    const cikisBolumu = `
+      <section id="calisan-alt-cikis" class="alt-bolum" hidden>
+      <div class="card"><div class="section-head"><h2>İşten Çıkış / Çıkış Süreci</h2></div>
+        ${cikisSatirlari ? `<table class="data-table"><thead><tr>
+          <th>Çalışan no</th><th>Çalışan</th><th>Birim</th><th>Çıkış tarihi</th>
+          <th>Notice</th><th>Durum</th></tr></thead><tbody>${cikisSatirlari}</tbody></table>`
+          : '<div class="bos">Çıkış sürecinde çalışan yok.</div>'}</div></section>`;
+    const askidaBolumu = `
+      <section id="calisan-alt-askida" class="alt-bolum" hidden>
+      <div class="card"><div class="section-head"><h2>Askıya Alınanlar</h2></div>
+        ${askidaSatirlari ? `<table class="data-table"><thead><tr>
+          <th>Çalışan no</th><th>Çalışan</th><th>Birim</th><th>Durum</th></tr></thead>
+          <tbody>${askidaSatirlari}</tbody></table>`
+          : '<div class="bos">Askıdaki çalışan yok.</div>'}</div></section>`;
+    document.getElementById("calisan-alt-yeni").insertAdjacentHTML("afterend", cikisBolumu + askidaBolumu);
+
     const altSekmeler = document.querySelectorAll("#tab-employees .alt-sekmeler button");
     altSekmeler.forEach((b) =>
       b.addEventListener("click", () => {
         altSekmeler.forEach((x) => x.classList.toggle("active", x === b));
         document.getElementById("calisan-alt-liste").hidden = b.dataset.alt !== "liste";
         document.getElementById("calisan-alt-yeni").hidden = b.dataset.alt !== "yeni";
+        const cikisEl = document.getElementById("calisan-alt-cikis");
+        const askidaEl = document.getElementById("calisan-alt-askida");
+        if (cikisEl) cikisEl.hidden = b.dataset.alt !== "cikis";
+        if (askidaEl) askidaEl.hidden = b.dataset.alt !== "askida";
       })
     );
 
@@ -1092,6 +1128,7 @@ tıklanınca kapanır.
           <tr><th>İşe giriş</th><td>${c.hire_date ? tarih(c.hire_date) : yok}</td></tr>
           <tr><th>Durum</th><td>${esc(c.status_label || c.status)}</td></tr>
         </tbody></table></div>
+        ${lifecycleBolumu(c)}
         ${izinHaklariBolumu}
         ${yetkiBolumu}
         ${piiBolumu}
@@ -1106,6 +1143,25 @@ tıklanınca kapanır.
     // İzin hakları bölümündeki düğmeler (karar ve yazım servis katmanında).
     document.querySelectorAll("#employee-detail [data-hak]").forEach((b) =>
       b.addEventListener("click", () => hakDuzenle(b.dataset, calisanId)));
+    // P1-B: yaşam döngüsü aksiyonları + geçmiş (kararlar backend'de).
+    document.querySelectorAll("#employee-detail [data-lc]").forEach((b) =>
+      b.addEventListener("click", () => {
+        if (b.dataset.lc === "history") {
+          lifecycleGecmis(b.dataset.id);
+          return;
+        }
+        const onayMetinleri = {
+          suspend: "Çalışanı askıya almak istediğinize emin misiniz? Erişimi kesilecek.",
+          restore: "Çalışanı yeniden aktifleştirmek istediğinize emin misiniz?",
+          terminate: "İşten çıkış işlemini onaylıyor musunuz?",
+          archive: "Arşivleme geri alınamaz. Onaylıyor musunuz?",
+        };
+        onayModali(
+          "İşlem onayı",
+          `<p>${esc(onayMetinleri[b.dataset.lc] || "Onaylıyor musunuz?")}</p>`,
+          "Onayla"
+        ).then((ok) => { if (ok) lifecycleIslem(b.dataset.lc, b.dataset.id); });
+      }));
 
     const ata = document.getElementById("rol-ata");
     if (ata) ata.addEventListener("click", () => rolAta(calisanId));
@@ -1130,6 +1186,79 @@ tıklanınca kapanır.
     // Detay başlığı çekmecede gösterilir (liste akışını bozmaz).
     const baslik = document.getElementById("detail-title");
     if (baslik) baslik.textContent = `Çalışan detayı — ${c.user_name || c.employee_no}`;
+  }
+
+  // P1-B — Çalışan Durumu bölümü: türetilmiş değerler backend'den (`lifecycle`);
+  // aksiyonlar modal ile onaylanır, kararlar sunucuda verilir.
+  function lifecycleBolumu(c) {
+    const lf = c.lifecycle || {};
+    const can = lf.can || {};
+    const noticeSatiri = lf.notice
+      ? `<tr><th>Çıkış süreci</th><td><strong>${esc(lf.notice.label)}</strong>
+          ${lf.notice.termination_date_display ? " · Son çalışma günü: " + esc(lf.notice.termination_date_display) : ""}</td></tr>`
+      : (lf.termination_date_display
+        ? `<tr><th>Çıkış tarihi</th><td>${esc(lf.termination_date_display)}</td></tr>`
+        : "");
+    const aksiyonlar = `
+      ${can.suspend ? `<button class="kucuk" data-lc="suspend" data-id="${esc(c.id)}">Askıya al</button>` : ""}
+      ${can.restore ? `<button class="kucuk" data-lc="restore" data-id="${esc(c.id)}">Aktifleştir</button>` : ""}
+      ${can.terminate ? `<button class="kucuk danger" data-lc="terminate" data-id="${esc(c.id)}">İşten çıkış ver</button>` : ""}
+      ${can.archive ? `<button class="kucuk danger" data-lc="archive" data-id="${esc(c.id)}">Arşivle</button>` : ""}
+      ${can.history ? `<button class="kucuk ghost" data-lc="history" data-id="${esc(c.id)}">Geçmiş</button>` : ""}`;
+    return `
+      <h3>Çalışan Durumu</h3>
+      <div class="tablo-kaydir"><table class="kv"><tbody>
+        <tr><th>Mevcut durum</th><td>${esc(lf.status_label || lf.status || c.status_label)}</td></tr>
+        ${noticeSatiri}
+      </tbody></table></div>
+      <div class="form-alt">${aksiyonlar}</div>
+      <div id="lc-gecmis"></div>`;
+  }
+
+  async function lifecycleGecmis(calisanId) {
+    const kutu = document.getElementById("lc-gecmis");
+    try {
+      const { data } = await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/history`);
+      const satirlar = (data.events || []).map((e) => `<tr>
+        <td>${esc(e.date_display)}</td><td>${esc(e.label)}</td>
+        <td class="muted">${esc(e.detail && e.detail.reason ? e.detail.reason : "")}</td></tr>`).join("");
+      kutu.innerHTML = `<h4>İş geçmişi</h4>
+        ${satirlar ? `<table class="data-table"><thead><tr><th>Tarih</th><th>Olay</th><th>Gerekçe</th></tr></thead>
+          <tbody>${satirlar}</tbody></table>` : '<p class="muted">Geçmiş kaydı yok.</p>'}`;
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  async function lifecycleIslem(islem, calisanId) {
+    let govde = { reason: "" };
+    if (islem === "terminate") {
+      const tarihDeger = prompt("Son çalışma günü (YYYY-AA-GG):");
+      if (!tarihDeger) return;
+      const neden = prompt("Çıkış nedeni kodu (resignation|employer_termination|mutual_agreement|contract_end|retirement|death|other):");
+      if (!neden) return;
+      const gerekce = prompt("Gerekçe (zorunlu):");
+      if (!gerekce) return;
+      govde = { termination_date: tarihDeger, termination_reason_code: neden, reason: gerekce };
+    } else {
+      const gerekce = prompt(islem === "suspend" ? "Askıya alma gerekçesi (zorunlu):"
+        : islem === "restore" ? "Geri alma/aktifleştirme gerekçesi (zorunlu):"
+        : "Arşivleme gerekçesi (zorunlu):");
+      if (!gerekce) return;
+      govde = { reason: gerekce };
+    }
+    const mesajlar = {
+      suspend: "Çalışan askıya alındı; erişimi kesildi.",
+      restore: "Çalışan aktifleştirildi; yeni giriş zorunlu.",
+      terminate: "İşten çıkış uygulandı (veya planlandı).",
+      archive: "Çalışan arşivlendi.",
+    };
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/lifecycle/${islem}`,
+        { method: "POST", body: govde });
+      PERSOPYRO_UI.mesaj("ok", mesajlar[islem] || "İşlem tamamlandı.");
+      await yukleCalisanlar();
+      const acik = document.getElementById("detail-panel");
+      if (acik && !acik.hidden) await calisanDetay(calisanId);
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
 
   async function piiFormu(calisanId) {

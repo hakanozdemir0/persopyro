@@ -30,6 +30,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.auth_version import oturum_auth_version_yaz
 from apps.accounts.mfa import (
     MfaConfigError,
     MfaInvalidError,
@@ -190,6 +191,10 @@ class SessionLoginView(APIView):
         with tenant_context(tenant_id):
             login(request, kullanici)
             set_session_tenant(request, tenant_id)
+            # P1-B (OD59): giriş anındaki auth_version snapshot'ı oturuma yazılır;
+            # lifecycle işlemleri sürümü artırdığında oturum düşer (bkz.
+            # `apps.accounts.auth_version.oturum_auth_version_dogrula`).
+            oturum_auth_version_yaz(request.session, kullanici)
         return Response({"data": _kullanici_ozeti(kullanici)}, status=status.HTTP_200_OK)
 
 

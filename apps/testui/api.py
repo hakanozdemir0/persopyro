@@ -26,12 +26,19 @@ from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
+from rest_framework import exceptions as drf_exceptions
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.auth_version import (
+    AuthVersionMismatchError as AuthVersionMismatch,
+)
+from apps.accounts.auth_version import (
+    oturum_auth_version_dogrula,
+)
 from apps.accounts.models import UserStatus
 from apps.common.crypto import SecretDecryptionError
 from apps.leave.leave_type_catalog import LeaveCategory
@@ -75,11 +82,24 @@ from apps.leave.services.balances import (
     period_year_for,
     set_leave_entitlement,
 )
+from apps.organization.history import employee_history
+from apps.organization.lifecycle import (
+    LifecycleStateError,
+    LifecycleValidationError,
+    archive_employee,
+    change_manager,
+    notice_etiketi,
+    restore_employee,
+    suspend_employee,
+    terminate_employee,
+)
 from apps.organization.models import BloodType, Department, Employee, Position
 from apps.organization.services import (
     OrganizationAuthorizationError,
     OrganizationError,
     OrganizationTreeError,
+    change_assignment,
+    change_employment_terms,
     create_department,
     create_employee,
     create_position,
@@ -230,7 +250,18 @@ class TestUiView(APIView):
 
     def initial(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         _test_ui_kapali()
-        return super().initial(request, *args, **kwargs)
+        super().initial(request, *args, **kwargs)
+        # P1-B (OD59): her oturumlu istekte auth_version doğrulaması — suspend/
+        # terminate/archive/restore sonrası eski oturum 401 ile düşer.
+        if getattr(request, "user", None) is not None and request.user.is_authenticated:
+            try:
+                oturum_auth_version_dogrula(
+                    request.user,
+                    request.session,
+                    request_id=getattr(request, "request_id", ""),
+                )
+            except AuthVersionMismatch as exc:
+                raise drf_exceptions.AuthenticationFailed(str(exc)) from exc
 
     def handle_exception(self, exc):  # noqa: ANN001, ANN201
         """
@@ -240,9 +271,11 @@ class TestUiView(APIView):
         `code="not_authenticated"` ile "yetki yok" (403 + `forbidden`) ayrılır, böylece
         arayüz gerçekten oturumu kapanmış kullanıcıyı girişe yönlendirebilir.
         """
-        from rest_framework import exceptions as drf_exceptions  # noqa: PLC0415
+        from rest_framework import exceptions as drf_exceptions_local  # noqa: PLC0415
 
-        if isinstance(exc, (drf_exceptions.NotAuthenticated, drf_exceptions.PermissionDenied)) and (
+        if isinstance(
+            exc, (drf_exceptions_local.NotAuthenticated, drf_exceptions_local.PermissionDenied)
+        ) and (
             not getattr(getattr(self, "request", None), "user", None)
             or not self.request.user.is_authenticated
         ):
@@ -371,6 +404,10 @@ def _calisan_ozeti(employee: Employee, izin_durumu: dict | None = None) -> dict:
     return {
         "id": str(employee.pk),
         "employee_no": employee.employee_no,
+        # P1-B: liste filtreleri (çıkış süreci / askıda sekmeleri) için türetilmiş alanlar.
+        "termination_date": (
+            employee.termination_date.isoformat() if employee.termination_date else None
+        ),
         # Unvan (position) ile birim (department) ayrı kavramlardır (M10/M12):
         # arayüzde ikisi ayrı satırda gösterilir.
         "department": employee.department.name if employee.department_id else None,
@@ -685,6 +722,45 @@ def _kapsamdaki_calisan(user, employee_id) -> Employee:  # noqa: ANN001
     if calisan is None:
         raise Http404("calisan_kapsam_disi")
     return calisan
+
+
+def _lifecycle_ozeti(user, calisan: Employee) -> dict:  # noqa: ANN001
+    """
+    P1-B — Çalışan Durumu bölümü verisi (türetilmiş; PII yok).
+
+    `notice` (OD41) sunucuda türetilir; aksiyon yetkileri izin ∧ durum makinesi
+    ile hesaplanır (arayüz yalnız düğmeyi gizler, karar backend'dedir).
+    """
+    from apps.organization.lifecycle import IZINLI_GECISLER as _IZINLI  # noqa: PLC0415
+    from apps.organization.lifecycle import ihbar_döneminde as _ihbar  # noqa: PLC0415
+
+    notice = notice_etiketi(calisan)
+    return {
+        "status": calisan.status,
+        "status_label": calisan.get_status_display(),
+        "termination_date": (
+            calisan.termination_date.isoformat() if calisan.termination_date else None
+        ),
+        "termination_date_display": (
+            calisan.termination_date.strftime("%d.%m.%Y")
+            if calisan.termination_date
+            else None
+        ),
+        "notice": notice,
+        "can": {
+            "suspend": calisan.status == "active"
+            and user_has_permission(user, "employee.suspend"),
+            "restore": calisan.status in ("suspended", "terminated")
+            and user_has_permission(user, "employee.restore"),
+            "terminate": calisan.status in ("active", "suspended")
+            and user_has_permission(user, "employee.terminate"),
+            "archive": calisan.status == "terminated"
+            and user_has_permission(user, "employee.delete"),
+            "history": user_has_permission(user, "employee.history.read"),
+        },
+        "gecisler": sorted(_IZINLI.get(calisan.status, frozenset())),
+        "ihbar_döneminde": _ihbar(calisan),
+    }
 
 
 def _izin_istisnalari(user) -> list[dict]:  # noqa: ANN001
@@ -1575,8 +1651,248 @@ class EmployeeListView(TestUiView):
         return Response({"data": _calisan_ozeti(calisan)}, status=status.HTTP_201_CREATED)
 
 
+class EmployeeLifecycleView(TestUiView):
+    """
+    Çalışan yaşam döngüsü işlemleri — **merkezi lifecycle servisi** üzerinden (P1-B).
+
+    * POST `/employees/<id>/suspend`   → suspend_employee (`employee.suspend`)
+    * POST `/employees/<id>/restore`   → restore_employee (`employee.restore`)
+    * POST `/employees/<id>/terminate` → terminate_employee (`employee.terminate`)
+    * POST `/employees/<id>/archive`   → archive_employee (`employee.delete` = arşiv)
+
+    Gerekçe zorunludur; geçersiz geçiş 409, izin/kapsam reddi 403 döner.
+    """
+
+    ISLEM_IZIN = {
+        "suspend": "employee.suspend",
+        "restore": "employee.restore",
+        "terminate": "employee.terminate",
+        "archive": "employee.delete",
+    }
+
+    def post(self, request, employee_id: str, islem: str):  # noqa: ANN001
+        if islem not in self.ISLEM_IZIN:
+            return Response(
+                {"error": {"code": "not_found", "message": "Bilinmeyen işlem.", "detail": ""}},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+        try:
+            if islem == "suspend":
+                sonuc = suspend_employee(
+                    actor=request.user,
+                    employee=calisan,
+                    reason=str(request.data.get("reason") or ""),
+                )
+            elif islem == "restore":
+                sonuc = restore_employee(
+                    actor=request.user,
+                    employee=calisan,
+                    reason=str(request.data.get("reason") or ""),
+                )
+            elif islem == "terminate":
+                sonuc = terminate_employee(
+                    actor=request.user,
+                    employee=calisan,
+                    termination_date=_tarih(
+                        request.data.get("termination_date"), "termination_date"
+                    ),
+                    termination_reason_code=str(
+                        request.data.get("termination_reason_code") or ""
+                    ).strip(),
+                    reason=str(request.data.get("reason") or ""),
+                    termination_note=str(request.data.get("termination_note") or ""),
+                )
+            else:  # archive
+                sonuc = archive_employee(
+                    actor=request.user,
+                    employee=calisan,
+                    reason=str(request.data.get("reason") or ""),
+                )
+        except (
+            LifecycleStateError,
+            LifecycleValidationError,
+            OrganizationError,
+            OrganizationAuthorizationError,
+            LeaveError,
+        ) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _calisan_ozeti(sonuc)})
+
+
+class EmployeeHistoryView(TestUiView):
+    """Birleşik iş geçmişi (`employee.history.read`); PII değeri döndürülmez."""
+
+    def get(self, request, employee_id: str):  # noqa: ANN001
+        if not user_has_permission(request.user, "employee.history.read"):
+            return TestUiErrors.cevap(
+                TestUiAuthorizationError(
+                    "Geçmişi görmek için 'employee.history.read' izni gerekir."
+                )
+            )
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+        return Response(
+            {"data": {"employee_no": calisan.employee_no, "events": employee_history(calisan)}}
+        )
+
+
+class EmployeeAssignmentChangeView(TestUiView):
+    """Departman/pozisyon değişikliği — atama geçmişi yazar (OD60; `employee.update`)."""
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+        birim = pozisyon = None
+        try:
+            if request.data.get("department_id"):
+                birim = Department.objects.get(
+                    pk=_uuid(request.data["department_id"], "department_id"),
+                    tenant_id=request.user.tenant_id,
+                    deleted_at__isnull=True,
+                )
+            if request.data.get("position_id"):
+                pozisyon = Position.objects.get(
+                    pk=_uuid(request.data["position_id"], "position_id"),
+                    tenant_id=request.user.tenant_id,
+                    deleted_at__isnull=True,
+                )
+            efektif = (
+                _tarih(request.data.get("effective_from"), "effective_from")
+                if request.data.get("effective_from")
+                else None
+            )
+            _, ozet = change_assignment(
+                actor=request.user,
+                employee=calisan,
+                department=birim,
+                position=pozisyon,
+                effective_from=efektif,
+                reason=str(request.data.get("reason") or ""),
+            )
+        except (Department.DoesNotExist, Position.DoesNotExist):
+            hata_mesaj = LeaveError(
+                "Hedef birim/pozisyon bulunamadı (veya başka kiracıya ait)."
+            )
+            return TestUiErrors.cevap(hata_mesaj)
+        except (
+            LifecycleValidationError,
+            OrganizationError,
+            OrganizationAuthorizationError,
+            LeaveError,
+        ) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": ozet})
+
+
+class EmployeeTermsChangeView(TestUiView):
+    """İstihdam koşulu değişikliği — yeni koşul satırı (OD60; `employee.update`)."""
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+        isyeri = None
+        try:
+            if request.data.get("workplace_id"):
+                from apps.organization.models import Workplace  # noqa: PLC0415
+
+                isyeri = Workplace.objects.get(
+                    pk=_uuid(request.data["workplace_id"], "workplace_id"),
+                    tenant_id=request.user.tenant_id,
+                    deleted_at__isnull=True,
+                )
+            efektif = (
+                _tarih(request.data.get("effective_from"), "effective_from")
+                if request.data.get("effective_from")
+                else None
+            )
+            _, ozet = change_employment_terms(
+                actor=request.user,
+                employee=calisan,
+                employment_type=request.data.get("employment_type"),
+                working_model=request.data.get("working_model"),
+                workplace=isyeri,
+                contract_type=request.data.get("contract_type"),
+                contract_start_date=(
+                    _tarih(request.data["contract_start_date"], "contract_start_date")
+                    if request.data.get("contract_start_date")
+                    else None
+                ),
+                contract_end_date=(
+                    _tarih(request.data["contract_end_date"], "contract_end_date")
+                    if request.data.get("contract_end_date")
+                    else None
+                ),
+                probation_end_date=(
+                    _tarih(request.data["probation_end_date"], "probation_end_date")
+                    if request.data.get("probation_end_date")
+                    else None
+                ),
+                effective_from=efektif,
+                reason=str(request.data.get("reason") or ""),
+            )
+        except (
+            LifecycleValidationError,
+            OrganizationError,
+            OrganizationAuthorizationError,
+            LeaveError,
+        ) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": ozet})
+
+
+class EmployeeManagerChangeView(TestUiView):
+    """Birincil yönetici değişikliği (mevcut altyapı; `employee.manager.change`)."""
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+        try:
+            yonetici = Employee.objects.get(
+                pk=_uuid(request.data.get("manager_employee_id"), "manager_employee_id"),
+                tenant_id=request.user.tenant_id,
+                deleted_at__isnull=True,
+            )
+            iliski = change_manager(
+                actor=request.user,
+                employee=calisan,
+                manager_employee=yonetici,
+                effective_from=(
+                    _tarih(request.data["effective_from"], "effective_from")
+                    if request.data.get("effective_from")
+                    else None
+                ),
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Employee.DoesNotExist:
+            hata_mesaj = LeaveError(
+                "Hedef yönetici bulunamadı (veya başka kiracıya ait)."
+            )
+            return TestUiErrors.cevap(hata_mesaj)
+        except (
+            LifecycleValidationError,
+            OrganizationError,
+            OrganizationAuthorizationError,
+            LeaveError,
+        ) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {"data": {"effective_from": iliski.effective_from.isoformat()}}
+        )
+
+
 class EmployeeMoveView(TestUiView):
-    """Çalışanın birimini değiştirir (denetimli: `employee.department_change`)."""
 
     def post(self, request, employee_id: str):  # noqa: ANN001
         try:
@@ -2630,6 +2946,8 @@ class EmployeeDetailView(TestUiView):
             "revoked_assignments": [],
             "permission_overrides": [],
             "assignable_roles": [],
+            # P1-B: yaşam döngüsü türetilmiş değerleri + aksiyon yetkileri.
+            "lifecycle": _lifecycle_ozeti(request.user, calisan),
         }
         if detay["yetki_gorunur"] and calisan.user_id:
             atamalar = (

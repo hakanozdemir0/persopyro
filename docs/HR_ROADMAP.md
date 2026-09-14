@@ -1179,13 +1179,19 @@ kod içinde `apps/` paketleri + **servis katmanı** ile korunur. Mikroservis **y
 - **Migration riski:** yok.
 
 ---
-### P1 — People lifecycle + yapılandırılabilir onboarding formu — **P1-A ✅ UYGULANDI · P1-B/C PENDING**
+### P1 — People lifecycle + yapılandırılabilir onboarding formu — **P1-A ✅ · P1-B ✅ UYGULANDI (2026-09-14) · P1-C PENDING**
 
 - **Durum:** kararlar **KAPALI** (OD6, OD7, OD9, OD16, OD29–OD31, OD35–OD38, OD41–OD43,
   **OD58–OD61**); **P1-A uygulandı** (şema + izin altyapısı; `organization/0014–0018`,
-  `accounts/0006`, `rbac/0012`). Kalan: **P1-B** (lifecycle servisleri/uçları: create/update/
-  move/status/terminate/suspend/restore + erişim kesme uygulaması), **P1-C** (form yapılandırma
-  uçları + arayüz). Kesin tasarım: **§28**; karar kayıtları: `AUTHORIZATION.md` §16.
+  `accounts/0006`, `rbac/0012`). **P1-B uygulandı (2026-09-14):** merkezi lifecycle
+  servisleri (`apps/organization/lifecycle.py` — state machine, suspend/restore/
+  terminate/archive/change_manager), geçmiş servisleri (`change_assignment`,
+  `change_employment_terms`, `apps/organization/history.py`), erişim kesme
+  (`auth_version` enforcement: `apps/accounts/auth_version.py`, token snapshot
+  `accounts/0007`), planlı çıkış komutu (`process_employee_terminations`), test
+  UI uçları + Çalışan Durumu bölümü ve geçmiş görünümü. Kalan: **P1-C** (form
+  yapılandırma uçları + arayüz). Kesin tasarım: **§28**; karar kayıtları:
+  `AUTHORIZATION.md` §16.
 - **Amaç:** istihdam koşullarının (tip/model/işyeri/sözleşme/deneme) ve form yapılandırmasının
   gelmesi; işe girişin **tek atomik akışta** (çalışan + kullanıcı) tamamlanması; geçmişin
   sorgulanabilir olması.
@@ -1582,7 +1588,17 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 
 ## 28. P1 — People Lifecycle + Configurable Onboarding (KESİNLEŞTİRİLMİŞ TASARIM)
 
-> **Durum: P1-A ✅ UYGULANDI, P1-B/P1-C PENDING (2026-09-13).**
+> **Durum: P1-A ✅ UYGULANDI, P1-B ✅ UYGULANDI (2026-09-14), P1-C PENDING.**
+> **P1-B uygulandı:** §28.2 durum makinesi (`apps/organization/lifecycle.py`),
+> §28.3 erişim kesme (`auth_version` snapshot + token iptali; `accounts/0007` token
+> snapshot kolonu), §28.6 geçmiş servisleri (`change_assignment`,
+> `change_employment_terms`, `employee_history`), planlı çıkış komutu
+> (`process_employee_terminations`, idempotent), test UI uçları ve Çalışan Durumu /
+> Geçmiş bölümleri. Audit olayları gerçek implementasyonda: `employee.suspend`,
+> `employee.restore`, `employee.termination.schedule`, `employee.terminate`,
+> `employee.archive`, `employee.assignment.change`, `employee.terms.change`
+> (30 karakter audit kolonu sınırı nedeniyle kısaltıldı), `employee.manager.change`,
+> `auth.session_revoked`.
 > **P1-A (veri modeli + izin altyapısı) tamamlandı:** 4 yeni tablo, `employees` yaşam döngüsü
 > kolonları + `users.auth_version` + kısmi benzersizlik, RLS+FORCE/guard'lar, backfill ve
 > 8 yeni izin kodu + sistem rol senkronu (migration'lar: `organization/0014–0018`,

@@ -2274,15 +2274,14 @@ kolon listesi ve `scripts/verify_fresh_install.sh` adım **6c-8** beklentileri
 
 ## 16. P1 kararları — People Lifecycle + Configurable Onboarding (2026-09-13)
 
-> **UYGULAMA DURUMU (2026-09-13):** Bu bölümdeki kararların **altyapı kısmı uygulandı (P1-A)**:
-> 8 izin kodu katalogda ve `hr.permissions`'ta (toplam **47** = 41 kiracı + 6 platform), sistem
-> rol şablonları senkron edildi (`tenant_admin` **41**, `hr_manager` **30**, `tenant_officer` **23**,
-> `dept_manager` **17**, `employee` **8**), devredilemez kod listesi (`NON_DELEGABLE_PERMISSION_CODES`)
-> katalogda tanımlı. Migration: `rbac/0012_p1a_permissions_roles`.
-> **P1-B/P1-C bekleyen kısımlar:** durum makinesi servisleri (suspend/terminate/restore uçları),
-> erişim kesmenin (`auth_version` + token iptali) uygulanması, form yapılandırma uçları,
-> devredilemez kuralın rol düzenleme servisinde zorlanması, `employee.sensitive.write` için
-> "yazma ⇒ okuma" kuralının servis katmanında uygulanması.
+> **UYGULAMA DURUMU (2026-09-14):** Bu bölümdeki kararların **altyapısı P1-A'da**, **servis
+> kısmı P1-B'de uygulandı**: durum makinesi servisleri (`apps/organization/lifecycle.py`
+> — suspend/restore/terminate/archive, `select_for_update` ile eşzamanlılık), erişim kesme
+> (`auth_version` artırımı + token iptali + `api_tokens.auth_version_snapshot` doğrulaması),
+> geçmiş servisleri (`change_assignment`, `change_employment_terms`, `employee_history`),
+> test UI uçları ve `process_employee_terminations` komutu. Kalan (P1-C): form yapılandırma
+> uçları; ayrıca devredilemez kuralın rol düzenleme servisinde zorlanması,
+> `employee.sensitive.write` için "yazma ⇒ okuma" kuralının servis katmanında uygulanması.
 
 **Kaynak:** `docs/HR_ROADMAP.md` §28 (P1 uygulama paketi), §3–§5 tasarımları ve **koddan yapılan
 ölçüm** (employee/employee_manager modelleri, `organization/services.py`, izin kataloğu).

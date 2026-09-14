@@ -111,6 +111,16 @@ class ApiToken(UUIDModel):
         blank=True,
     )
     last_used_at = models.DateTimeField("son kullanım", null=True, blank=True)
+    auth_version_snapshot = models.PositiveIntegerField(
+        "kimlik doğrulama sürümü anlık görüntüsü",
+        null=True,
+        blank=True,
+        help_text=(
+            "P1-B (OD59): token üretilirken sahibinin `auth_version` değeri. "
+            "Doğrulamada güncel sürümle uyuşmayan token reddedilir (401). NULL = "
+            "eski token (mevcut davranış korunur; sürüm kontrolü yapılmaz)."
+        ),
+    )
     created_at = models.DateTimeField("oluşturma", auto_now_add=True)
 
     class Meta:
@@ -211,6 +221,8 @@ class ApiToken(UUIDModel):
             purpose=purpose,
             scopes=list(scopes),
             expires_at=timezone.now() + timedelta(hours=saat),
+            # P1-B (OD59): üretim anındaki sürüm saklanır; butlanma doğrulamada yakalanır.
+            auth_version_snapshot=int(getattr(user, "auth_version", 0)),
         )
         return kayit, duz_metin
 

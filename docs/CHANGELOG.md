@@ -3,6 +3,71 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [0.39.0] — 2026-09-14 — P1-B: Employee lifecycle services
+
+**Kapsam:** P1-A'da kurulan lifecycle/history altyapısının gerçek servisler ve güvenli
+state-machine ile çalışır hâle getirilmesi. Yeni büyük modül eklenmedi; mevcut kapalı
+kararlar (OD41–OD43, OD58–OD61) yeniden tasarlanmadı.
+
+**EKLENEN**
+
+- **`apps/organization/lifecycle.py`** — merkezi durum makinesi: `suspend_employee`,
+  `restore_employee`, `terminate_employee` (anında + planlı), `archive_employee`,
+  `change_manager`. İzin verilen geçişler tek kaynak (`IZINLI_GECISLER`); geçersiz
+  geçiş 409 + audit, aynı durum no-op, `select_for_update` ile eşzamanlılık.
+- **Erişim kesme (OD59):** suspend/terminate/archive → kullanıcı `inactive` + token
+  iptali + `auth_version++`; restore'da `auth_version` yine artar (eski oturum/token
+  dirilmez, yeni giriş zorunlu). **`apps/accounts/auth_version.py`**: giriş anında
+  oturuma sürüm snapshot'ı, her istekte doğrulama; uyuşmazlık → oturum flush +
+  `auth.session_revoked` audit + 401. **`accounts/0007`**: `api_tokens.auth_version_snapshot`.
+- **Geçmiş servisleri (OD60):** `change_assignment` (eski açık satır kapanır/yenisi
+  açılır + `employees` snapshot senkronu), `change_employment_terms` (yeni koşul
+  satırı), `change_manager` (mevcut altyapı + `employee.manager.change` audit).
+- **`apps/organization/history.py::employee_history`** — business-readable birleşik
+  iş geçmişi (atama / koşullar / yönetici / durum olayları); PII değeri döndürülmez.
+- **`process_employee_terminations`** — vadesi gelen planlı çıkışları terminated yapan
+  idempotent management command (çift çalıştırma duplicate audit/token üretmez).
+- **Test UI:** çalışan detayında **Çalışan Durumu** bölümü (durum, notice, izne göre
+  aksiyonlar + onay modalı), **Geçmiş** görünümü, **İşten Çıkış / Çıkış Süreci** ve
+  **Askıya Alınanlar** alt sekmeleri; uçlar: `/employees/<id>/lifecycle/<islem>`,
+  `/assignment`, `/employment-terms`, `/manager`, `/history`.
+- **`verify_fresh_install.sh` 6g adımı** — P1-B invariantları (auth_version şeması,
+  token snapshot, lifecycle CHECK'ler + tek-current, guard tetikleyicileri, izin
+  kodları, command import, RLS/FORCE/privilege zaten 6c-11 ile ölçülüyor).
+- **`tests/test_p1b_lifecycle.py`** — 43 test (durum makinesi, auth invalidation,
+  planlı çıkış, atama/koşul/yönetici geçmişi, izin/kapsam, suspended/terminated
+  kuralları, geçmiş, regresyon).
+
+**DEĞİŞEN**
+
+- OD42/§19 backend enforce: `suspended` çalışan **yeni izin VE fazla mesai talebi
+  açamaz** (`apps/leave/services/*`, `apps/overtime/services/authorization.py`
+  "aktif" kümesi yalnız `active`'e daraltıldı; geçmiş talepler okunur kalır).
+- `employees.department_id/position_id` snapshot'ı artık yalnız servis yolundan
+  yazılır (`change_assignment` aynı transaction'da senkron eder).
+- Audit adı `employee.employment_terms.change` → **`employee.terms.change`**
+  (audit `action` kolonu 30 karakter; uzun ad sığmıyordu).
+
+**DOĞRULANAN**
+
+- `bash scripts/run_tests.sh`: **583 passed, 0 failed** (P1-B öncesi 540).
+- `tests/test_p1b_lifecycle.py` 43 passed; ilgili regresyon paketi 189 passed.
+- `ruff` temiz, `bandit` 0 bulgu, `manage.py check` temiz,
+  `makemigrations --check` "No changes detected".
+- `scripts/verify_fresh_install.sh` **0 FAIL** (yeni 6g adımı dahil).
+- Gerçek HTTP smoke (geçici port 8012, disposable kiracı): login → detay → suspend →
+  eski session reddi → restore → yeni login → atama değişikliği → geçmiş → planlı
+  çıkış + notice → suspended leave/overtime reddi → logout.
+
+**KALAN / AÇIK**
+
+- **P1-C PENDING:** form yapılandırma uçları + arayüz.
+- **F12** (lockout sayacı sıfırlanmıyor) bilinçli olarak açık bırakıldı; P1-B'ye
+  karıştırılmadı (bkz. `SECURITY.md` §5.1).
+- Scheduler bağlama (django-q2) P2/ops turuna bırakıldı; komut bugün elle/cron ile çalışır.
+- Not: smoke için kullanılan disposable kiracı `p1b-smoke` PROTECT FK nedeniyle
+  fiziksel silinemedi; `status='suspended'` ile erişimi kalıcı kapandı (veri izole).
+
 ## [0.38.0] — 2026-09-13 — P5a V1: fazla mesai talep/onay temeli + çalışan izin hakkı UX
 
 **Kapsam:** Kullanıcı testinde çıkan üç kullanılabilirlik sorununun düzeltilmesi + fazla mesai

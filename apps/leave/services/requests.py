@@ -128,7 +128,8 @@ def _tur_kullanilabilir(leave_type: LeaveType) -> None:
 def _calisan_kullanilabilir(employee: Employee) -> None:
     if employee.deleted_at is not None:
         raise LeaveStateError("Silinmiş çalışan izin talebi oluşturamaz (OD21).")
-    if employee.status not in (EmployeeStatus.ACTIVE, EmployeeStatus.SUSPENDED):
+    # OD42 (P1-B): yalnız `active` çalışan talep açar; suspended/terminated/archived kapalı.
+    if employee.status != EmployeeStatus.ACTIVE:
         raise LeaveStateError(
             f"'{employee.status}' durumundaki çalışan yeni izin talebi oluşturamaz."
         )
