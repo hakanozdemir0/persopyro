@@ -39,6 +39,8 @@ LEAVE_TABLOLARI = (
     "leave_balance_entries",
     "leave_requests",
     "approval_steps",
+    # M14/K: karar anı bakiyesi snapshot'ı (append-only + immutable).
+    "leave_decision_snapshots",
 )
 
 
@@ -58,9 +60,15 @@ def rol_ver(tenant, user, rol_kodu: str, *, department: Department | None = None
     """Kullanıcıya varsayılan rolü atar; `UNIT` tipli rolde kapsam zorunludur."""
     with tenant_context(tenant.id):
         roller = create_default_roles(tenant)
-        return UserRole.objects.create(
+        atama = UserRole.objects.create(
             tenant=tenant, user=user, role=roller[rol_kodu], scope_org_unit=department
         )
+    # P1-B performans: request-scope permission cache servis yolu dışı yazımda da
+    # geçersizleşmeli (test helper'ı servis katmanını atlar).
+    from apps.rbac.services.permissions import invalidate_permission_cache  # noqa: PLC0415
+
+    invalidate_permission_cache()
+    return user
 
 
 def birim(tenant, kod: str, ad: str | None = None, parent: Department | None = None) -> Department:

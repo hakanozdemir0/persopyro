@@ -120,7 +120,9 @@ def can_cancel_overtime(actor, talep: OvertimeRequest | None) -> bool:
         return False
     if is_own_employee(actor, talep.employee):
         return True
-    return employee_in_scope(actor, talep.employee)
+    # TENANT kapsamı zaten tüm kiracıyı kapsar; aksi durumda yönetici/İK
+    # yalnızca kendi organizasyon kapsamındaki çalışanı onaylayabilir.
+    return user_org_scope(actor).tenant_wide or employee_in_scope(actor, talep.employee)
 
 
 def can_approve_overtime(actor, talep: OvertimeRequest | None) -> bool:

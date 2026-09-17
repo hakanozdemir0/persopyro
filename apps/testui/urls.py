@@ -38,9 +38,34 @@ urlpatterns = [
     ),
     path("api/employees", api.EmployeeListView.as_view(), name="test-ui-employees"),
     path(
+        "api/employee-form-fields",
+        api.EmployeeFormFieldListView.as_view(),
+        name="test-ui-employee-form-fields",
+    ),
+    path(
+        "api/employee-form-fields/<str:field_id>/update",
+        api.EmployeeFormFieldUpdateView.as_view(),
+        name="test-ui-employee-form-field-update",
+    ),
+    path(
+        "api/employee-form-fields/<str:field_id>/delete",
+        api.EmployeeFormFieldDeleteView.as_view(),
+        name="test-ui-employee-form-field-delete",
+    ),
+    path(
         "api/employees/<str:employee_id>",
         api.EmployeeDetailView.as_view(),
         name="test-ui-employee-detail",
+    ),
+    path(
+        "api/employees/<str:employee_id>/password/reset",
+        api.EmployeePasswordResetView.as_view(),
+        name="test-ui-employee-password-reset",
+    ),
+    path(
+        "api/employees/<str:employee_id>/account/email",
+        api.EmployeeEmailUpdateView.as_view(),
+        name="test-ui-employee-email-update",
     ),
     path(
         "api/employees/<str:employee_id>/roles",
@@ -79,6 +104,11 @@ urlpatterns = [
         "api/leave-types/<str:leave_type_id>/deactivate",
         api.LeaveTypeDeactivateView.as_view(),
         name="test-ui-leave-type-deactivate",
+    ),
+    path(
+        "api/leave-types/<str:leave_type_id>/activate",
+        api.LeaveTypeActivateView.as_view(),
+        name="test-ui-leave-type-activate",
     ),
     path(
         "api/role-assignments/<str:assignment_id>/revoke",
@@ -135,6 +165,13 @@ urlpatterns = [
     # Fazla mesai (P5a V1): bildirim, karar ve iptal.
     path("api/overtime", api.OvertimeListView.as_view(), name="test-ui-overtime"),
     path(
+        "api/overtime/rules",
+        api.OvertimeRuleCreateView.as_view(),
+        name="test-ui-overtime-rule-create",
+    ),
+    path("api/overtime/rules/<str:rule_id>/update", api.OvertimeRuleUpdateView.as_view(), name="test-ui-overtime-rule-update"),
+    path("api/overtime/rules/<str:rule_id>/delete", api.OvertimeRuleDeleteView.as_view(), name="test-ui-overtime-rule-delete"),
+    path(
         "api/overtime/<str:overtime_id>/decision",
         api.OvertimeDecisionView.as_view(),
         name="test-ui-overtime-decision",
@@ -155,4 +192,5 @@ urlpatterns = [
         api.LeaveRequestCancelView.as_view(),
         name="test-ui-leave-cancel",
     ),
+    path("api/leave-types/<str:leave_type_id>/update", api.LeaveTypeUpdateView.as_view(), name="test-ui-leave-type-update"),
 ]

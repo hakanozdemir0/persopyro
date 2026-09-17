@@ -138,14 +138,14 @@ def test_yillik_bakiye_backend_kaynagindan_gelir(client, lot, csrf_client) -> No
         bakiye = LeaveBalance.objects.get(
             employee=lot["personel"], period_year=yil, leave_type__code="annual_leave"
         )
-    assert veri["annual"]["entitled_days"] == str(bakiye.entitled_days)
-    assert veri["annual"]["used_days"] == str(bakiye.used_days)
-    assert veri["annual"]["reserved_days"] == str(bakiye.reserved_days)
+    assert Decimal(veri["annual"]["entitled_days"]) == bakiye.entitled_days
+    assert Decimal(veri["annual"]["used_days"]) == bakiye.used_days
+    assert Decimal(veri["annual"]["reserved_days"]) == bakiye.reserved_days
     # Türetilmiş değer DB'nin ürettiği kolondan gelir (arayüz hesap yapmaz).
-    assert veri["annual"]["available_days"] == str(bakiye.available_days)
+    assert Decimal(veri["annual"]["available_days"]) == bakiye.available_days
     # Panel kartları da aynı değerleri taşır (tek kaynak).
     kendi = next(b for b in veri["balances"] if b["leave_type_code"] == "annual_leave")
-    assert kendi["available_days"] == str(bakiye.available_days)
+    assert Decimal(kendi["available_days"]) == bakiye.available_days
     # "İzin taleplerim" kartı: son kayıtlar + toplam sayı sunucudan.
     assert veri["my_requests_count"] >= len(veri["my_requests"])
     assert {"bekleyen", "karar_bekleyen"} <= set(veri["fazla_mesai"])
@@ -156,7 +156,7 @@ def test_yillik_bakiye_backend_kaynagindan_gelir(client, lot, csrf_client) -> No
 
 def test_ayri_izin_bakiyeleri_navigasyonu_yok(client, lot, csrf_client) -> None:  # noqa: ANN001
     """(4) Sekme ve yükleyici kaldırıldı; veri uçları (geri uyum) duruyor."""
-    _giris_yap(csrf_client, lot)
+    _giris_yap(csrf_client, lot, "personel_user")
     sayfa = csrf_client.get("/test-ui/").content.decode()
     assert 'data-tab="balances"' not in sayfa
     assert 'id="tab-balances"' not in sayfa
@@ -427,7 +427,7 @@ def test_regresyon_izin_akisi_ve_detay_ekrani_calismaya_devam_eder(  # noqa: ANN
     client, lot, csrf_client
 ) -> None:
     """(23-27) İzin talebi açma/listeleme, detay ekranı, /admin/ ve oturum davranışı."""
-    _giris_yap(csrf_client, lot)
+    _giris_yap(csrf_client, lot, "personel_user")
     # İzin talebi akışı bozulmadı.
     with tenant_context(lot["personel"].tenant_id):
         tur = lot["turler"]["annual_leave"]

@@ -24,6 +24,8 @@ from django.utils import timezone
 
 from apps.audit.services import log_action
 from apps.leave.models import ApprovalStep, ApprovalStepStatus, ApprovalSubjectKind
+from apps.leave.models import LeaveType, RecordStatus
+from apps.leave.services.balances import credit_time_off_balance
 from apps.leave.services.requests import HR_APPROVER_ROLE_CODE
 from apps.organization.models import Employee, EmployeeManager, ManagerRelationType
 from apps.overtime.models import (
@@ -31,6 +33,7 @@ from apps.overtime.models import (
     OVERTIME_MIN_DESCRIPTION_LENGTH,
     OVERTIME_TRANSITIONS,
     OvertimeRequest,
+    OvertimeRule,
     OvertimeStatus,
 )
 from apps.overtime.services.authorization import (
@@ -47,6 +50,7 @@ from apps.overtime.services.base import (
     OvertimeValidationError,
     require_active,
 )
+from apps.overtime.services.rules import calculate_time_off_days, resolve_overtime_rule
 
 
 def calculate_total_minutes(*, start_time: time, end_time: time) -> int:
@@ -166,6 +170,7 @@ def create_overtime_request(
     end_time: time,
     description: str,
     client_total_minutes=None,
+    overtime_rule: OvertimeRule | None = None,
 ) -> OvertimeRequest:
     """
     Fazla mesai bildirimi oluşturur ve **doğrudan onaya sunar** (`pending`).
@@ -193,6 +198,24 @@ def create_overtime_request(
     aciklama = _aciklama_dogrula(description)
     dakika = calculate_total_minutes(start_time=start_time, end_time=end_time)
 
+    if overtime_rule is not None and (
+        overtime_rule.tenant_id != employee.tenant_id
+        or overtime_rule.deleted_at is not None
+        or overtime_rule.effective_from > work_date
+        or (
+            overtime_rule.effective_until is not None
+            and overtime_rule.effective_until < work_date
+        )
+        or overtime_rule.min_minutes > dakika
+        or (
+            overtime_rule.max_minutes is not None
+            and overtime_rule.max_minutes <= dakika
+        )
+    ):
+        raise OvertimeValidationError(
+            "Seçilen fazla mesai kuralı bu tarih ve süre için geçerli değil."
+        )
+
     # İstemci süre gönderdiyse **yalnızca doğrulanır** (yazılmaz).
     if client_total_minutes not in (None, ""):
         try:
@@ -218,6 +241,7 @@ def create_overtime_request(
             end_time=end_time,
             total_minutes=dakika,
             description=aciklama,
+            overtime_rule=overtime_rule,
             status=OvertimeStatus.PENDING,
             created_by=actor,
         )
@@ -299,11 +323,36 @@ def decide_overtime_request(
 
 
 def _nihai_onay(talep: OvertimeRequest, *, actor) -> OvertimeRequest:
-    """Nihai onay: talep `approved` olur (bu sürümde ek hesaplama YOK)."""
+    """Nihai onayda kural değerlerini immutable snapshot alanlarına alır."""
+    kural = talep.overtime_rule or resolve_overtime_rule(
+        tenant_id=talep.tenant_id,
+        work_date=talep.work_date,
+        total_minutes=talep.total_minutes,
+    )
     talep.status = OvertimeStatus.APPROVED
+    talep.compensation_type = kural.compensation_type
+    talep.compensation_type_snapshot = kural.compensation_type
+    talep.multiplier_snapshot = kural.multiplier
     talep.decided_at = timezone.now()
     talep.decided_by = actor
-    talep.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
+    talep.save(update_fields=[
+        "status", "compensation_type", "compensation_type_snapshot", "multiplier_snapshot",
+        "decided_at", "decided_by", "updated_at",
+    ])
+    if kural.compensation_type == "time_off":
+        izin_turu = LeaveType.objects.filter(
+            tenant_id=talep.tenant_id, code="time_off", status=RecordStatus.ACTIVE,
+            deleted_at__isnull=True,
+        ).first()
+        if izin_turu is None:
+            raise OvertimeValidationError("Serbest zaman izin türü tanımlı değil.")
+        credit_time_off_balance(
+            employee=talep.employee, leave_type=izin_turu, overtime_request=talep,
+            delta_days=calculate_time_off_days(
+                total_minutes=talep.total_minutes, multiplier=kural.multiplier,
+                workday_minutes=izin_turu.workday_minutes,
+            ), actor=actor, reason="Onaylanan fazla mesai serbest zaman kredisi",
+        )
     log_action(
         tenant_id=talep.tenant_id,
         action="overtime.request.approve",
@@ -314,6 +363,8 @@ def _nihai_onay(talep: OvertimeRequest, *, actor) -> OvertimeRequest:
             "employee_no": talep.employee.employee_no,
             "work_date": str(talep.work_date),
             "total_minutes": talep.total_minutes,
+            "compensation_type": talep.compensation_type_snapshot,
+            "multiplier": str(talep.multiplier_snapshot),
         },
     )
     return talep

@@ -8,7 +8,7 @@ negatif bakiye guard'ları. Akış testleri (onay, iptal, kapsam, yarış, RLS)
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -160,7 +160,7 @@ def test_m14_silinmis_ve_pasif_tur_kullanilamaz(tenant_a, user_a) -> None:  # no
         lot["turler"]["flex_time"].save(update_fields=["deleted_at"])
     with pytest.raises(LeaveStateError, match="Silinmiş izin türü"):
         create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["flex_time"],
             start_date=bugun + timedelta(days=5),
@@ -172,7 +172,7 @@ def test_m14_silinmis_ve_pasif_tur_kullanilamaz(tenant_a, user_a) -> None:  # no
         lot["turler"]["administrative_leave"].save(update_fields=["status"])
     with pytest.raises(LeaveStateError, match="aktif izin türleri"):
         create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["administrative_leave"],
             start_date=bugun + timedelta(days=5),
@@ -452,6 +452,37 @@ def test_m14_gun_hesabi_sunucu_tarafinda(tenant_a, user_a) -> None:  # noqa: ANN
             start_date=bugun, end_date=bugun + timedelta(days=1), is_half_day=True
         )
 
+    # Serbest zaman hakkı saat karşılığıyla çalışır: 7 saatlik gün için
+    # tek gün otomatik 1 gün olur; kısmi kullanım yalnızca 30 dakikalık
+    # aralıklarla yapılabilir.
+    assert calculate_requested_days(
+        start_date=bugun,
+        end_date=bugun,
+        workday_minutes=420,
+    ) == Decimal("1")
+    assert calculate_requested_days(
+        start_date=bugun,
+        end_date=bugun,
+        start_time=time(9),
+        end_time=time(16),
+        workday_minutes=420,
+    ) == Decimal("1")
+    assert calculate_requested_days(
+        start_date=bugun,
+        end_date=bugun,
+        start_time=time(9),
+        end_time=time(15, 30),
+        workday_minutes=420,
+    ) == Decimal("0.9286")
+    with pytest.raises(LeaveError, match="30 dakikalık"):
+        calculate_requested_days(
+            start_date=bugun,
+            end_date=bugun,
+            start_time=time(9),
+            end_time=time(15, 12),
+            workday_minutes=420,
+        )
+
     with pytest.raises(LeaveError, match="uyuşmuyor"):
         create_leave_request(
             actor=lot["personel_user"],
@@ -511,7 +542,7 @@ def test_m14_on_bildirim_ve_azami_sure_kurallari(tenant_a, user_a) -> None:  # n
 
     with pytest.raises(LeaveError, match="önceden talep"):
         create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["annual_leave"],
             start_date=timezone.localdate() + timedelta(days=2),
@@ -519,7 +550,7 @@ def test_m14_on_bildirim_ve_azami_sure_kurallari(tenant_a, user_a) -> None:  # n
         )
     with pytest.raises(LeaveError, match="azami kesintisiz"):
         create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["annual_leave"],
             start_date=timezone.localdate() + timedelta(days=20),

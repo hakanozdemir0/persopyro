@@ -24,6 +24,8 @@ zaten hiçbir satır bırakmadığı için yetki veremez — bu yüzden burada f
 bir `deleted_at` yoktur (OD21 bağ tabloları için soft-delete öngörmez).
 """
 
+import contextvars
+
 from django.db.models import Q
 from django.utils import timezone
 
@@ -100,6 +102,34 @@ def declared_permission_codes(user) -> set[str]:
     return _role_permission_codes(rol_ids)
 
 
+# --- Request-scope permission cache (P1-B performans; OD5 anlamları değişmez) ---
+#
+# Aynı HTTP request/işlem içinde aynı kullanıcı için `effective_permission_codes`
+# sonucunu DB'ye tekrar tekrar göndermemek için **contextvars tabanlı** önbellek.
+#
+# * Global/process cache DEĞİLDİR: contextvars async/task-safe'tir; farklı user/
+#   tenant arasında paylaşım sıfırdır (her task kendi bağlamındadır).
+# * Tenant/izin source-of-truth değişmez: rol/override yazım yolları
+#   `invalidate_permission_cache()` çağırır; istek dışı süreçlerde önbellek
+#   doğal olarak boştur (request başına yaşar).
+_PERMISSION_CACHE_VAR: contextvars.ContextVar[dict[int, frozenset[str]] | None] = (
+    contextvars.ContextVar("permission_cache", default=None)
+)
+
+#: Yalnız HTTP istek akışında (middleware) etkin olur. Test/shell bağlamlarında
+#: önbellek devre dışıdır → doğrudan `effective_permission_codes` çağrıları daima
+#: DB'den okur (mevcut davranış değişmez; queryset.update() gibi model-sinyali
+#: yakalanamayan yazımlar stale döndüremez).
+_REQUEST_SCOPE_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "permission_cache_active", default=False
+)
+
+
+def invalidate_permission_cache() -> None:
+    """Rol/override değişiminde (isteğe bağlı) önbelleği sıfırlar."""
+    _PERMISSION_CACHE_VAR.set(None)
+
+
 def effective_permission_codes(user) -> set[str]:
     """
     Kullanıcının **kullanılabilir** (etkin) izin kodları.
@@ -112,9 +142,29 @@ def effective_permission_codes(user) -> set[str]:
 
     Pasif veya silinmiş kullanıcı için **boş küme** döner (fail-closed): kullanıcı
     kaydı da yetki çözümlemesinin girdisidir ve silinmiş kayıt katkı sağlamaz.
+
+    Performans (P1-B ölçümü): aynı bağlamda aynı kullanıcı için sonuç
+    contextvars tabanlı önbellekten döner (request-scope; user/tenant izolasyonu
+    korunur; global cache yok).
     """
     if user is None or not user.is_authenticated or not user.is_active:
         return set()
+
+    # İstek akışı dışında (test/shell/job) önbellek devre dışıdır: daima DB'den.
+    if not _REQUEST_SCOPE_ACTIVE.get():
+        role_codes = _role_permission_codes(_active_role_ids(user))
+        overrides = UserPermissionOverride.objects.filter(
+            user=user, deleted_at__isnull=True
+        ).values_list("permission__code", "effect")
+        allowed = {code for code, effect in overrides if effect == PermissionEffect.ALLOW}
+        denied = {code for code, effect in overrides if effect == PermissionEffect.DENY}
+        return (role_codes | allowed) - denied
+
+    cache = _PERMISSION_CACHE_VAR.get()
+    if cache is not None:
+        cozulmus = cache.get(user.pk)
+        if cozulmus is not None:
+            return set(cozulmus)
 
     role_codes = _role_permission_codes(_active_role_ids(user))
     overrides = UserPermissionOverride.objects.filter(
@@ -122,7 +172,17 @@ def effective_permission_codes(user) -> set[str]:
     ).values_list("permission__code", "effect")
     allowed = {code for code, effect in overrides if effect == PermissionEffect.ALLOW}
     denied = {code for code, effect in overrides if effect == PermissionEffect.DENY}
-    return (role_codes | allowed) - denied
+    sonuc = (role_codes | allowed) - denied
+    if cache is None:
+        cache = {}
+        _PERMISSION_CACHE_VAR.set(cache)
+    cache[user.pk] = frozenset(sonuc)
+    return sonuc
+
+
+def set_request_scope_permission_cache(active: bool) -> None:
+    """Middleware: istek akışında önbelleği etkinleştirir/kapatır."""
+    _REQUEST_SCOPE_ACTIVE.set(active)
 
 
 def user_has_permission(user, code: str) -> bool:

@@ -98,6 +98,76 @@ class CompensationType(models.TextChoices):
     TIME_OFF = "time_off", "İzin"
 
 
+class OvertimeRule(TenantScopedModel):
+    """Kiracı tarafından tanımlanan fazla mesai periyot/katsayı kuralı (P5b)."""
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant",
+        on_delete=models.CASCADE,
+        related_name="overtime_rules",
+        verbose_name="kiracı",
+    )
+    code = models.CharField("kod", max_length=40)
+    name = models.CharField("ad", max_length=120)
+    min_minutes = models.PositiveIntegerField("asgari dakika", default=0)
+    max_minutes = models.PositiveIntegerField(
+        "azami dakika", null=True, blank=True,
+        help_text="Boş ise üst sınır yoktur; aralık [min, max) kabul edilir.",
+    )
+    multiplier = models.DecimalField("katsayı", max_digits=6, decimal_places=3)
+    compensation_type = models.CharField(
+        "karşılık türü", max_length=20, choices=CompensationType.choices
+    )
+    effective_from = models.DateField("başlangıç tarihi")
+    effective_until = models.DateField("bitiş tarihi", null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_overtime_rules",
+        verbose_name="oluşturan",
+    )
+
+    class Meta:
+        db_table = "overtime_rules"
+        verbose_name = "fazla mesai kuralı"
+        verbose_name_plural = "fazla mesai kuralları"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("tenant", "code", "effective_from"),
+                condition=Q(deleted_at__isnull=True),
+                name="overtime_rules_code_start_uniq",
+            ),
+            models.CheckConstraint(
+                condition=Q(max_minutes__isnull=True) | Q(max_minutes__gt=F("min_minutes")),
+                name="overtime_rules_range_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(multiplier__gt=0),
+                name="overtime_rules_multiplier_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(compensation_type__in=[c.value for c in CompensationType]),
+                name="overtime_rules_compensation_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(effective_until__isnull=True)
+                | Q(effective_until__gte=F("effective_from")),
+                name="overtime_rules_effective_range_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("tenant", "effective_from"), name="overtime_rules_effective_idx"
+            ),
+        ]
+        ordering = ["effective_from", "min_minutes"]
+
+    def __str__(self) -> str:
+        return f"{self.code}:{self.min_minutes}-{self.max_minutes}/{self.compensation_type}"
+
+
 class OvertimeRequest(TenantScopedModel):
     """
     Fazla mesai bildirimi/talebi (çalışan beyanı → yönetici kararı).
@@ -131,6 +201,14 @@ class OvertimeRequest(TenantScopedModel):
         "açıklama / neden",
         help_text="Fazla mesainin gerekçesi (denetim izi; asgari uzunluk DB guard'ı).",
     )
+    overtime_rule = models.ForeignKey(
+        "overtime.OvertimeRule",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="overtime_requests",
+        verbose_name="fazla mesai kuralı",
+    )
     status = models.CharField(
         "durum",
         max_length=20,
@@ -147,6 +225,13 @@ class OvertimeRequest(TenantScopedModel):
             "Boş dize = ayarlanmamış (P5b/P5a kural motoru gelene kadar dolmaz; "
             "DJ001 gereği `null=True` kullanılmaz)."
         ),
+    )
+    compensation_type_snapshot = models.CharField(
+        "karşılık türü snapshot", max_length=20, choices=CompensationType.choices,
+        blank=True, default="",
+    )
+    multiplier_snapshot = models.DecimalField(
+        "katsayı snapshot", max_digits=6, decimal_places=3, null=True, blank=True,
     )
     decided_at = models.DateTimeField("karar zamanı", null=True, blank=True)
     decided_by = models.ForeignKey(
@@ -199,10 +284,12 @@ class OvertimeRequest(TenantScopedModel):
                 condition=~Q(status=OvertimeStatus.CANCELED) | ~Q(cancel_reason=""),
                 name="overtime_requests_cancel_reason",
             ),
-            # Aynı çalışanın aynı gün + aynı aralığı iki kez bildirilemez (kısmi).
+            # Aynı çalışanın aynı gün + aynı aralığı açık/onaylı kayıtlarda iki kez
+            # bildirilemez. Reddedilen/iptal edilen kayıt yeniden açılabilir.
             models.UniqueConstraint(
                 fields=("employee", "work_date", "start_time", "end_time"),
-                condition=Q(deleted_at__isnull=True),
+                condition=Q(deleted_at__isnull=True)
+                & Q(status__in=[OvertimeStatus.PENDING, OvertimeStatus.APPROVED]),
                 name="overtime_requests_slot_uniq",
             ),
         ]

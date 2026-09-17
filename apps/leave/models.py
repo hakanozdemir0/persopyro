@@ -37,7 +37,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.expressions import CombinedExpression
 
-from apps.common.models import TenantScopedModel, UUIDModel
+from apps.common.models import TenantScopedModel, TimeStampedModel, UUIDModel
 from apps.leave.leave_type_catalog import AccrualMethod, LeaveCategory
 from apps.organization.models import Employee, RecordStatus
 
@@ -69,6 +69,11 @@ class LeaveType(TenantScopedModel):
         "bakiye kullanır",
         default=False,
         help_text="True ise hakediş/bakiye (leave_balances) gerekir.",
+    )
+    is_time_based = models.BooleanField("saat tabanlı", default=False)
+    workday_minutes = models.PositiveIntegerField(
+        "1 gün dakika", null=True, blank=True,
+        help_text="Saat tabanlı izinlerde bir tam günün karşılığı.",
     )
     requires_approval = models.BooleanField("onay gerektirir", default=True)
     requires_document = models.BooleanField("belge gerektirir", default=False)
@@ -110,6 +115,10 @@ class LeaveType(TenantScopedModel):
             models.CheckConstraint(
                 condition=Q(max_consecutive_days__isnull=True) | Q(max_consecutive_days__gt=0),
                 name="leave_types_max_consecutive_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(is_time_based=False) | Q(workday_minutes__gt=0),
+                name="leave_types_time_based_workday_positive",
             ),
         ]
         indexes = [
@@ -287,16 +296,16 @@ class LeaveBalance(TenantScopedModel):
         verbose_name="izin türü",
     )
     period_year = models.PositiveSmallIntegerField("dönem (yıl)")
-    entitled_days = models.DecimalField("hakediş", max_digits=6, decimal_places=1, default=0)
+    entitled_days = models.DecimalField("hakediş", max_digits=8, decimal_places=4, default=0)
     carried_forward_days = models.DecimalField(
-        "devreden", max_digits=6, decimal_places=1, default=0
+        "devreden", max_digits=8, decimal_places=4, default=0
     )
     adjustment_days = models.DecimalField(
-        "düzeltme", max_digits=6, decimal_places=1, default=0
+        "düzeltme", max_digits=8, decimal_places=4, default=0
     )
-    used_days = models.DecimalField("kullanılan", max_digits=6, decimal_places=1, default=0)
+    used_days = models.DecimalField("kullanılan", max_digits=8, decimal_places=4, default=0)
     reserved_days = models.DecimalField(
-        "rezerve (onay bekleyen)", max_digits=6, decimal_places=1, default=0
+        "rezerve (onay bekleyen)", max_digits=8, decimal_places=4, default=0
     )
     available_days = models.GeneratedField(
         expression=CombinedExpression(
@@ -312,7 +321,7 @@ class LeaveBalance(TenantScopedModel):
             "-",
             F("reserved_days"),
         ),
-        output_field=models.DecimalField(max_digits=6, decimal_places=1),
+        output_field=models.DecimalField(max_digits=8, decimal_places=4),
         db_persist=True,
     )
 
@@ -356,6 +365,7 @@ class BalanceEntryKind(models.TextChoices):
     RESERVATION_RELEASE = "reservation_release", "Rezervasyon iptali"
     USAGE = "usage", "Kullanım (onaylandı)"
     REFUND = "refund", "İade (iptal)"
+    TIME_OFF_CREDIT = "time_off_credit", "Fazla mesai serbest zaman kredisi"
 
 
 #: Olay türü → değiştirdiği bakiye kolonu (defter kaydının anlamı).
@@ -367,6 +377,7 @@ BALANCE_ENTRY_COLUMNS: dict[str, str] = {
     BalanceEntryKind.RESERVATION_RELEASE: "reserved_days",
     BalanceEntryKind.USAGE: "used_days",
     BalanceEntryKind.REFUND: "used_days",
+    BalanceEntryKind.TIME_OFF_CREDIT: "adjustment_days",
 }
 
 
@@ -408,7 +419,7 @@ class LeaveBalanceEntry(UUIDModel):
     )
     period_year = models.PositiveSmallIntegerField("dönem (yıl)")
     entry_kind = models.CharField("olay türü", max_length=20, choices=BalanceEntryKind.choices)
-    delta_days = models.DecimalField("değişim (gün)", max_digits=6, decimal_places=1)
+    delta_days = models.DecimalField("değişim (gün)", max_digits=8, decimal_places=4)
     leave_request = models.ForeignKey(
         "leave.LeaveRequest",
         on_delete=models.SET_NULL,
@@ -416,6 +427,14 @@ class LeaveBalanceEntry(UUIDModel):
         blank=True,
         related_name="balance_entries",
         verbose_name="izin talebi",
+    )
+    overtime_request = models.ForeignKey(
+        "overtime.OvertimeRequest",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="time_off_balance_entries",
+        verbose_name="fazla mesai talebi",
     )
     reason = models.TextField("gerekçe", blank=True)
     actor = models.ForeignKey(
@@ -451,6 +470,11 @@ class LeaveBalanceEntry(UUIDModel):
                 fields=("leave_request", "entry_kind"),
                 condition=Q(leave_request__isnull=False),
                 name="leave_balance_entries_request_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=("overtime_request", "entry_kind"),
+                condition=Q(overtime_request__isnull=False),
+                name="leave_balance_entries_overtime_uniq",
             ),
         ]
         indexes = [
@@ -537,7 +561,7 @@ class LeaveRequest(TenantScopedModel):
     start_time = models.TimeField("başlangıç saati", null=True, blank=True)
     end_time = models.TimeField("bitiş saati", null=True, blank=True)
     is_half_day = models.BooleanField("yarım gün", default=False)
-    days_requested = models.DecimalField("istenen gün", max_digits=6, decimal_places=1)
+    days_requested = models.DecimalField("istenen gün", max_digits=8, decimal_places=4)
     reason = models.TextField("gerekçe", blank=True)
     status = models.CharField(
         "durum",
@@ -602,6 +626,103 @@ class LeaveRequest(TenantScopedModel):
 
     def __str__(self) -> str:
         return f"{self.employee_id}:{self.start_date}..{self.end_date}/{self.status}"
+
+
+class LeaveDecisionSnapshot(UUIDModel, TimeStampedModel):
+    """
+    **Karar anındaki izin bakiyesi** — immutable (append-only) snapshot.
+
+    Neden (bildirim): karara bağlanmış bir izin talebinin detayında "bugünkü"
+    bakiye gösteriliyordu; bu, karar anındaki durumu **yanlış** temsil ediyordu.
+    Karar anında alınan değerler buraya yazılır ve **asla** güncellenmez
+    (DB tetikleyicisi `UPDATE`/`DELETE`'i reddeder).
+
+    * Bir talep için **en fazla 1** snapshot vardır (`leave_request_id` benzersiz).
+    * Alan adları ve anlamı `leave_balances` ile **aynıdır**; yeni bir bakiye
+      kavramı üretilmez (`available_days` = hak − kullanılan − rezerve).
+    * Talep anında bakiye satırı yoksa (ör. bakiye kullanmayan tür) değerler
+      **NULL** kalır; `uses_balance` karar anındaki tür davranışını dondurur.
+    * Eski kararlar için **backfill yapılmaz**: bugünkü bakiye geçmiş gibi
+      yazılamaz → snapshot yoksa arayüz "Karar anı bakiyesi kayıtlı değil" der.
+    """
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant",
+        on_delete=models.CASCADE,
+        related_name="leave_decision_snapshots",
+        verbose_name="kiracı",
+    )
+    leave_request = models.OneToOneField(
+        LeaveRequest,
+        on_delete=models.CASCADE,
+        related_name="decision_snapshot",
+        verbose_name="izin talebi",
+    )
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.PROTECT,
+        related_name="leave_decision_snapshots",
+        verbose_name="çalışan",
+    )
+    leave_type = models.ForeignKey(
+        "leave.LeaveType",
+        on_delete=models.PROTECT,
+        related_name="decision_snapshots",
+        verbose_name="izin türü",
+    )
+    period_year = models.PositiveSmallIntegerField("dönem (yıl)")
+    decision_status = models.CharField(
+        "karar", max_length=20, choices=LeaveRequestStatus.choices
+    )
+    #: Karar anında tür bakiye kullanıyor muydu (tür sonradan değişse bile donar).
+    uses_balance = models.BooleanField("bakiye kullanır", default=True)
+    entitled_days = models.DecimalField(
+        "hakediş", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    carried_forward_days = models.DecimalField(
+        "devreden", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    adjustment_days = models.DecimalField(
+        "düzeltme", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    used_days = models.DecimalField(
+        "kullanılan", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    reserved_days = models.DecimalField(
+        "rezerve (onay bekleyen)", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    available_days = models.DecimalField(
+        "kalan", max_digits=6, decimal_places=1, null=True, blank=True
+    )
+    snapshot_at = models.DateTimeField("snapshot zamanı")
+
+    class Meta:
+        db_table = "leave_decision_snapshots"
+        verbose_name = "karar anı izin bakiyesi"
+        verbose_name_plural = "karar anı izin bakiyeleri"
+        constraints = [
+            # Yalnız **nihai karar** durumları snapshot'lanır (approved/rejected);
+            # pending/draft/canceled için karar anı bakiyesi yoktur.
+            models.CheckConstraint(
+                condition=Q(
+                    decision_status__in=[
+                        LeaveRequestStatus.APPROVED,
+                        LeaveRequestStatus.REJECTED,
+                    ]
+                ),
+                name="leave_decision_snapshots_status_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=("tenant", "employee", "snapshot_at"),
+                name="leave_dec_snap_emp_idx",
+            ),
+        ]
+        ordering = ["-snapshot_at"]
+
+    def __str__(self) -> str:
+        return f"{self.leave_request_id}:{self.decision_status}/{self.available_days}"
 
 
 class ApprovalSubjectKind(models.TextChoices):

@@ -90,6 +90,7 @@ def _defter_yaz(
     request=None,
     actor=None,
     reason: str = "",
+    overtime_request=None,
 ) -> LeaveBalanceEntry:
     """Olay defterine kayıt yazar (append-only; idempotans kısıtları DB'de)."""
     return LeaveBalanceEntry.objects.create(
@@ -101,9 +102,34 @@ def _defter_yaz(
         entry_kind=entry_kind,
         delta_days=delta,
         leave_request=request,
+        overtime_request=overtime_request,
         actor=actor,
         reason=reason,
     )
+
+
+@transaction.atomic
+def credit_time_off_balance(*, employee, leave_type, overtime_request, delta_days, actor=None, reason=""):
+    """Onaylanan fazla mesai için serbest zaman bakiyesine tekil kredi yazar."""
+    if not leave_type.is_time_based or not leave_type.uses_balance:
+        raise LeaveBalanceError("Serbest zaman izin türü saat tabanlı ve bakiye kullanan tür olmalıdır.")
+    balance = LeaveBalance.objects.select_for_update().get(
+        pk=get_or_create_balance(employee=employee, leave_type=leave_type,
+                                 period_year=period_year_for(overtime_request.work_date)).pk
+    )
+    if LeaveBalanceEntry.objects.filter(
+        overtime_request=overtime_request, entry_kind=BalanceEntryKind.TIME_OFF_CREDIT
+    ).exists():
+        return balance
+    balance.adjustment_days = Decimal(balance.adjustment_days) + Decimal(delta_days)
+    balance.save(update_fields=["adjustment_days", "updated_at"])
+    _defter_yaz(balance=balance, entry_kind=BalanceEntryKind.TIME_OFF_CREDIT,
+                delta=Decimal(delta_days), actor=actor, reason=reason,
+                overtime_request=overtime_request)
+    log_action(tenant_id=employee.tenant_id, action="leave.balance.time_off_credit", user=actor,
+               table_name="leave_balances", record_id=balance.pk,
+               changes={"employee_no": employee.employee_no, "days": str(delta_days)})
+    return balance
 
 
 def next_accrual_date(hire_date: date, as_of: date | None = None) -> date:
@@ -349,11 +375,17 @@ def set_leave_entitlement(
     employee: Employee,
     leave_type: LeaveType,
     period_year: int,
-    days: Decimal,
+    days: Decimal | None = None,
+    hours: Decimal | None = None,
     reason: str,
 ) -> dict:
     """
-    Dönem izin hakkını **mutlak gün değeriyle** tanımlar veya düzeltir.
+    Dönem izin hakkını mutlak değerle tanımlar veya düzeltir.
+
+    Saat tabanlı türlerde dış sözleşme **saat**tir. Veritabanındaki ortak bakiye
+    kolonları gün karşılığıyla tutulmaya devam eder; dönüşüm yalnızca türün
+    `workday_minutes` değeri üzerinden burada yapılır. Böylece 7 saatlik gün
+    için 7 saat hak, tam olarak 1 gün bakiyeye karşılık gelir.
 
     Neden gerekli (bildirim): yeni oluşturulmuş bir çalışana arayüzden "hak tanımlama"
     akışı net değildi; mevcut `adjust_leave_balance` **delta** (`+2`) ister ve dönem
@@ -382,7 +414,19 @@ def set_leave_entitlement(
     gerekce = (reason or "").strip()
     if len(gerekce) < 5:
         raise LeaveError("İzin hakkı işlemi için anlamlı bir gerekçe zorunludur.")
-    hedef = Decimal(days if days is not None else "")
+    if leave_type.is_time_based:
+        if hours is None:
+            raise LeaveError("Saat tabanlı serbest zaman türünde hak saat olarak girilmelidir.")
+        if not leave_type.workday_minutes:
+            raise LeaveError("Serbest zaman türünün 1 gün saat karşılığı tanımlı değil.")
+        saat = Decimal(hours)
+        if saat < SIFIR:
+            raise LeaveBalanceError("İzin hakkı negatif olamaz.")
+        hedef = (saat * Decimal("60") / Decimal(leave_type.workday_minutes)).quantize(
+            Decimal("0.0001")
+        )
+    else:
+        hedef = Decimal(days if days is not None else "")
     if hedef < SIFIR:
         raise LeaveBalanceError("İzin hakkı negatif olamaz.")
 

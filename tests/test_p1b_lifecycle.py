@@ -609,6 +609,170 @@ def test_as5_gerekce_zorunlu(tenant_a, user_a, hr) -> None:  # noqa: ANN001
         change_assignment(actor=hr, employee=calisan, department=birim, reason="")
 
 
+def test_as7_onboarding_baseline_atama_olusturur(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """OD60 onboarding invariant: `create_employee` ilk **açık** atamayı da açar."""
+    hr = hr
+    birim = _birim(tenant_a, "GM")
+    pozisyon = _pozisyon(tenant_a, "PZ-1")
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr,
+            tenant=tenant_a,
+            department=birim,
+            position=pozisyon,
+            employee_no="ON-1",
+            hire_date=BUGUN,
+        )
+        atamalar = list(EmployeeAssignment.objects.filter(employee=calisan))
+    assert len(atamalar) == 1
+    atama = atamalar[0]
+    assert atama.tenant_id == tenant_a.id
+    assert atama.department_id == birim.pk      # employee snapshot'ıyla uyumlu
+    assert atama.position_id == pozisyon.pk
+    assert atama.effective_from == BUGUN       # hire_date (0015 backfill kuralı)
+    assert atama.effective_to is None          # açık atama
+
+
+def test_as8_baseline_degisiklik_olarak_gorunmez(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """Baseline atama başlangıç durumudur; 'Görev yeri değişti' olarak raporlanmaz."""
+    hr = hr
+    birim = _birim(tenant_a, "GM")
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=birim, employee_no="ON-2", hire_date=BUGUN,
+        )
+        olaylar = employee_history(calisan)
+    etiketler = [o["label"] for o in olaylar]
+    assert "Çalışan kaydı oluşturuldu" in etiketler
+    assert "Görev yeri değişti" not in etiketler
+    assert all(o["type"] != "assignment_changed" for o in olaylar)
+
+
+def test_as9_ilk_gercek_degisiklik_old_new_gecmisi(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """Baseline'ın ardından `change_assignment` eskiyi kapatır/yeniyi açar → old→new."""
+    hr = hr
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=b1, employee_no="ON-3", hire_date=BUGUN,
+        )
+        change_assignment(
+            actor=hr, employee=calisan, department=b2, reason="transfer",
+            effective_from=dt.date.today() + dt.timedelta(days=1),
+        )
+        atamalar = list(
+            EmployeeAssignment.objects.filter(employee=calisan).order_by("effective_from")
+        )
+        olaylar = employee_history(calisan)
+    assert len(atamalar) == 2
+    assert atamalar[0].department_id == b1.pk and atamalar[0].effective_to is not None
+    assert atamalar[1].department_id == b2.pk and atamalar[1].effective_to is None
+    degisim = [o for o in olaylar if o["type"] == "assignment_changed"]
+    assert len(degisim) == 1
+    assert degisim[0]["label"] == "Görev yeri değişti"
+    assert degisim[0]["detail"]["old_department"] == b1.name
+    assert degisim[0]["detail"]["new_department"] == b2.name
+
+
+def test_as10_future_hire_baseline_ise_giris_tarihi(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """Gelecek işe giriş: baseline effective_from = hire_date (invariant tabanı)."""
+    hr = hr
+    birim = _birim(tenant_a, "GM")
+    gelecek = dt.date.today() + dt.timedelta(days=30)
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=birim, employee_no="FH-1",
+            hire_date=gelecek,
+        )
+        atamalar = list(EmployeeAssignment.objects.filter(employee=calisan))
+    assert len(atamalar) == 1
+    assert atamalar[0].effective_from == gelecek
+    assert atamalar[0].effective_to is None
+
+
+def test_as11_pre_hire_duzeltme_guard_takilmaz(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """Henüz başlamamış çalışanda başlangıç bilgisi düzeltmesi hata vermez."""
+    hr = hr
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    gelecek = dt.date.today() + dt.timedelta(days=30)
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=b1, employee_no="FH-2", hire_date=gelecek,
+        )
+        _, ozet = change_assignment(
+            actor=hr, employee=calisan, department=b2, reason="onboarding düzeltmesi",
+        )
+        atamalar = list(EmployeeAssignment.objects.filter(employee=calisan))
+        calisan.refresh_from_db()
+    assert len(atamalar) == 1                      # ikinci satır açılmadı
+    assert atamalar[0].department_id == b2.pk      # baseline yerinde güncellendi
+    assert atamalar[0].effective_from == gelecek   # effective_from = hire_date korunur
+    assert calisan.department_id == b2.pk          # snapshot senkron
+    assert ozet.get("onboarding_correction") is True
+
+
+def test_as12_pre_hire_duzeltme_sahte_timeline_uretmez_audit_korunur(tenant_a, user_a, hr) -> None:  # noqa: ANN001, E501
+    """Pre-hire düzeltme timeline'da değişiklik olayı doğurmaz; denetim kaydı yazılır."""
+    hr = hr
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    gelecek = dt.date.today() + dt.timedelta(days=30)
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=b1, employee_no="FH-3", hire_date=gelecek,
+        )
+        change_assignment(
+            actor=hr, employee=calisan, department=b2, reason="onboarding düzeltmesi",
+        )
+        olaylar = employee_history(calisan)
+        auditler = list(AuditLog.objects.filter(action="employee.assignment.change"))
+    assert all(o["type"] != "assignment_changed" for o in olaylar)
+    assert "Görev yeri değişti" not in [o["label"] for o in olaylar]
+    assert len(auditler) == 1                                  # düzeltme kaydı korunur
+    assert auditler[0].changes.get("onboarding_correction") is True
+    assert auditler[0].changes.get("new_department_id") == str(b2.pk)
+
+
+def test_as13_hire_date_oncesi_effective_from_reddedilir(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """Invariant: effective_from işe giriş tarihinden önce olamaz (backend guard)."""
+    hr = hr
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    gelecek = dt.date.today() + dt.timedelta(days=30)
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=b1, employee_no="FH-4", hire_date=gelecek,
+        )
+        with pytest.raises((OrganizationError, LifecycleValidationError), match="işe giriş"):
+            change_assignment(
+                actor=hr, employee=calisan, department=b2, reason="x",
+                effective_from=gelecek - dt.timedelta(days=1),
+            )
+        atama = EmployeeAssignment.objects.get(employee=calisan)
+    assert atama.department_id == b1.pk          # reddedilen istek hiçbir şey yazmadı
+    assert atama.effective_from == gelecek
+
+
+def test_as14_post_hire_gercek_degisiklik_old_new(tenant_a, user_a, hr) -> None:  # noqa: ANN001
+    """İşe başladıktan sonra normal davranış: eski kapanır, yeni açılır, old→new."""
+    hr = hr
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    with tenant_context(tenant_a.id):
+        calisan = create_employee(
+            actor=hr, tenant=tenant_a, department=b1, employee_no="FH-5", hire_date=BUGUN,
+        )
+        change_assignment(
+            actor=hr, employee=calisan, department=b2, reason="transfer",
+            effective_from=dt.date.today() + dt.timedelta(days=1),
+        )
+        atamalar = list(EmployeeAssignment.objects.filter(employee=calisan))
+        olaylar = employee_history(calisan)
+    assert len(atamalar) == 2                                   # pre-hire yoluna girmedi
+    assert {a.effective_to is None for a in atamalar} == {True, False}
+    degisim = [o for o in olaylar if o["type"] == "assignment_changed"]
+    assert len(degisim) == 1
+    assert degisim[0]["detail"]["old_department"] == b1.name
+    assert degisim[0]["detail"]["new_department"] == b2.name
+
+
 def test_as6_et_ayni_deger_noop(tenant_a, user_a, hr) -> None:  # noqa: ANN001
     hr = hr
     birim = _birim(tenant_a)
@@ -873,7 +1037,7 @@ def test_sp4b_history_tum_olay_tipleri(tenant_a, user_a) -> None:  # noqa: ANN00
         tipler = {o["type"] for o in olaylar}
         assert tipler == {
             "created", "assignment_changed", "employment_terms_changed",
-            "manager_changed", "status_changed",
+            "manager_changed", "status_changed", "employee_update",
         }
         etiketler = {o["label"] for o in olaylar}
         assert "Görev yeri değişti" in etiketler

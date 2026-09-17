@@ -1,0 +1,131 @@
+PERSOPYRO — TUR SONU RAPORU
+
+Kapsam
+------
+Mevcut dirty çalışma paketinin doğrulanması ve paket kapanış kontrolü.
+
+Yapılan işler
+-------------
+- Repository konumu `/home/hakan/persopyro` olarak doğrulandı.
+- Ana geliştirme planı okundu ve mevcut repository durumu ile karşılaştırıldı.
+- Dirty çalışma paketi korunarak incelendi; reset/revert/clean yapılmadı.
+- Leave decision immutable balance snapshot akışı doğrulandı.
+- Leave overlap prevention akışı doğrulandı.
+- Employee Timeline ve izin/bakiye olayları doğrulandı.
+- Timeline API pagination katmanının yeni→eski sıralama yaptığı doğrulandı.
+- Employee lifecycle termination UI ve güvenli hata sözleşmesi doğrulandı.
+- RBAC permission-cache ve ilgili güvenlik değişiklikleri test edildi.
+- Migration tutarlılığı kontrol edildi.
+- ADIM 4 ilk mikro adımı: fazla mesai onayında uygulama içi confirmation eklendi; ham tarayıcı diyaloğu kullanılmadı.
+- ADIM 4/P5b mikro adımı: fazla mesai kuralı, onayda tenant + tarih + dakika aralığına göre tekil seçilecek servis davranışıyla tamamlandı.
+- ADIM 4/P5b devam mikro adımı: nihai fazla mesai onayında karşılık türü ve katsayı snapshot alanları dolduruldu.
+- Bu rapor dosyası, önceki rapor dosyası repository'de bulunmadığı için oluşturuldu.
+
+Önemli değiştirilen/yeni dosyalar
+---------------------------------
+Tracked değişiklikler:
+- apps/leave/models.py
+- apps/leave/services/requests.py
+- apps/organization/history.py
+- apps/organization/services.py
+- apps/rbac/apps.py
+- apps/rbac/services/permissions.py
+- apps/rbac/services/roles.py
+- apps/rbac/services/scope.py
+- apps/testui/api.py
+- apps/testui/templates/testui/app.html
+- apps/testui/templates/testui/base.html
+- config/settings.py
+- scripts/02_grant_app_privileges.sql
+- tests/leave_helpers.py
+- tests/test_p1a_people_lifecycle.py
+- tests/test_p1b_lifecycle.py
+
+Yeni dosyalar:
+- apps/leave/migrations/0006_m14_leave_decision_snapshot.py
+- apps/organization/migrations/0020_employee_assignment_baseline_backfill.py
+- apps/rbac/services/_cache_invalidation.py
+- apps/rbac/services/permission_cache_middleware.py
+- tests/test_leave_decision_snapshot.py
+- tests/test_leave_m14_overlap.py
+- tests/test_leave_timeline_events.py
+- tests/test_p1b_perf_timeline.py
+- tests/test_p1b_ui_lifecycle_modal.py
+- tests/test_p1b_ui_terminate.py
+- tests/test_p5a_overtime.py (overtime confirmation regression testi güncellendi)
+- tests/test_p5b_overtime_rules.py
+- apps/overtime/migrations/0006_overtime_rule_snapshot.py
+- TUR SONU RAPORU.txt
+
+Migrationlar
+------------
+- organization.0020_employee_assignment_baseline_backfill: uygulanmış.
+- leave.0006_m14_leave_decision_snapshot: uygulanmış.
+- `makemigrations --check --dry-run`: No changes detected.
+- Destructive migration, reset, drop veya veri silme yapılmadı.
+
+Test sonuçları
+--------------
+Targeted leave grubu:
+- 40 passed in 27.67s
+- Komut: `bash scripts/run_tests.sh -x -q tests/test_leave_decision_snapshot.py tests/test_leave_m14_overlap.py tests/test_leave_timeline_events.py`
+
+Targeted lifecycle/UI/performance grubu:
+- 121 passed in 18.34s
+- Komut: `bash scripts/run_tests.sh -x -q tests/test_p1b_perf_timeline.py tests/test_p1b_ui_lifecycle_modal.py tests/test_p1b_ui_terminate.py tests/test_p1a_people_lifecycle.py tests/test_p1b_lifecycle.py`
+
+Full suite:
+- 662 passed in 157.59s
+- Komut: `bash scripts/run_tests.sh -x -q`
+
+ADIM 4 ilk mikro adım testleri:
+- Overtime + lifecycle modal targeted: 20 passed in 13.64s.
+- Overtime tekil targeted: 15 passed in 12.09s.
+- `app.html` gömülü JavaScript: `node --check` başarılı.
+
+P5b kural seçimi mikro adımı:
+- 2 targeted test: 2 passed in 4.13s.
+- P5b kural dosyası: 13 passed in 4.80s.
+
+P5b snapshot mikro adımı:
+- P5a nihai onay + P5b kuralları: 14 passed in 5.40s.
+- P5a overtime dosyası: 15 passed in 12.48s.
+- `makemigrations --check --dry-run`: No changes detected.
+
+TIME_OFF hesaplama mikro adımı:
+- Katsayılı karşılık dakika cinsinden hesaplandı; gün/ledger dönüşümü bilinçli olarak yapılmadı.
+- P5b kural dosyası: 14 passed in 4.71s.
+- Tenant çalışma günü dönüşümü testi eklendi; P5b kural dosyası: 15 passed in 5.06s.
+
+Ek doğrulamalar:
+- Test koleksiyonu: 662 test.
+- `makemigrations --check --dry-run`: başarılı.
+- İlgili iki migration migration planında uygulanmış.
+
+Alınan/korunan kararlar
+-----------------------
+- Tenant isolation, RLS/FORCE RLS, scope ve backend permission kontrolleri korunmuştur.
+- Immutable decision snapshot eski kararlar için sahte backfill yapmaz.
+- Snapshot UPDATE/DELETE işlemleri DB guard'ı ile engellenir.
+- Timeline API backend source-of-truth olarak yeni→eski sıralama ve server-side pagination kullanır.
+- `employee_history()` mevcut legacy servis sözleşmesi olarak eski→yeni veri üretir; API bunu `timeline_sayfa()` ile yeni→eski sunar. Gereksiz mimari değişiklik yapılmamıştır.
+- Fazla mesai onayı ve reddi uygulama içi confirmation modalı üzerinden yürür; backend permission/state kontrolleri değişmemiştir.
+- Parola, token ve secret değerleri rapora yazılmamıştır.
+- TIME_OFF ledger için tenant çalışma günü/dakika dönüşüm kuralı henüz tanımlı değildir.
+
+Bilinen sorunlar / doğrulanmayanlar
+-----------------------------------
+- Repository başlangıçta dirty durumdadır; mevcut değişiklikler commit edilmemiştir.
+- İlk doğrudan pytest çağrısı uygulama rolünün CREATEDB yetkisi olmadığı için başarısız olmuştur. Projenin resmi `scripts/run_tests.sh` komutuyla testler başarıyla tamamlanmıştır. Bu bir kod hatası değildir.
+- Fresh-install doğrulaması çalıştırılmadı; migration/DB işlemi içerdiğinden kullanıcı onayı olmadan destructive veya geri döndürülemez işlem yapılmadı.
+- `PersoPyro_Hermes_Ana_Gelistirme_Plani.txt` repository'de ayrıca untracked durumdadır.
+
+Sıradaki iş
+-----------
+- Dirty paket kapatıldı ve doğrulandı.
+- ADIM 4 devamı: reusable success/error feedback ve confirmation davranışının kalan lifecycle, PII, department, roles, permissions, overtime ve leave akışlarında kontrollü yaygınlaştırılması.
+- Yeni ürün kararı: Overtime V2'de karşılık türü ve periyot/katsayı kurallarını tenant admin veya tenant kapsamındaki yetkili HR tanımlayacak; yönetici yalnızca tanımlı kurallardan seçim yapabilecek. Onay anında kural snapshot'ı alınacak.
+- Snapshot alanları migration ile eklendi ve nihai onay akışında dolduruluyor; sonraki ürün adımı TIME_OFF ledger veya PAY hesaplama seçimi olacaktır.
+- Mevcut P5a V1 davranışı korunur: onaylanan fazla mesai henüz izin/ücret karşılığı üretmez.
+- Overtime V2 bir sonraki ilgili ürün paketi olarak ele alınacaktır.
+- Commit, push ve fresh-install işlemleri kullanıcı onayı olmadan yapılmayacaktır.

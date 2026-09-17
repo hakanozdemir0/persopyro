@@ -476,6 +476,7 @@ class EmployeePersonalData(TimeStampedModel, SoftDeleteModel):
     health_notes = EncryptedTextField("sağlık notları (şifreli)", blank=True, null=True)
     disability_status = EncryptedCharField("engellilik durumu (şifreli)", blank=True, null=True)
     biometric_ref = EncryptedCharField("biyometrik referans (şifreli)", blank=True, null=True)
+    custom_fields = models.JSONField("özel form alanları", default=dict, blank=True)
 
     class Meta:
         db_table = "employee_personal_data"
@@ -847,9 +848,9 @@ class FormFieldDefinition(TenantScopedModel):
     """
     Onboarding formu alan yapılandırması (P1 — OD35/OD36/OD37/OD38, kapalı).
 
-    **Tenant yalnız override yazar**; varsayılanlar koddaki katalogdan gelir
-    (`apps/organization/employee_form_catalog.py`). Bilinmeyen `field_code`
-    reddedilir (OD35: custom alan yok) — hem model doğrulaması hem DB `CHECK`.
+    Varsayılanlar koddaki katalogdan gelir (`apps/organization/employee_form_catalog.py`);
+    tenant ayrıca `custom_` önekiyle kendi K2 alanlarını tanımlayabilir. Bilinmeyen
+    diğer `field_code` değerleri hem model doğrulaması hem DB `CHECK` ile reddedilir.
 
     `lock_level` ve `data_class` **sunucu hesaplar** (katalogdan); tenant bu
     kolonları değiştiremez. DB `CHECK`'leri:
@@ -869,11 +870,19 @@ class FormFieldDefinition(TenantScopedModel):
     section_label = models.CharField("bölüm etiketi", max_length=100)
     sort_order = models.PositiveIntegerField("sıra", default=0)
     is_visible = models.BooleanField("görünür", default=True)
+    is_public = models.BooleanField(
+        "departmanlarda açık bilgi",
+        default=False,
+        help_text="İşaretlenirse departmanlar dizininde çalışanlara gösterilebilir.",
+    )
     is_required = models.BooleanField("zorunlu", default=False)
     label_override = models.CharField(
         "etiket (override)", max_length=190, blank=True, default=""
     )
     helper_text = models.CharField("yardım metni", max_length=300, blank=True, default="")
+    field_type = models.CharField("alan tipi", max_length=20, default="text")
+    options = models.JSONField("seçenekler", default=list, blank=True)
+    layout_width = models.PositiveSmallIntegerField("form genişliği", default=1)
     lock_level = models.CharField(
         "kilit seviyesi",
         max_length=1,
@@ -905,9 +914,11 @@ class FormFieldDefinition(TenantScopedModel):
                 condition=models.Q(deleted_at__isnull=True),
                 name="ffd_tenant_form_field_uniq",
             ),
-            # OD35: bilinmeyen alan kodu DB seviyesinde de reddedilir (fail-closed).
+            # Bilinmeyen alan kodu DB seviyesinde de reddedilir; tenant özel alanları
+            # yalnızca `custom_` önekiyle açabilir (fail-closed).
             models.CheckConstraint(
-                condition=models.Q(field_code__in=list(FIELD_CODES)),
+                condition=models.Q(field_code__in=list(FIELD_CODES))
+                | models.Q(field_code__startswith="custom_"),
                 name="ffd_field_code_known",
             ),
             models.CheckConstraint(
@@ -921,6 +932,10 @@ class FormFieldDefinition(TenantScopedModel):
             models.CheckConstraint(
                 condition=models.Q(data_class__in=[k for k, _ in FormFieldDataClass.choices]),
                 name="ffd_data_class_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(layout_width__gte=1) & models.Q(layout_width__lte=5),
+                name="ffd_layout_width_valid",
             ),
             # A seviyesi: gizlenemez + opsiyonel yapılamaz.
             models.CheckConstraint(

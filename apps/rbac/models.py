@@ -85,6 +85,12 @@ class Role(TenantScopedModel):
         ),
     )
     description = models.TextField("açıklama", blank=True)
+    hierarchy_level = models.PositiveSmallIntegerField(
+        "yetki hiyerarşi seviyesi",
+        null=True,
+        blank=True,
+        help_text="Kiracı içi sıralama: 1 en üst, 30 en alt. 99/100 platform rollerine aittir.",
+    )
     is_assignable = models.BooleanField("atanabilir", default=True)
 
     class Meta:

@@ -178,10 +178,10 @@ def test_t1_sekiz_yeni_izin_kodu_katalogda() -> None:
     mevcut = set(Permission.objects.filter(code__in=YENI_IZINLER).values_list("code", flat=True))
     assert mevcut == set(YENI_IZINLER)
 
-    # P1-A sonrası 41; P5a V1 (fazla mesai talep/onay temeli) 4 kod ekledi → 45.
+    # P1-A sonrası 41; P5a V1 dört kod, P5b fazla mesai kuralı iki kod ekledi → 47.
     # Ölçülen değer: `permission_catalog.PERMISSIONS` (kiracı kodu) — migration
     # `rbac/0013_p5a_overtime_permissions` aynı seti mevcut kurulumlara uygular.
-    assert len(ALL_PERMISSION_CODES) == 45
+    assert len(ALL_PERMISSION_CODES) == 47
     assert len(PLATFORM_PERMISSIONS) == 6
 
 
@@ -197,13 +197,13 @@ def test_t2_platform_rolleri_yeni_tenant_izinlerini_almaz() -> None:
 
 def test_t3_varsayilan_rol_setleri_dokumanla_uyumlu(tenant_a) -> None:  # noqa: ANN001
     """
-    Hedef sayılar — **P5a V1 sonrası** (P1-A: 41/30/23/17/8; fazla mesai +4/+3/+4/+4/+3).
+    Hedef sayılar — P5b fazla mesai kural izinleri dahil (47/35/27/21/11).
 
     Ölçüm kaynağı: `permission_catalog.DEFAULT_ROLE_TEMPLATES` (canlı katalog) ve
     `rbac/0013_p5a_overtime_permissions` (donmuş kopya) — ikisi eşit olmalıdır.
     """
-    assert len(DEFAULT_ROLE_TEMPLATES["tenant_admin"]["permissions"]) == 45
-    assert len(DEFAULT_ROLE_TEMPLATES["hr_manager"]["permissions"]) == 33
+    assert len(DEFAULT_ROLE_TEMPLATES["tenant_admin"]["permissions"]) == 47
+    assert len(DEFAULT_ROLE_TEMPLATES["hr_manager"]["permissions"]) == 35
     assert len(DEFAULT_ROLE_TEMPLATES["tenant_officer"]["permissions"]) == 27
     assert len(DEFAULT_ROLE_TEMPLATES["dept_manager"]["permissions"]) == 21
     assert len(DEFAULT_ROLE_TEMPLATES["employee"]["permissions"]) == 11
@@ -491,15 +491,15 @@ def test_t18_backfill_dogru_ve_idempotent(tenant_a) -> None:  # noqa: ANN001
 
 
 def test_t19_bilinmeyen_field_code_reddedilir(tenant_a) -> None:  # noqa: ANN001
-    """OD35: custom alan yok — bilinmeyen kod hem serviste hem DB'de reddedilir."""
+    """OD35: custom_ alanlar serbesttir; custom_ öneki olmayan bilinmeyen kod reddedilir."""
     with pytest.raises(FormConfigError):
-        validate_override(field_code="custom_alan", is_visible=True, is_required=False)
+        validate_override(field_code="bilinmeyen_alan", is_visible=True, is_required=False)
 
     with tenant_context(tenant_a.id), pytest.raises(IntegrityError), transaction.atomic():
         FormFieldDefinition.objects.create(
             tenant=tenant_a,
             form_code="employee_onboarding",
-            field_code="custom_alan",
+            field_code="bilinmeyen_alan",
             section_code="ozel",
             section_label="Özel",
             lock_level="B",
@@ -807,6 +807,93 @@ def test_t37_backfill_silinmis_calisani_atlar(tenant_a) -> None:  # noqa: ANN001
     with tenant_context(tenant_a.id):
         assert EmployeeAssignment.objects.filter(employee=aktif).count() == 1
         assert EmployeeAssignment.objects.filter(employee_id=silinmis_pk).count() == 0
+
+
+def _baseline_backfill() -> None:
+    """0020 baseline backfill'ini test bağlantısıyla çalıştırır (0015 test deseni)."""
+    migration = importlib.import_module(
+        "apps.organization.migrations.0020_employee_assignment_baseline_backfill"
+    )
+
+    class _SahteEditor:
+        connection = connection
+
+    migration.baseline_atama_backfill(None, _SahteEditor())
+
+
+def test_t40_baseline_backfill_atamasiz_calisana_atama_yazar(tenant_a) -> None:  # noqa: ANN001
+    """Backfill: atamasız mevcut çalışan, create_employee kuralıyla aynı baseline alır."""
+    birim = _birim(tenant_a, "GM")
+    pozisyon = _pozisyon(tenant_a, "PZ-B")
+    calisan = _calisan(tenant_a, birim, no="B-1", position=pozisyon)
+
+    _baseline_backfill()
+
+    with tenant_context(tenant_a.id):
+        atamalar = list(EmployeeAssignment.objects.filter(employee=calisan))
+    assert len(atamalar) == 1
+    atama = atamalar[0]
+    assert atama.tenant_id == tenant_a.id
+    assert atama.department_id == birim.pk          # snapshot uyumu
+    assert atama.position_id == pozisyon.pk
+    assert atama.effective_from == calisan.hire_date  # hire_date kuralı
+    assert atama.effective_to is None                 # açık atama
+    assert atama.created_by_id is None                # migration anında aktör yok
+
+
+def test_t41_baseline_backfill_mevcut_atamaya_dokunmaz(tenant_a) -> None:  # noqa: ANN001
+    """Atama geçmişi olan çalışan (kapalı satır dahil) hiç değişmez."""
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    calisan = _calisan(tenant_a, b1, no="B-2")
+    acik = _atama(tenant_a, calisan, b1)
+    kapanmis = _atama(tenant_a, calisan, b2, effective_to=BUGUN + dt.timedelta(days=1))
+    onceki = {(a.pk, a.department_id, a.effective_from, a.effective_to) for a in (acik, kapanmis)}
+
+    _baseline_backfill()
+
+    with tenant_context(tenant_a.id):
+        atamalar = list(EmployeeAssignment.objects.filter(employee=calisan))
+    assert len(atamalar) == 2  # yeni satır eklenmedi
+    assert {(a.pk, a.department_id, a.effective_from, a.effective_to) for a in atamalar} == onceki
+
+
+def test_t42_baseline_backfill_idempotent(tenant_a) -> None:  # noqa: ANN001
+    """Tekrar çalıştırma ikinci baseline üretmez (bildirimsel idempotans)."""
+    calisan = _calisan(tenant_a, _birim(tenant_a), no="B-3")
+
+    _baseline_backfill()
+    _baseline_backfill()
+
+    with tenant_context(tenant_a.id):
+        assert EmployeeAssignment.objects.filter(employee=calisan).count() == 1
+
+
+def test_t43_baseline_sonrasi_gercek_degisim_old_new(tenant_a, user_a) -> None:  # noqa: ANN001
+    """Baseline 'Görev yeri değişti' üretmez; sonraki gerçek değişim old→new üretir."""
+    from apps.organization.history import employee_history  # noqa: PLC0415
+    from apps.organization.services import change_assignment  # noqa: PLC0415
+    from tests.leave_helpers import rol_ver  # noqa: PLC0415
+
+    hr = rol_ver(tenant_a, user_a, "hr_manager")  # employee.update izni
+    b1, b2 = _birim(tenant_a, "GM"), _birim(tenant_a, "FIN")
+    calisan = _calisan(tenant_a, b1, no="B-4")
+
+    _baseline_backfill()
+
+    with tenant_context(tenant_a.id):
+        etiketler = [o["label"] for o in employee_history(calisan)]
+        assert "Çalışan kaydı oluşturuldu" in etiketler
+        assert "Görev yeri değişti" not in etiketler  # baseline başlangıç durumudur
+        change_assignment(
+            actor=hr, employee=calisan, department=b2, reason="transfer",
+            effective_from=dt.date.today() + dt.timedelta(days=1),
+        )
+        olaylar = employee_history(calisan)
+    degisim = [o for o in olaylar if o["type"] == "assignment_changed"]
+    assert len(degisim) == 1
+    assert degisim[0]["label"] == "Görev yeri değişti"
+    assert degisim[0]["detail"]["old_department"] == b1.name
+    assert degisim[0]["detail"]["new_department"] == b2.name
 
 
 def test_t38_workplace_uuid_ve_tenant_alani() -> None:

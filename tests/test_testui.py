@@ -183,12 +183,16 @@ def test_ui_oturum_yoksa_panel_login_e_yonlendirir(client, db) -> None:  # noqa:
 def test_ui_calisan_yalniz_kendi_taleplerini_gorur(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(4) Çalışan (SELF) yalnızca kendi izin taleplerini görür."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
+    # İzin talebi artık yalnızca çalışanın kendisi veya ona bağlı çalışanlar
+    # adına açılabilir; iki talep ilgili çalışanların kendi oturumlarından açılır.
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     kendi = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["personel"].pk), gerekce="kendi talebi"
     )
     assert kendi.status_code == 201
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["kardes_user"].email, PAROLA_LEAVE)
     baska = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["kardes"].pk), gerekce="kardes talebi"
     )
@@ -209,8 +213,8 @@ def test_ui_calisan_yalniz_kendi_taleplerini_gorur(client, tenant_a, user_a) -> 
 def test_ui_dept_manager_alt_agac_taleplerini_gorur(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(5) Finans müdürü (UNIT kapsamı) Muhasebe çalışanının talebini görür."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     assert (
         _talep_olustur(
             client, tur_id=yillik, employee_id=str(lot["personel"].pk), gerekce="subtree"
@@ -230,7 +234,7 @@ def test_ui_dept_manager_alt_agac_taleplerini_gorur(client, tenant_a, user_a) ->
 def test_ui_sibling_departman_talebi_gorunmez_ve_onaylanamaz(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(6) Kapsam dışı (İK) çalışanın talebi müdüre görünmez; onay denemesi 403."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["kardes_user"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
     ik_talebi = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["kardes"].pk), gerekce="ik talebi"
@@ -259,7 +263,7 @@ def test_ui_sibling_departman_talebi_gorunmez_ve_onaylanamaz(client, tenant_a, u
 def test_ui_manager_onay_verir_bakiye_guncellenir(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(7/9) Müdür adımı onaylar; HR/tenant yetkilisi nihai onayı verir → bakiye düşer."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
     talep = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["personel"].pk), gun=3, gerekce="onay akışı"
@@ -315,7 +319,7 @@ def test_ui_manager_onay_verir_bakiye_guncellenir(client, tenant_a, user_a) -> N
 def test_ui_yetkisiz_calisan_onay_veremez(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(8) Onay izni olmayan çalışan onay denediğinde 403 alır (backend kararı)."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
     talep_id = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["personel"].pk), gerekce="yetki testi"
@@ -332,11 +336,13 @@ def test_ui_yetkisiz_calisan_onay_veremez(client, tenant_a, user_a) -> None:  # 
 def test_ui_red_bakiyeyi_tuketmez(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(10) Red: rezervasyon çözülür, kullanım yazılmaz."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
     talep_id = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["personel"].pk), gun=2, gerekce="red testi"
     ).json()["data"]["id"]
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     yanit = _post(
         client,
         f"/test-ui/api/leave-requests/{talep_id}/decision",
@@ -404,7 +410,7 @@ def test_ui_askida_kiracida_giris_yok(client, tenant_a, user_a) -> None:  # noqa
 def test_ui_cross_tenant_veri_gorunmez(client, tenant_a, tenant_b, user_a, user_b) -> None:  # noqa: ANN001
     """(14) Başka kiracıya geçen oturum, ilk kiracının verisini göremez."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     yillik = str(lot["turler"]["annual_leave"].pk)
     talep_id = _talep_olustur(
         client, tur_id=yillik, employee_id=str(lot["personel"].pk), gerekce="cross tenant"
@@ -625,7 +631,7 @@ def test_ui_hakedis_yoksa_anlasilir_durum_doner(client, tenant_a, user_a) -> Non
 def test_ui_onay_sonrasi_bakiye_ui_degeri_guncellenir(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """(7) Onay sonrası panel/liste değerleri backend'den güncel gelir."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     baslangic = timezone.localdate() + timedelta(days=14)
     talep = _post(
         client,
@@ -1189,6 +1195,8 @@ def test_ui_izin_turu_eklenir_ve_talep_formunda_gorunur(client, tenant_a, user_a
     assert "dogum_izni" in [t["code"] for t in aktif_turler]
 
     baslangic = timezone.localdate() + timedelta(days=20)
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     talep = _post(
         client,
         "/test-ui/api/leave-requests",
@@ -1256,7 +1264,7 @@ def test_ui_izin_turu_devre_disi_birakilir(client, tenant_a, user_a) -> None:  #
 def test_ui_panel_karara_baglanan_izinleri_gosterir(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """Panelde onaylanan/reddedilen talepler ve durum sayıları görünür (kapsam süzgeçli)."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     baslangic = timezone.localdate() + timedelta(days=30)
     talep_id = _post(
         client,
@@ -1277,12 +1285,16 @@ def test_ui_panel_karara_baglanan_izinleri_gosterir(client, tenant_a, user_a) ->
     assert panel_once["decided_requests"] == []
 
     # İki adımlı onay: birincil yönetici + nihai (kiracı geneli).
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["yonetici_user"].email, PAROLA_LEAVE)
     assert (
         _post(client, f"/test-ui/api/leave-requests/{talep_id}/decision", {"decision": "approved"})
         .status_code
         == 200
     )
     # admin'in tek kararı yeterli (override) — kalan adım varsa da karar verilir.
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     kalan = client.get("/test-ui/api/leave-requests?scope=pending").json()["data"]
     for kayit in kalan:
         if kayit["id"] == talep_id:
@@ -1506,7 +1518,7 @@ def test_ui_sahip_olunmayan_izin_dagitilamaz(client, tenant_a, user_a) -> None: 
 def test_ui_panel_yaklasan_izinler(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """Panelde onaylı ve gelecekteki izinler görünür; bekleyen/kapsam dışı görünmez."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     baslangic = timezone.localdate() + timedelta(days=25)
     talep_id = _post(
         client,
@@ -1629,9 +1641,12 @@ def test_ui_calisan_yalniz_kendini_gorur(client, tenant_a, user_a) -> None:  # n
 def test_ui_calisan_baskalarinin_izinlerini_gormez(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """Panel/onay listeleri yalnız kendi kayıtlarını gösterir (kapsam süzgeci)."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     baslangic = timezone.localdate() + timedelta(days=40)
-    for calisan, gerekce in ((lot["kardes"], "kardes izni"), (lot["personel"], "personel izni")):
+    for calisan, hesap, gerekce in (
+        (lot["kardes"], lot["kardes_user"], "kardes izni"),
+        (lot["personel"], lot["personel_user"], "personel izni"),
+    ):
+        _giris(client, tenant_a, hesap.email, PAROLA_LEAVE)
         assert (
             _post(
                 client,
@@ -1647,7 +1662,7 @@ def test_ui_calisan_baskalarinin_izinlerini_gormez(client, tenant_a, user_a) -> 
             ).status_code
             == 201
         )
-    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+        client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
 
     _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     panel = client.get("/test-ui/api/dashboard").json()["data"]
@@ -1985,6 +2000,30 @@ def test_ui_yetki_sekmesi_gorunurlugu_ve_sablonlar(client, tenant_a, user_a) -> 
     assert calisan_lookups["can_see_pii"] is False
 
 
+def test_ui_sekmeleri_yetkiye_gore_gorunur(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    lot = kadro(tenant_a, user_a)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
+    menu = client.get("/test-ui/api/me").json()["data"]["menu"]
+
+    assert menu["panel"] is True
+    assert menu["departments"] is True
+    assert menu["employees"] is True
+    assert menu["employees_new"] is False
+    assert menu["employees_exit"] is False
+    assert menu["employees_suspended"] is False
+    assert menu["leave"] is True
+    assert menu["overtime"] is True
+    assert menu["approvals"] is False
+
+    govde = client.get("/test-ui/").content.decode()
+    assert 'data-menu="departments"' in govde
+    assert 'data-menu="approvals"' in govde
+    assert "sekmeGorunurMu" in govde
+    assert "yeniSekmesiGorunur" in govde
+    assert "cikisSekmesiGorunur" in govde
+    assert "askidaSekmesiGorunur" in govde
+
+
 # =============================================================================
 # Bildirim (6. tur): izin durumu noktası, yönetici seçimi, onay ekranında bakiye,
 # eksi bakiye politikası, yaklaşan izin süzgeci, banka bilgileri
@@ -2010,11 +2049,15 @@ def test_ui_bakiye_yetersizken_talep_politika_ile_acilir(client, tenant_a, user_
         "reason": "Bakiye üstü talep",
         "submit": True,
     }
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     kapali = _post(client, "/test-ui/api/leave-requests", govde)
     assert kapali.status_code == 409, kapali.content
     assert "Yetersiz izin bakiyesi" in kapali.json()["error"]["message"]
 
     # Politikayı aç → talep oluşturulabilir (kararı onaylayan verir).
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     assert (
         _post(
             client,
@@ -2023,6 +2066,8 @@ def test_ui_bakiye_yetersizken_talep_politika_ile_acilir(client, tenant_a, user_
         ).status_code
         == 200
     )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     assert _post(client, "/test-ui/api/leave-requests", govde).status_code == 201
 
 
@@ -2112,7 +2157,7 @@ def test_ui_onay_kuyrugunda_bakiye_ve_kendi_talebi(client, tenant_a, user_a) -> 
     """
     lot = kadro(tenant_a, user_a)
     baslangic = timezone.localdate() + timedelta(days=25)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     assert (
         _post(
             client,
@@ -2128,6 +2173,8 @@ def test_ui_onay_kuyrugunda_bakiye_ve_kendi_talebi(client, tenant_a, user_a) -> 
         ).status_code
         == 201
     )
+    client.post("/api/v1/auth/logout", HTTP_X_CSRFTOKEN=_csrf(client))
+    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
     kuyruk = client.get("/test-ui/api/leave-requests?scope=pending").json()["data"]
     kayit = next(t for t in kuyruk if t["employee_no"] == "MUH-1")
     assert kayit["talep_sahibi_bakiye"]["hakedis_var"] is True  # onaylayan bakiyeyi görür
@@ -2141,7 +2188,7 @@ def test_ui_onay_kuyrugunda_bakiye_ve_kendi_talebi(client, tenant_a, user_a) -> 
 def test_ui_kendi_talebi_onaylanamaz_ama_iptal_edilebilir(client, tenant_a, user_a) -> None:  # noqa: ANN001
     """Talep sahibi kendi talebini onaylayamaz; iptal edebilir (backend kararı)."""
     lot = kadro(tenant_a, user_a)
-    _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE)
+    _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE)
     istek = _post(
         client,
         "/test-ui/api/leave-requests",
@@ -2983,7 +3030,7 @@ def test_yaklasan_izin_durumlari_metin_ve_renk(client, tenant_a, user_a) -> None
     # Bugün başlayan onaylı izin → "İzinde" + yeşil.
     with tenant_context(tenant_a.id):
         simdi = create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["annual_leave"],
             start_date=bugun,
@@ -2993,7 +3040,7 @@ def test_yaklasan_izin_durumlari_metin_ve_renk(client, tenant_a, user_a) -> None
         )
         _talebi_onayla(lot, simdi)
         yakinda = create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["annual_leave"],
             start_date=bugun + timedelta(days=4),
@@ -3003,7 +3050,7 @@ def test_yaklasan_izin_durumlari_metin_ve_renk(client, tenant_a, user_a) -> None
         )
         _talebi_onayla(lot, yakinda)
         uzak = create_leave_request(
-            actor=lot["admin"],
+            actor=lot["personel_user"],
             employee=lot["personel"],
             leave_type=lot["turler"]["annual_leave"],
             start_date=bugun + timedelta(days=18),

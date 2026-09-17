@@ -18,14 +18,21 @@ kararı servis + RLS katmanındadır).
 
 from __future__ import annotations
 
-from datetime import time, timedelta
+from datetime import date, time, timedelta
+from pathlib import Path
 
 import pytest
 from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
 from apps.leave.models import ApprovalStep, ApprovalStepStatus
-from apps.overtime.models import OVERTIME_MAX_MINUTES, OvertimeRequest, OvertimeStatus
+from apps.overtime.models import (
+    OVERTIME_MAX_MINUTES,
+    CompensationType,
+    OvertimeRequest,
+    OvertimeRule,
+    OvertimeStatus,
+)
 from apps.overtime.services import (
     OvertimeAuthorizationError,
     OvertimeStateError,
@@ -40,13 +47,25 @@ from tests.leave_helpers import kadro
 from tests.testui_helpers import get, giris, post
 
 PAROLA = "Gizli-Parola-123"
+SABLON = Path(__file__).resolve().parents[1] / "apps/testui/templates/testui/app.html"
 
 
 @pytest.fixture
 def lot(tenant_a, user_a):  # noqa: ANN001, ANN201
     """Ortak kadro: admin (TENANT), finans yöneticisi (UNIT), personel, kardeş (İK)."""
     with tenant_context(tenant_a.id):
-        return kadro(tenant_a, user_a)
+        veri = kadro(tenant_a, user_a)
+        OvertimeRule.objects.create(
+            tenant=tenant_a,
+            code="FM_TEST",
+            name="Test kuralı",
+            min_minutes=0,
+            max_minutes=None,
+            multiplier="1.500",
+            compensation_type=CompensationType.PAY,
+            effective_from=date(2020, 1, 1),
+        )
+        return veri
 
 
 def _giris_yap(client, lot, anahtar: str):  # noqa: ANN001, ANN202
@@ -55,6 +74,32 @@ def _giris_yap(client, lot, anahtar: str):  # noqa: ANN001, ANN202
     yanit = giris(client, kullanici.tenant, kullanici.email, PAROLA)
     assert yanit.status_code == 200
     return yanit
+
+
+def test_overtime_onay_ve_red_uygulama_ici_onay_kullanir() -> None:
+    """Onay/red consequential işlemleri ham tarayıcı diyaloğu olmadan onay ister."""
+    govde = SABLON.read_text(encoding="utf-8")
+    baslangic = govde.index("async function fmKarar")
+    bitis = govde.index("\n  // --- Onaylar", baslangic)
+    fonksiyon = govde[baslangic:bitis]
+    assert 'await onayModali(' in fonksiyon
+    assert 'Fazla mesai bildirimini onayla' in fonksiyon
+    assert 'Fazla mesai bildirimini reddet' in fonksiyon
+    assert "confirm(" not in fonksiyon
+
+
+def test_overtime_olusturma_uygulama_ici_onay_kullanir() -> None:
+    """Yeni bildirim gönderilmeden önce uygulama içi confirmation gösterilir."""
+    govde = SABLON.read_text(encoding="utf-8")
+    baslangic = govde.index("async function fmGonder")
+    bitis = govde.index("\n  async function fmIptal", baslangic)
+    fonksiyon = govde[baslangic:bitis]
+    assert 'await onayModali(' in fonksiyon
+    assert '"Fazla mesai bildirimi oluştur"' in fonksiyon
+    assert '"Bildirimi oluştur"' in fonksiyon
+    assert "if (!onay) return;" in fonksiyon
+    assert fonksiyon.index("if (!onay) return;") < fonksiyon.index('PERSOPYRO_UI.cagir("/test-ui/api/overtime"')
+    assert "confirm(" not in fonksiyon
 
 
 def _olustur(
@@ -123,6 +168,7 @@ def test_baska_calisan_adina_bildirim_acilamaz(lot, csrf_client) -> None:  # noq
         "/test-ui/api/overtime",
         {
             "employee_id": str(lot["kardes"].pk),  # başka çalışan kimliği gönderilse bile
+            "overtime_rule_id": str(OvertimeRule.objects.get(code="FM_TEST").pk),
             "work_date": timezone.localdate().isoformat(),
             "start_time": "09:00",
             "end_time": "11:00",
@@ -226,6 +272,56 @@ def test_calisan_yalniz_kendi_kayitlarini_gorur(lot, csrf_client) -> None:  # no
     assert len(veri["meta"]["kendi_kayitlarim"]) == 1
 
 
+def test_overtime_api_kurallari_yetkili_kullaniciya_doner(lot, csrf_client) -> None:  # noqa: ANN001
+    client = csrf_client
+    _giris_yap(client, lot, "admin")
+    veri = get(client, "/test-ui/api/overtime").json()
+
+    assert veri["meta"]["can_read_rules"] is True
+    assert len(veri["meta"]["kurallar"]) == 1
+    kural = veri["meta"]["kurallar"][0]
+    assert kural["code"] == "FM_TEST"
+    assert kural["name"] == "Test kuralı"
+    assert kural["min_minutes"] == 0
+    assert kural["max_minutes"] is None
+    assert kural["multiplier"] == "1.500"
+    assert kural["compensation_type"] == CompensationType.PAY
+    assert kural["compensation_type_label"] == "Ücret"
+
+
+def test_overtime_arayuzu_kurallari_gosterir() -> None:
+    govde = SABLON.read_text(encoding="utf-8")
+    assert "meta.kurallar" in govde
+    assert "Fazla mesai kuralları" in govde
+    assert "Onay sırasında eşleşen kuralın" in govde
+
+
+def test_overtime_api_kural_secimini_zorunlu_tutar(lot, csrf_client) -> None:  # noqa: ANN001
+    client = csrf_client
+    _giris_yap(client, lot, "personel_user")
+    kurallar = get(client, "/test-ui/api/overtime").json()["meta"]["kurallar"]
+    assert [k["code"] for k in kurallar] == ["FM_TEST"]
+    ortak = {
+        "work_date": timezone.localdate().isoformat(),
+        "start_time": "18:00",
+        "end_time": "20:00",
+        "description": "Kural seçim testi",
+    }
+
+    eksik = post(client, "/test-ui/api/overtime", ortak)
+    assert eksik.status_code == 400
+    assert "kuralı seçilmelidir" in eksik.json()["error"]["message"]
+
+    kural = OvertimeRule.objects.get(code="FM_TEST")
+    secili = post(
+        client,
+        "/test-ui/api/overtime",
+        {**ortak, "overtime_rule_id": str(kural.pk)},
+    )
+    assert secili.status_code == 201
+    assert secili.json()["data"]["overtime_rule_code"] == "FM_TEST"
+
+
 def test_yonetici_kapsam_icini_gorur_kapsam_disini_gormez(lot, csrf_client) -> None:  # noqa: ANN001
     _olustur(lot)  # personel (Muhasebe → Finans alt ağacı: yöneticinin kapsamında)
     _olustur(lot, actor=lot["kardes_user"], employee=lot["kardes"], aciklama="İK bildirimi")
@@ -288,6 +384,8 @@ def test_onay_iki_adimda_tamamlanir(lot) -> None:  # noqa: ANN001
     assert sonuc.status == OvertimeStatus.APPROVED
     assert sonuc.decided_by_id == lot["admin"].pk
     assert sonuc.decided_at is not None
+    assert sonuc.compensation_type_snapshot == CompensationType.PAY
+    assert sonuc.multiplier_snapshot == 1.5
 
     with tenant_context(lot["personel"].tenant_id):
         adimlar = list(ApprovalStep.objects.filter(subject_id=talep.pk).order_by("step_no"))
@@ -420,12 +518,14 @@ def test_http_durum_kodlari_ve_gecersiz_girdi(lot, csrf_client) -> None:  # noqa
     assert get(client, "/test-ui/api/overtime").status_code == 403
 
     _giris_yap(client, lot, "personel_user")
+    rule_id = str(OvertimeRule.objects.get(code="FM_TEST").pk)
 
     # Geçersiz saat → 400; süre sunucuda hesaplanır.
     kotu = post(
         client,
         "/test-ui/api/overtime",
         {
+            "overtime_rule_id": rule_id,
             "work_date": timezone.localdate().isoformat(),
             "start_time": "20:00",
             "end_time": "18:00",
@@ -440,6 +540,7 @@ def test_http_durum_kodlari_ve_gecersiz_girdi(lot, csrf_client) -> None:  # noqa
         client,
         "/test-ui/api/overtime",
         {
+            "overtime_rule_id": rule_id,
             "work_date": timezone.localdate().isoformat(),
             "start_time": "18:00",
             "end_time": "19:30",

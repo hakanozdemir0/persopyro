@@ -240,5 +240,10 @@ def invalidate_org_scope_cache(tenant_id: uuid.UUID | str | None = None) -> None
     Organizasyonu değiştiren servisler (`move_department`, `set_primary_manager`)
     **bu fonksiyonu çağırır**; ileride eklenecek önbellek (K17) yalnızca burayı
     doldurarak devreye girer — çağıranlar değişmez.
+
+    P1-B performans: organizasyon/kapsam değişikliği izin sonuçlarını da etkiler
+    (UNIT kapsamı çözümü) — request-scope izin önbelleği de burada sıfırlanır.
     """
-    return None
+    from apps.rbac.services.permissions import invalidate_permission_cache  # noqa: PLC0415
+
+    invalidate_permission_cache()

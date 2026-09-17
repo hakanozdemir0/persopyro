@@ -188,6 +188,16 @@ BEGIN
     END IF;
 END $$;
 
+-- Karar anı izin bakiyesi snapshot'ı (M14/K) **append-only + immutable**dır
+-- (tarihsel kayıt; DB tetikleyicisi de UPDATE/DELETE'i reddeder): UPDATE verilmez.
+DO $$
+BEGIN
+    IF to_regclass('hr.leave_decision_snapshots') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE, TRUNCATE ON hr.leave_decision_snapshots FROM persopyro_app;
+        GRANT SELECT, INSERT ON hr.leave_decision_snapshots TO persopyro_app;
+    END IF;
+END $$;
+
 -- 9) P1-A (People lifecycle) tabloları --------------------------------------
 -- OD21: bu tablolarda silme **soft-delete**tir (`deleted_at`); runtime yolunda
 -- fiziksel silme yoktur → `DELETE`/`TRUNCATE` geri alınır (mevcut desen: blok 7/8).

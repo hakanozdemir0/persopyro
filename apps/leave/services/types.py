@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -42,6 +44,8 @@ def create_default_leave_types(*, actor, tenant) -> list[LeaveType]:
                     "uses_balance": tanim["uses_balance"],
                     "requires_approval": tanim["requires_approval"],
                     "requires_document": tanim["requires_document"],
+                    "is_time_based": tanim.get("is_time_based", False),
+                    "workday_minutes": tanim.get("workday_minutes"),
                     "is_system": True,
                     "status": RecordStatus.ACTIVE,
                 },
@@ -72,6 +76,8 @@ def create_leave_type(
     requires_document: bool = False,
     min_advance_notice_days: int = 0,
     max_consecutive_days=None,
+    is_time_based: bool = False,
+    workday_minutes: int | None = None,
 ) -> LeaveType:
     """Kiracıya özel izin türü oluşturur (sistem kodları rezervedir)."""
     require_permission(actor, "leave.type.manage")
@@ -82,6 +88,8 @@ def create_leave_type(
         raise LeaveError(
             f"'{kod}' sistem izin türü kodudur (rezerve) — farklı bir kod seçin."
         )
+    if is_time_based and (workday_minutes is None or int(workday_minutes) <= 0):
+        raise LeaveError("Saat tabanlı izin için 1 gün dakika değeri pozitif olmalıdır.")
     with transaction.atomic():
         tur = LeaveType.objects.create(
             tenant=tenant,
@@ -94,6 +102,8 @@ def create_leave_type(
             requires_document=requires_document,
             min_advance_notice_days=min_advance_notice_days,
             max_consecutive_days=max_consecutive_days,
+            is_time_based=is_time_based,
+            workday_minutes=workday_minutes,
             is_system=False,
         )
         log_action(
@@ -119,6 +129,9 @@ def update_leave_type(
     requires_document: bool | None = None,
     min_advance_notice_days: int | None = None,
     max_consecutive_days=None,
+    is_time_based: bool | None = None,
+    workday_minutes: int | None = None,
+    workday_hours: Decimal | str | None = None,
 ) -> LeaveType:
     """
     İzin türünü günceller.
@@ -136,6 +149,7 @@ def update_leave_type(
         ("requires_approval", requires_approval),
         ("requires_document", requires_document),
         ("min_advance_notice_days", min_advance_notice_days),
+        ("is_time_based", is_time_based),
     ):
         if deger is not None and getattr(leave_type, alan) != deger:
             setattr(leave_type, alan, deger)
@@ -143,6 +157,22 @@ def update_leave_type(
     if max_consecutive_days is not None:
         leave_type.max_consecutive_days = max_consecutive_days
         degisim["max_consecutive_days"] = str(max_consecutive_days)
+    if workday_hours is not None:
+        try:
+            saat = Decimal(str(workday_hours).replace(",", "."))
+        except (InvalidOperation, TypeError, ValueError) as hata:
+            raise LeaveError("1 gün saat karşılığı sayı olmalıdır.") from hata
+        dakika = saat * Decimal("60")
+        if saat <= 0 or dakika != dakika.to_integral_value():
+            raise LeaveError("1 gün saat karşılığı pozitif ve dakika olarak tam olmalıdır.")
+        workday_minutes = int(dakika)
+    if workday_minutes is not None:
+        if int(workday_minutes) <= 0:
+            raise LeaveError("1 gün dakika değeri pozitif olmalıdır.")
+        leave_type.workday_minutes = int(workday_minutes)
+        degisim["workday_minutes"] = str(workday_minutes)
+    if leave_type.is_time_based and not leave_type.workday_minutes:
+        raise LeaveError("Saat tabanlı izin için 1 gün dakika değeri zorunludur.")
 
     if not degisim:
         return leave_type
@@ -189,9 +219,36 @@ def deactivate_leave_type(*, actor, leave_type: LeaveType, reason: str = "") -> 
     return leave_type
 
 
+def activate_leave_type(*, actor, leave_type: LeaveType, reason: str = "") -> LeaveType:
+    """Pasif izin türünü yeniden aktifleştirir; geçmiş taleplere dokunmaz."""
+    require_permission(actor, "leave.type.manage")
+    if leave_type.deleted_at is not None:
+        raise LeaveError("Silinmiş izin türü aktifleştirilemez.")
+    if leave_type.status == RecordStatus.ARCHIVED:
+        raise LeaveError("Arşivlenmiş izin türü aktifleştirilemez.")
+    if leave_type.status == RecordStatus.ACTIVE:
+        return leave_type
+    gerekce = (reason or "").strip()
+    if len(gerekce) < 5:
+        raise LeaveError("Aktifleştirme için anlamlı bir gerekçe zorunludur.")
+    with transaction.atomic():
+        leave_type.status = RecordStatus.ACTIVE
+        leave_type.save(update_fields=["status", "updated_at"])
+        log_action(
+            tenant_id=leave_type.tenant_id,
+            action="leave.type.activate",
+            user=actor,
+            table_name="leave_types",
+            record_id=leave_type.pk,
+            changes={"status": RecordStatus.ACTIVE, "has_reason": True},
+        )
+    return leave_type
+
+
 __all__ = [
     "create_default_leave_types",
     "create_leave_type",
     "deactivate_leave_type",
+    "activate_leave_type",
     "update_leave_type",
 ]

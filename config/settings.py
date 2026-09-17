@@ -139,6 +139,10 @@ MIDDLEWARE = [
     # yüklenirken RLS'in satırı gizlememesi buna bağlıdır.
     "apps.tenancy.middleware.RequestIdMiddleware",
     "apps.tenancy.middleware.TenantContextMiddleware",
+    # P1-B performans: istek içindeki izin çözümlemelerini request-scope önbelleğe alır
+    # (istek başında/sonunda sıfırlanır; RBAC değişiklikleri araya girse bile yeni
+    # istek taze DB'den okur).
+    "apps.rbac.services.permission_cache_middleware.PermissionCacheMiddleware",
     # Token ile gelen isteklerde kiracıyı token'dan çözer (bağlamı isteğin
     # geri kalanı için kurar).
     "apps.accounts.middleware.ApiTokenTenantMiddleware",

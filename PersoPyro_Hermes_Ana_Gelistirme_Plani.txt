@@ -1,0 +1,1809 @@
+
+PERSOPYRO — HERMES ANA GELİŞTİRME PLANI
+Sürüm: 2026-09-16
+Amaç: PersoPyro HR SaaS projesini Hermes içinde tek başına, düşük token kullanımıyla ve adım adım ilerletmek.
+
+======================================================================
+0. HERMES İÇİN ÇALIŞMA TALİMATI — HER ZAMAN GEÇERLİ
+======================================================================
+
+Bu dosya PersoPyro için ana ürün ve geliştirme planıdır.
+
+ZORUNLU ÇALIŞMA KURALI:
+- `docs/AI_WORKING_RULES.md` Hermes'in çalışma biçimi ve düşük-token kullanımı için ZORUNLU source-of-truth'tur.
+- Her mikro görevin başında bu dosyadaki kurallara sadık kal.
+- Ürün gereksinimi / roadmap konusunda bu TXT dosyası source-of-truth'tur.
+- Çalışma disiplini / token tasarrufu / test disiplini konusunda `docs/AI_WORKING_RULES.md` source-of-truth'tur.
+- İki dosya arasında çelişki varsa:
+  * NE yapılacağı konusunda bu TXT,
+  * NASIL çalışılacağı konusunda `docs/AI_WORKING_RULES.md`
+  geçerlidir.
+- `docs/AI_WORKING_RULES.md` dosyasını değiştirmek veya gevşetmek için kullanıcı onayı gerekir.
+- Bu TXT içindeki çalışma kuralları AI_WORKING_RULES.md'nin özeti niteliğindedir; onu geçersiz kılmaz.
+
+HER GÖREVDE AŞAĞIDAKİ KURALLARA UY:
+
+1. Her seferinde SADECE BİR küçük hedef üzerinde çalış.
+2. Sub-agent kullanma.
+3. Repo-wide scan yapma.
+4. Önce yalnız gerekli dosyaları oku.
+5. Gereksiz dokümantasyon, test, fresh-install veya full-suite çalıştırma.
+6. Aynı failing test için en fazla 2 düzeltme denemesi yap.
+7. İki denemede çözülmezse DUR ve kullanıcıya raporla.
+8. Büyük refactor yapma; minimum güvenli değişiklik yap.
+9. Backend authorization hiçbir zaman UI görünürlüğüne bırakılmayacak.
+10. Tenant isolation, RLS, scope ve permission kontrolleri korunacak.
+11. Kullanıcı özellikle istemedikçe yeni framework/teknoloji ekleme.
+12. TailAdmin yalnız TASARIM DİLİ REFERANSIDIR.
+13. Next.js/React geçişi YOK.
+14. Mevcut frontend: Django templates + HTMX + Alpine.js + Tailwind yaklaşımı korunacak.
+15. Her kritik işlem audit/log üretmeli.
+16. Hassas veriler loglarda plaintext tutulmamalı.
+17. Parola/token/secret old→new diff olarak asla kaydedilmemeli.
+18. Her paket sonunda kullanıcıdan onay almadan sonraki pakete geçme.
+19. Bir adım tamamlandığında SADECE:
+    - ne yaptığını
+    - hangi dosyaların değiştiğini
+    - varsa otomatik test sonucunu
+    - security finding varsa
+    - kalan TODO'yu
+   kısa biçimde raporla.
+20. Raporun sonunda mutlaka:
+    "Bu adımı onaylıyor musun? Onay vermeden sonraki adıma geçmeyeceğim."
+    diye sor.
+21. Kullanıcı onay verene kadar YENİ ADIMA GEÇME.
+
+======================================================================
+1. TEST POLİTİKASI — TOKEN TASARRUFU
+======================================================================
+
+Ana kullanıcı testlerini kullanıcı manuel yapacak.
+
+Hermes:
+
+- Her küçük değişiklikte yalnız gerekli targeted testleri çalıştırmalı.
+- Full suite yalnız paket kapanışında ve gerçekten gerekliyse 1 kez çalıştırılmalı.
+- Fresh install yalnız migration/schema/security invariant değiştiğinde paket kapanışında 1 kez çalıştırılmalı.
+- Browser smoke çoğu zaman kullanıcıya bırakılmalı.
+- Hermes otomatik browser testine yalnız kullanıcı açıkça isterse girmeli.
+- Kullanıcının manuel testte bulduğu bug yeni mikro paket olarak ele alınmalı.
+- Testi yeşile çevirmek için production guard, RLS, permission veya state machine gevşetilmemeli.
+- Test fixture yanlışsa production kodunu bozmak yerine fixture düzeltilmeli.
+
+
+======================================================================
+1A. ZORUNLU DÜŞÜK-TOKEN MODU
+======================================================================
+
+Amaç:
+Aynı işi tekrar tekrar okuyup/yazıp token harcamamak.
+Kaliteden veya güvenlikten ödün vermeden mümkün olan en küçük bağlamla çalışmak.
+
+HER MİKRO GÖREVDE:
+
+A. BAŞLANGIÇ
+1. Önce yalnız:
+   - git status --short
+   - git diff --stat
+   - gerekliyse git log -1 --oneline
+   kontrol et.
+2. Dirty tree varsa mevcut işi KORU; kullanıcı onayı olmadan reset/revert/clean yapma.
+3. Görevin ilgili olduğu 2–6 dosyayı belirle.
+4. Repo-wide scan yapma.
+5. Kullanıcının verdiği hata mesajı/dosya/satır bilgisi yeterliyse yeniden keşif yapma.
+
+B. DOSYA OKUMA
+6. Büyük dosyaları baştan sona okuma.
+7. Önce grep/find ile ilgili fonksiyon/class/endpoint'i bul.
+8. Sonra yalnız gerekli satır aralığını oku.
+9. Aynı dosyayı aynı turda tekrar tekrar okumaktan kaçın.
+10. Bir dosyayı bütünüyle okumak zorundaysan nedenini belirt ve yalnız bir kez oku.
+11. Önceden doğrulanmış mimari kararları tekrar repo'da arama; bu plan ve docs source-of-truth kabul edilir.
+
+C. KOD DEĞİŞİKLİĞİ
+12. Minimum patch uygula.
+13. Çalışan kodu sırf "daha güzel" olsun diye refactor etme.
+14. İlgisiz formatting/import düzenlemesi yapma.
+15. Bütün dosyayı yeniden yazma; yalnız gerekli hunk'ları değiştir.
+16. Yeni abstraction ancak tekrar eden gerçek ihtiyaç varsa oluştur.
+17. Bir bug için yeni framework/library ekleme.
+18. Kullanıcı istemedikçe dependency upgrade yapma.
+
+D. TEST
+19. İlk test her zaman en küçük targeted test olsun.
+20. Hata varsa `-x` ile ilk hatada dur.
+21. Aynı failing test için maksimum 2 correction iteration.
+22. Her düzeltmeden sonra önce yalnız failing testi tekrar çalıştır.
+23. O test yeşilse ilgili küçük test dosyasını/suite'i bir kez çalıştır.
+24. Full suite paket kapanışında en fazla 1 kez.
+25. Full suite başarısızsa ilk anlamlı hatada DUR; sürekli tekrar koşma.
+26. Fresh-install yalnız migration/schema/RLS/security değişikliği varsa paket kapanışında 1 kez.
+27. Browser/manual smoke çoğunlukla kullanıcıya bırakılır.
+28. Manuel doğrulanabilecek görsel/UI testlerini agente tekrar tekrar yaptırma.
+
+E. RAPORLAMA
+29. Uzun açıklama üretme.
+30. Her mikro turun sonunda en fazla:
+   - yapılan değişiklik
+   - dosyalar
+   - targeted test sonucu
+   - security finding
+   - TODO
+   raporla.
+31. Daha önce raporlanmış proje geçmişini tekrar özetleme.
+32. Kullanıcı istemedikçe diff'in tamamını mesaja kopyalama.
+33. Terminal çıktılarının tamamını değil, sonuç özetini ver.
+
+F. CONTEXT / SESSION
+34. Tek devasa Hermes session'ında saatlerce çalışmaya devam etme.
+35. Bir paket kapanınca yeni session başlatmak tercih edilir.
+36. Yeni session'da bütün repo'yu yeniden keşfetme:
+   - bu TXT
+   - docs/AI_WORKING_RULES.md
+   - git status
+   - son commit
+   - ilgili roadmap bölümü
+   yeterli başlangıç bağlamıdır.
+37. Aynı plan metnini her yanıtta tekrar etme.
+38. Bu TXT'nin tamamını her mikro adımda tekrar okuyup özetleme.
+   Session başında bir kez oku; sonra yalnız ilgili ADIM/bölüme dön.
+39. Kullanıcı yeni ürün gereksinimi eklerse sadece ilgili roadmap bölümünü güncelle; tüm planı yeniden üretme.
+40. Paketin durumu için kısa checkpoint kullan; uzun sohbet geçmişini tekrar modele verme.
+
+G. MODEL DAVRANIŞI
+41. Sub-agent kullanma.
+42. Background review / otomatik uzun analiz kullanma.
+43. Gereksiz web araması yapma.
+44. Kullanıcının açıkça verdiği kararları yeniden tartışmaya açma.
+45. Belirsizlik gerçekten implementasyonu değiştiriyorsa TEK kısa soru sor.
+46. Belirsizlik yoksa soru sormadan mikro görevi yap.
+47. "İstersen şunu da yapabilirim" diyerek scope büyütme.
+48. Kullanıcının onaylamadığı sonraki adıma geçme.
+
+H. VERİTABANI / PERFORMANS
+49. Query problemi varsa önce ölç; tahminle optimizasyon yapma.
+50. Query count ölçümünü yalnız ilgili endpointte yap.
+51. Büyük DB dump/scan yapma.
+52. Migration gerekiyorsa yalnız ilgili migration graph'ını kontrol et.
+53. `makemigrations --check` ve `migrate --plan` gerektiğinde birer kez yeterlidir.
+
+I. TOKEN BÜTÇESİ STOP KURALI
+54. Aynı turda:
+   - 2 correction iteration'a ulaşıldıysa,
+   - aynı dosya 3+ kez yeniden yamalanıyorsa,
+   - aynı test tekrar tekrar aynı sebeple kırılıyorsa,
+   - scope beklenmedik biçimde büyüdüyse
+   DUR.
+55. Bu durumda yeni kod yazmak yerine:
+   - bulunduğun hata
+   - muhtemel root cause
+   - önerilen tek sonraki mikro adım
+   raporlanır ve kullanıcı onayı beklenir.
+
+J. MANUEL TEST KULLANICIYA BIRAKMA
+56. Kullanıcı çoğu UI/UX kabul testini kendisi yapacaktır.
+57. Hermes otomatik olarak uzun browser smoke yapmamalı.
+58. Kod + minimum targeted test yeşil olduğunda kullanıcıya kısa manuel test adımları ver.
+59. Kullanıcı test sonucunu bildirince yalnız bulunan bug için mikro düzeltme yap.
+60. Böylece model tokenı kullanıcı tarafından kolayca görülebilecek UI kontrollerine harcanmaz.
+
+======================================================================
+2. ÜRÜNÜN TEMEL PRENSİBİ
+======================================================================
+
+PersoPyro'da mümkün olan her şey özelleştirilebilir ve opsiyonel olmalı.
+
+AMA:
+- her görüntüleme yetkili olmalı,
+- her işlem yetkili olmalı,
+- her admin seçeneği permission + scope kontrollü olmalı,
+- her önemli işlem loglanmalı,
+- kritik/silme/onay işlemlerinde kullanıcıya onay sorulmalı,
+- tenant izolasyonu korunmalı,
+- ülkeye özel kurallar global hard-code edilmemeli.
+
+Ana uzun vadeli zincir:
+
+ÇALIŞAN / HR ÇEKİRDEĞİ
+→ ÇALIŞMA TAKVİMİ
+→ VARDİYA
+→ PDKS
+→ PUANTAJ
+→ ÜCRET / BORDRO
+→ MUHASEBE SaaS
+
+Muhasebe SaaS da daha sonra bizim tarafımızdan geliştirilecek ayrı ürün olacak.
+
+======================================================================
+3. MEVCUT PROJE DURUMU — BİLİNEN SON DURUM
+======================================================================
+
+Temel teknoloji:
+- Django
+- PostgreSQL
+- RLS/FORCE RLS
+- Django templates
+- HTMX
+- Alpine.js
+- Tailwind
+- TailAdmin yalnız görsel/tasarım dili referansı
+
+Güvenlik:
+- RBAC + scope
+- tenant isolation
+- self-elevation yasak
+- Django Admin kaldırılmış
+- token auth
+- auth_version session invalidation
+- platform ve tenant yetkileri ayrı
+- sensitive veri sınıflandırması mevcut
+
+Mevcut önemli implementasyonlar:
+- Employee lifecycle
+- suspend / restore / terminate / scheduled termination
+- auth_version invalidation
+- assignment history
+- employment terms history
+- manager history
+- Employee Timeline / "Yaşananlar" temeli
+- request-scope permission cache
+- manager N+1 optimizasyonu
+- leave entitlement employee detail akışı
+- overtime V1 request/approval
+- leave overlap backend engeli
+- leave timeline olayları
+- entitlement/balance timeline olayları
+- reusable success/error feedback temeli
+- future-hire baseline assignment correction
+- baseline EmployeeAssignment oluşturma
+- migration 0020 baseline backfill hazırlandı
+
+BİLİNEN DIRTY/UNCOMMITTED ÇALIŞMA DURUMU:
+Bu projede son çalışmalar commit edilmeden devam etmiş olabilir.
+Yeni işe başlamadan önce:
+    git status --short
+    git diff --stat
+kontrol et.
+Kullanıcı onayı olmadan revert/reset/clean yapma.
+
+BİLİNEN TAMAMLANMIŞ AMA PAKET KAPANIŞI YAPILMAMIŞ İŞLER:
+- Employee Timeline/performance
+- baseline assignment create
+- 0020 assignment backfill migration
+- future hire-date correction
+- leave overlap prevention
+- leave timeline events
+- entitlement feedback
+
+BİLİNEN HENÜZ TAMAMLANMAMIŞ / SONRAKİ İŞLER:
+- leave decision balance snapshot
+- timeline newest-first
+- termination UI/date picker/UX
+- çalışan liste/search/export
+- Leave v2
+- work calendar
+- Overtime v2
+- document/storage
+- configurable onboarding/custom fields
+- directory/org chart
+- self-service change request
+- shift/PDKS/puantaj/payroll/accounting
+
+======================================================================
+4. ÇALIŞAN DETAYI / EMPLOYEE 360
+======================================================================
+
+Amaç:
+Çalışan detay ekranı gerçek bir dijital özlük/İK dosyası olmalı.
+
+Ana bölümler:
+- Genel
+- İzinler
+- Fazla Mesai
+- Yaşananlar
+- Yetkiler
+- ileride Belgeler
+- ileride Ücret & Bordro
+- ileride Avanslar
+
+GENEL:
+- çalışan no
+- ad soyad
+- e-posta
+- departman
+- unvan/pozisyon
+- yönetici
+- işyeri
+- işe giriş tarihi
+- çalışma modeli
+- istihdam tipi
+- durum
+- planlı çıkış tarihi varsa
+
+YAŞANANLAR:
+Çalışanla ilgili anlamlı bütün business eventler burada görünmeli.
+
+Örnek:
+- çalışan oluşturuldu
+- kişisel bilgi değişti
+- yakınlık bilgisi değişti
+- telefon değişti
+- departman değişti
+- unvan değişti
+- yönetici değişti
+- işyeri değişti
+- çalışma koşulları değişti
+- askıya alındı
+- yeniden aktifleştirildi
+- çıkış planlandı
+- işten çıkarıldı
+- izin talebi oluşturuldu
+- izin onaylandı
+- izin reddedildi
+- izin iptal edildi
+- izin hakkı tanımlandı
+- izin bakiyesi düzeltildi
+- fazla mesai oluşturuldu
+- fazla mesai onaylandı
+- fazla mesai reddedildi
+- self-service değişiklik talebi oluşturuldu/onaylandı/reddedildi
+
+Timeline sıralaması:
+EN YENİ OLAY EN ÜSTTE.
+En eski en altta.
+
+Backend source-of-truth:
+event_at DESC
+aynı timestamp için deterministic tie-breaker.
+
+Pagination:
+yaklaşık 20 olay/sayfa.
+
+FIELD DIFF:
+Örnek:
+Yakınlık:
+Baba → Anne
+
+Yakın telefon:
+555*** → 666***
+
+K0/K1:
+uygunsa old/new gösterilebilir.
+
+K2:
+masked.
+Tam değer yalnız uygun sensitive permission ile.
+
+K3/K4:
+plaintext old/new asla gösterilmez.
+Sadece "değiştirildi" bilgisi.
+
+Password/token/secret:
+asla diff kaydı yok.
+
+======================================================================
+5. ÇALIŞAN İŞLEMLERİ / LİSTELEME / ARAMA / EXCEL
+======================================================================
+
+Ana menü:
+"Çalışanlar" yerine tercihen:
+"Çalışan İşlemleri"
+
+Alt alanlar:
+- Liste
+- Yeni Çalışan
+- Çıkış Süreci
+- Askıya Alınanlar
+- ileride diğer lifecycle işlemleri
+
+Normal çalışan yetkisi yoksa:
+- Yeni Çalışan
+- İşten Çıkış
+- Çıkış Süreci
+- Askıya Alınanlar
+gibi yönetim alanlarını görmemeli.
+
+Liste:
+- bütün çalışanları tek DOM'da basma.
+- server-side pagination.
+- yaklaşık 25/sayfa.
+- active/passive ayrımı.
+
+Aktif:
+- aktif çalışanlar.
+
+Pasif:
+- suspended
+- terminated
+- diğer pasif lifecycle durumları.
+
+Arama:
+Yetkiye göre mevcut employee alanlarında arama yapılabilmeli.
+
+Örnek:
+- ad
+- soyad
+- çalışan no
+- iş e-postası
+- telefon
+- departman
+- pozisyon
+- kan grubu
+- TC vb. (yalnız yetkili kişi)
+
+ÖNEMLİ:
+Kullanıcının göremediği hassas alan arama üzerinden bilgi sızdırmamalı.
+
+Departmanlar:
+Departmana tıklanınca o departmandaki çalışanlar gösterilebilmeli.
+Ama çalışanları tamamen Departmanlar'a taşımak yok.
+İki giriş noktası:
+- Çalışan İşlemleri
+- Departman drill-down
+aynı employee source-of-truth'u kullanır.
+
+EXCEL:
+Yetkili kullanıcı employee listesini Excel olarak dışa aktarabilmeli.
+
+Kolonlar hard-coded olmamalı.
+Onboarding/configured employee field kataloguna göre üretilmeli.
+
+Örnek kolonlar:
+- Ad
+- Soyad
+- TC
+- Maaş
+- SGK No
+- Mail
+- Telefon
+vb.
+
+Ama kullanıcı hangi alanları görmeye yetkiliyse yalnız onlar export edilir.
+
+Export işlemi de permission + audit kontrollü olmalı.
+
+======================================================================
+6. ÇALIŞAN OLUŞTURMA / ONBOARDING
+======================================================================
+
+Yeni çalışan ekranı tenant tarafından özelleştirilebilir olmalı.
+
+Tenant admin / yetkili HR:
+sistem alanlarını:
+- göster/gizle
+- zorunlu/opsiyonel
+- sıra
+- bölüm
+olarak ayarlayabilmeli.
+
+System-critical alanlar kilitli kalmalı.
+
+Custom onboarding questions desteklenecek.
+
+Alan tipleri:
+- text
+- number
+- date
+- boolean
+- select
+- multi_select
+
+Örnek:
+
+Ehliyet var mı?
+Evet / Hayır
+
+Evet ise:
+Ehliyet sınıfı:
+B / C / D / E
+
+Medeni durum:
+Evli / Bekar / Dul
+
+Evli veya Dul ise:
+Çocuk sayısı
+
+Koşul operatörleri:
+- equals
+- not_equals
+- in
+- not_in
+- is_true
+- is_false
+
+Circular dependency yasak.
+
+Backend submit anında koşulları yeniden doğrular.
+Frontend yalnız gösterim için kullanılır.
+
+Örnek seçim alanları:
+Kadın / Erkek vb. gibi select alanları tenant yapılandırmasına göre kullanılabilir; zorunlu/opsiyonel seçilebilir.
+Yasal/ülkesel kısıtlar ileride country rules ile yönetilir.
+
+Çalışan oluşturma akışı:
+- login/account aynı akışta
+- employee number otomatik
+- employee no değişmez
+- başlangıç EmployeeAssignment oluşturulur
+- başlangıç manager
+- terms
+- custom values
+- ileride belgeler
+atomik/güvenli akışla yapılır.
+
+PASSWORD:
+UI ve backend aynı minimum password policy kaynağını kullanmalı.
+"UI 8 diyor, backend 10 istiyor" gibi çelişki olmamalı.
+
+======================================================================
+7. İŞTEN ÇIKIŞ / LIFECYCLE UX
+======================================================================
+
+İşten çıkarma UI mevcut site tasarımıyla uyumlu olmalı.
+
+Tarih:
+elle yazma değil,
+date picker/takvim.
+
+Alanlar:
+- İşten Çıkış Tarihi
+- İşten Çıkış Kodu
+- Gerekçe
+
+Ham enum kullanıcıya gösterilmemeli.
+
+Örnek görünür etiketler:
+resignation → İstifa
+employer_termination → İşveren tarafından fesih
+mutual_agreement → Karşılıklı anlaşma
+contract_end → Sözleşme bitişi
+retirement → Emeklilik
+death → Vefat
+other → Diğer
+
+İleride kod listesi configurable/integration-code sistemine taşınabilir.
+
+Browser prompt/confirm kullanılmamalı.
+"Prevent this page..." gibi tarayıcı metinleri görünmemeli.
+
+Site tasarımına uygun modal kullanılmalı.
+
+Kritik işlem onayı:
+"İşten Çıkışı Onayla"
+
+Başarı:
+"İşten çıkış işlemi kaydedildi."
+
+Hata:
+"İşten çıkış işlemi kaydedilemedi."
++ güvenli backend mesajı.
+
+======================================================================
+8. İZİN SİSTEMİ — LEAVE V2
+======================================================================
+
+TEMEL KURAL:
+Genel "İzin Talep Et" ekranından kim olursa olsun yalnız KENDİ adına talep oluşturabilir.
+
+Yönetici/HR bile genel izin ekranından başka çalışan seçemez.
+
+Başka çalışan adına izin:
+yalnız açık permission sahibi kişi,
+çalışanın detail ekranından
+"Çalışan adına izin oluştur"
+akışıyla yapabilir.
+
+Aynı yetki yapısıyla geri çekme/iptal işlemi de yapılabilir.
+
+İZİN ÇAKIŞMASI:
+Aynı employee için active leave durumları:
+- pending
+- approved
+- taken
+ile tarih çakışması varsa yeni talep reddedilir.
+
+Formül:
+existing.start <= new.end
+AND
+existing.end >= new.start
+
+Rejected/canceled/draft bloklamaz.
+
+Concurrency:
+employee row lock ile application-level guard mevcut.
+
+İZİN TÜRLERİ:
+- aktif
+- pasif
+- archive/delete
+desteklenmeli.
+
+Silme/archive auditli ve confirmation'lı olmalı.
+
+İZİN TÜRÜ AYARLARI:
+- ücretli/ücretsiz
+- balance kullanır mı
+- approval gerekir mi
+- document required mı
+- diğer policy alanları
+özelleştirilebilir olmalı.
+
+Belge gerekli ise:
+frontend upload alanı açılır.
+Backend attachment olmadan submit'i reddeder.
+
+Belge gerekmiyorsa:
+opsiyonel attachment desteklenebilir.
+
+ONAY:
+Varsayılan olarak ekstra HR onayı zorunlu değil.
+
+Çalışan bazında configurable approver route olacak.
+
+Yeni çalışan oluşturulurken örnek:
+
+[✓] Birinci yönetici
+[ ] İkinci yönetici
+[✓] HR
+vb.
+
+Ama şirket isterse yalnız birinci yönetici seçebilir.
+
+Onay route'u sıralı olabilir.
+
+"Bağlı Yönetici" seçerken bütün çalışanlar listelenmemeli.
+Yalnız aktif ve yönetici olmaya uygun kişiler gösterilmeli.
+
+LEAVE EMAIL:
+Approval/rejection sonrası kurumsal otomatik mail.
+
+Örnek:
+"İzin talebiniz onaylanmıştır."
+
+Mailde:
+- talep edilen tarihler
+- talep edilen gün sayısı
+- karar
+- gerekiyorsa red nedeni
+
+İzin taleplerinin diğer önemli durumlarında da benzer mail mekanizması.
+
+LEAVE HISTORY:
+Çalışan kendi talep geçmişini görebilir.
+Reddedilen talep ve red nedeni uygun şekilde görünür.
+Authorized HR/manager scope+permission ile görebilir.
+
+======================================================================
+9. İZİN HAKLARI / BAKİYE / SNAPSHOT
+======================================================================
+
+İzin hakları tenant tarafından özelleştirilebilir olmalı.
+
+Örnek:
+- yıllık izin
+- serbest zaman
+- hastalık
+- idari
+- babalık
+vb.
+
+Hakediş:
+- işe giriş yıldönümü
+- sabit/periyot
+- ülke/tenant rule
+gibi modellerle ilerleyebilir.
+
+Balance doğrudan overwrite edilmemeli.
+Ledger/event mantığı korunmalı.
+
+Employee detail üzerinden hak tanımlama/düzeltme yapılmalı.
+
+TIMELINE:
+- hakkı tanımlandı
+- bakiye düzeltildi
+logları görünmeli.
+
+IMMUTABLE DECISION BALANCE SNAPSHOT:
+Henüz tamamlanmamış plan.
+
+Amaç:
+İzin kararı verildiğinde o andaki bakiye durumu saklansın.
+
+Örnek:
+14 gün hakkı vardı.
+5 gün izin onaylandı.
+Karar snapshot:
+Kalan = 9 gün.
+
+Daha sonra başka izinle kalan 5 güne düşse bile
+ilk kararın snapshot'ı 9 olarak kalmalı.
+
+Snapshot:
+- request
+- decision status
+- entitlement
+- used
+- reserved/pending varsa
+- remaining
+- snapshot_at
+
+Eski kararlara bugünkü bakiyeyi geçmiş gibi backfill ETME.
+Snapshot yoksa:
+"Karar anı bakiyesi kayıtlı değil."
+
+======================================================================
+10. ÇALIŞMA TAKVİMİ / RESMİ TATİL
+======================================================================
+
+Merkezi tenant work calendar oluşturulacak.
+
+Şirket/yetkili kullanıcı tanımlayabilecek:
+- haftanın çalışma günleri
+- haftanın hangi günleri izin gününden sayılır
+- hangi weekday'de izin başlayabilir
+- hangi weekday'de izin bitebilir
+- resmi tatiller
+- özel şirket tatilleri
+
+Örnek:
+Pazartesi-Cumartesi çalışma
+Pazar izin hesabına dahil değil.
+
+Örnek:
+Cumartesi bitişli yıllık izin yasaklanabilir.
+
+PUBLIC HOLIDAY:
+Yetkili HR/admin yıllık tanımlar.
+
+Örnek:
+29 Ekim resmi tatil.
+
+Yıllık izin:
+27-31 Ekim ise
+29 Ekim politika/kanun gereği yıllık izin bakiyesinden düşmeyebilir.
+
+Takvim yönetimi:
+permission kontrollü.
+auditli.
+
+Bu aynı takvim ileride:
+- shift
+- PDKS
+- puantaj
+- bordro
+tarafında source-of-truth olacak.
+
+======================================================================
+11. FAZLA MESAİ — OVERTIME V2
+======================================================================
+
+HER KULLANICI:
+politikaya göre kendi adına fazla mesai girişi yapabilir.
+Yöneticiler dahil.
+
+GENEL ekran:
+SELF-only.
+
+Çalışan adına fazla mesai:
+yalnız explicit permission sahibi yönetici,
+employee detail üzerinden yapabilir/silebilir.
+
+Tenant policy:
+- self + manager
+veya
+- manager-only
+seçebilir.
+
+ONAY:
+Employee-specific approver route kullanılabilir.
+
+Onay/redden sonra mail:
+- tarih
+- onaylandı/reddedildi
+kurumsal metin.
+
+Mailde parasal/izin karşılığı yazmak zorunlu değil.
+Tercihen yazılmayabilir.
+
+COMPENSATION:
+Onaylanan fazla mesainin gerçek sonucu olmalı.
+
+Türler:
+- TIME_OFF
+- PAY
+
+TIME_OFF örnek:
+Policy:
+0-24 saat → x1.5
+
+Employee:
+3 saat approved overtime
+
+Sonuç:
+4.5 saat "Serbest Zaman" kredisi.
+
+Bu credit leave/time-off ledger'a event olarak yazılır.
+
+PAY örnek:
+Policy:
+net veya brüt maaş tabanı
+salary / divisor × overtime hours × multiplier
+
+Örnek:
+Net maaş 50.000
+divisor 225
+1 saat
+x1.0
+
+= 222.22 TL
+
+AMA:
+225 global hard-coded DEĞİL.
+tenant/country/payroll rule'dan gelmeli.
+
+PERIODS:
+minimum 1
+maximum 9
+
+Her period:
+- min_minutes
+- max_minutes
+- multiplier
+
+Örnek:
+0–59 dk → x1
+60–480 dk → x1.5
+
+Overlap yasak.
+Negatif aralık yasak.
+Multiplier > 0.
+
+Approver multiplier'ı keyfi değiştiremez.
+Override gerekiyorsa ayrı permission + audit gerekir.
+
+======================================================================
+12. KOD / ENTEGRASYON KATALOĞU
+======================================================================
+
+Bütün configurable entity/rule/event'lerde machine-readable kod sistemi olmalı.
+
+Örnek:
+Yıllık izin:
+YILLIK_IZIN
+veya
+14441
+
+Fazla mesai:
+FM_NORMAL
+
+Serbest zaman:
+SERBEST_ZAMAN
+
+İşten çıkış:
+ISTIFA
+
+Bu kodlar:
+- raporlama
+- bordro
+- puantaj
+- muhasebe entegrasyonu
+- Excel/export
+için kullanılacak.
+
+ÇOK ÖNEMLİ:
+Kullanıcı görünür code sonradan değişebilir.
+Ama internal immutable ID değişmemeli.
+
+Geçmiş event:
+o tarihte kullanılan integration_code snapshot'ını saklamalı.
+
+Örnek:
+2026'da yillik_izin
+2027'de IZ001 olduysa
+2026 logları otomatik IZ001'e dönüşmemeli.
+
+======================================================================
+13. AUTHORIZATION / PERMISSIONS / UI VISIBILITY
+======================================================================
+
+TEMEL PRENSİP:
+Bir şeyi yapmak kadar görmek de yetkidir.
+
+UI'da gizlemek güvenlik değildir.
+Backend permission + scope source-of-truth.
+
+Normal employee yetkisi yoksa dashboard'da görmemeli:
+- Bakiyesi kritik çalışanlar
+- Karara bağlanan izinler
+- Yaklaşan izinler
+- HR/admin widgetları
+
+Normal employee yetkisi yoksa employee management'da görmemeli:
+- Yeni çalışan
+- İşten çıkış
+- Çıkış süreci
+- Askıya alınanlar
+vb.
+
+ROL YÖNETİMİ:
+Karmaşık 3 seçenek yerine tercihen:
+- Yetkileri Düzenle
+- Rolü Kaldır
+
+Rolü kaldır:
+confirmation ister.
+audit yazar.
+
+Bütün consequential işlemler:
+- sil
+- kaldır
+- onayla
+- reddet
+- işten çıkar
+- rol kaldır
+- document delete/archive
+vb.
+confirmation ister.
+
+======================================================================
+14. GENEL AUDIT / LOG POLİTİKASI
+======================================================================
+
+"Her şeyi logla" demek:
+anlamlı bütün business mutationları kaydet.
+
+Örnek:
+- employee create/update
+- department change
+- title change
+- manager change
+- contact change
+- PII change
+- leave request/create/approve/reject/cancel
+- overtime create/approve/reject/cancel
+- entitlement adjustment
+- role/permission change
+- document upload/delete
+- configuration change
+- holiday/calendar change
+- export
+- password reset event
+- storage policy change
+vb.
+
+Audit:
+- append-only
+- actor
+- target
+- action/code
+- timestamp
+- tenant
+- reason gerekiyorsa
+- safe diff
+
+Log görüntüleme de permission kontrollü.
+
+Employee:
+kendi izin verilen timeline olaylarını görebilir.
+
+HR/manager:
+permission + scope kadar görebilir.
+
+Sensitive values:
+classification kurallarına göre masked/no-value.
+
+======================================================================
+15. DIRECTORY / ORGANIZATION CHART
+======================================================================
+
+Bütün aktif çalışanlar şirket içi organizasyon/directory görebilir.
+
+Kişi başka departmanlardaki çalışanları da görebilir.
+
+Ama sadece tenant'ın yayınlamayı seçtiği directory-safe alanlar gösterilir.
+
+Örnek allowlist:
+- profile_photo
+- full_name
+- title
+- department
+- manager
+- work_email
+- extension_number
+
+Tenant admin:
+hangileri görünür seçebilir.
+
+Örnek:
+Fotoğraf ✓
+Ad Soyad ✓
+Unvan ✓
+Departman ✓
+Kurumsal mail ✓
+Dahili ✓
+Cep telefonu ✗
+TC ✗
+Maaş ✗
+
+Sensitive/private alanlar directory-safe allowlist'e giremez.
+
+PROFILE PHOTO:
+Employee profile photo olacak.
+Employee detail + directory + org chart'ta kullanılabilir.
+
+Storage P3 altyapısını kullanır.
+
+Varsayılan:
+employee kendi fotoğraf değişikliğini change-request olarak gönderir.
+Yetkili onaylar.
+Daha sonra tenant policy ile approval bypass değerlendirilebilir.
+
+======================================================================
+16. SELF-SERVICE PERSONAL DATA CHANGE REQUEST
+======================================================================
+
+Employee kendi izin verilen kişisel bilgilerini değişiklik talebiyle günceller.
+
+Doğrudan DB update YOK.
+
+Akış:
+Employee
+→ change request
+→ authorized approver
+→ approve/reject
+→ approve ise gerçek employee değerine uygulanır
+→ audit + timeline.
+
+Örnek:
+Telefon:
+555 → 666
+
+Timeline:
+"Telefon değişikliği talebi oluşturuldu"
+"Talep onaylandı"
+"Telefon değiştirildi"
+
+Tenant admin:
+hangi alanların self-service change-request'e açık olduğunu seçebilir.
+
+Açılabilecek örnekler:
+- personal phone
+- personal email
+- address
+- emergency contact
+- marital info
+
+Kilitli:
+- employee number
+- department
+- title
+- manager
+- tenant
+- status
+- security/system fields
+vb.
+
+======================================================================
+17. DOCUMENT / STORAGE
+======================================================================
+
+Çalışan genel personel dosyasına kendi kafasına göre dosya yükleyemez.
+
+Employee personnel documents:
+yalnız permission+scope sahibi HR/manager yükler.
+
+Employee yalnız workflow içinde kendi attachment'ını yükleyebilir.
+Örnek:
+leave request report.
+
+DOCUMENT TYPES:
+- sözleşme
+- kimlik/pasaport
+- diploma
+- sertifika
+- çalışma izni
+- ehliyet
+- profile photo
+- tenant custom document type
+vb.
+
+ONBOARDING:
+"Belgeler" bölümü olacak.
+
+Tenant:
+required/optional document types seçebilir.
+
+Conditional:
+ehliyet_var == true
+→ ehliyet belgesi required.
+
+Dosya custom field değildir.
+Document module'da tutulur.
+
+STORAGE:
+Platform superadmin:
+- tenant total quota
+- global single-file hard max
+- gerekiyorsa tenant-specific cap
+
+Tenant admin:
+yalnız izin verilen limitlerin altında seçim yapabilir.
+
+Quota:
+- quota_bytes
+- used_bytes
+- reserved_bytes
+- max_file_bytes
+
+Object storage:
+S3-compatible abstraction.
+
+PostgreSQL:
+binary değil yalnız metadata.
+
+Upload lifecycle:
+1. quota reserve
+2. pending metadata
+3. blob upload
+4. finalize
+5. başarısızsa reservation release + cleanup
+
+Güvenlik:
+- MIME allowlist
+- extension güven kaynağı değil
+- checksum
+- malware scan integration
+- filename sanitation
+- private objects
+- authorized/signed download
+- upload/download audit
+
+DELETE:
+soft/archive
+→ retention
+→ purge job
+→ physical blob delete.
+
+======================================================================
+18. PASSWORD RESET
+======================================================================
+
+Yetkili tenant manager/HR explicit permission ile employee-linked user parolasını resetleyebilir.
+
+İki akış:
+1. Parola sıfırlama e-postası gönder
+2. Yetkili kişi yeni parola belirler
+
+Kurallar:
+- explicit permission
+- same tenant
+- plaintext password loglanmaz
+- audit'te password yok
+- auth_version artırılır
+- eski session/token geçersiz
+- platform user bu tenant flow'a karışmaz
+
+======================================================================
+19. NOTIFICATION / EMAIL
+======================================================================
+
+Django-Q2 mevcut altyapı kullanılabilir.
+
+Email eventleri:
+- leave submitted
+- leave approved
+- leave rejected
+- leave canceled gerekiyorsa
+- overtime submitted
+- overtime approved
+- overtime rejected
+- password reset
+- ileride document/workflow eventleri
+
+Mail kurumsal ve sade.
+
+Leave approval mail:
+- karar
+- tarih aralığı
+- gün sayısı
+- gerekirse red nedeni
+
+Overtime approval mail:
+- tarih
+- karar
+- parasal/time-off karşılığı yazılmak zorunda değil
+
+Notification asenkron olabilir.
+Retry/idempotency düşünülmeli.
+
+======================================================================
+20. WORK HOURS / CONTRACTUAL HOURS
+======================================================================
+
+Haftalık/aylık çalışma süreleri global hard-coded olmayacak.
+
+Örnek:
+45 saat/hafta
+225 saat/ay
+
+Ama bunlar:
+- tenant
+- country
+- employment terms
+- effective date
+üzerinden configurable olmalı.
+
+EmployeeEmploymentTerms gibi effective-dated yapı kullanılmalı.
+
+Bu değerler ileride:
+- shift
+- PDKS
+- puantaj
+- overtime pay
+- payroll
+için kaynak olur.
+
+======================================================================
+21. VARDİYA
+======================================================================
+
+HR çekirdeği ve calendar tamamlandıktan sonra.
+
+Shift:
+çalışanın planlanan çalışma zamanıdır.
+
+Örnek:
+Pazartesi 09:00–18:00
+
+Shift template:
+- code
+- start
+- end
+- break
+- working minutes
+- overnight olabilir
+- active
+- effective date
+
+Shift assignment:
+employee/team/department bazlı olabilir.
+
+Calendar/public holiday ile çakışma kontrolü.
+
+Yetki + audit.
+
+======================================================================
+22. PDKS
+======================================================================
+
+PDKS = Personel Devam Kontrol Sistemi.
+
+Gerçek giriş/çıkış verisi.
+
+Örnek:
+Plan:
+09:00–18:00
+
+Gerçek:
+09:03 giriş
+18:14 çıkış
+
+Kaynak:
+- manuel
+- cihaz
+- API
+- import
+ileride configurable olabilir.
+
+PDKS ham event ile hesaplanmış attendance sonucu ayrı tutulmalı.
+
+Raw data silinmemeli/değişiklik auditli olmalı.
+
+======================================================================
+23. PUANTAJ
+======================================================================
+
+Puantaj:
+bir bordro dönemindeki zaman/hakediş özetidir.
+
+Örnek:
+- normal çalışma 180 saat
+- fazla mesai 12 saat
+- yıllık izin 5 gün
+- hastalık 2 gün
+- resmi tatil 1 gün
+- ücretsiz izin 1 gün
+
+Kaynak:
+- calendar
+- shift
+- PDKS
+- leave
+- overtime
+- manual authorized adjustments
+
+Puantaj finalize/lock mekanizması olmalı.
+
+Finalized dönem daha sonra sessizce değişmemeli.
+Düzeltme gerekiyorsa adjustment/reopen + audit.
+
+======================================================================
+24. COMPENSATION / SALARY HISTORY
+======================================================================
+
+Salary employee satırında tek mutable değer olmamalı.
+
+Effective-dated salary history.
+
+Alanlar:
+- gross/net basis
+- currency
+- effective_from
+- effective_to
+- pay frequency
+- contractual hours/divisor link
+- salary components
+vb.
+
+Geçmiş maaş overwrite edilmez.
+
+Bu overtime PAY hesabının temelidir.
+
+======================================================================
+25. AVANSLAR
+======================================================================
+
+Advance:
+- amount
+- currency
+- request date
+- approver
+- approval
+- payment date
+- payroll deduction period
+- status
+- audit
+
+Employee detail "Avanslar" sekmesi ileride.
+
+======================================================================
+26. BORDRO
+======================================================================
+
+Payroll dönem bazlı.
+
+Employee'da "salary paid=true" gibi boolean YOK.
+
+Payroll period:
+- month/period
+- employee
+- gross
+- net
+- overtime pay
+- leave effect
+- deductions
+- taxes
+- SGK/social contributions
+- bases/matrah
+- payable
+- status
+- finalized_at
+
+Country rules:
+global hard-coded değil.
+
+Türkiye:
+- SGK
+- gelir vergisi
+- damga
+- kıdem
+- ihbar
+- evlilik tazminatı
+- işe giriş/çıkış kodları
+vb.
+country-rule engine üzerinden.
+
+Bordro PDF üretimi ileride.
+
+======================================================================
+27. ÇALIŞAN RESMİ / İŞE GİRİŞ-ÇIKIŞ VERİLERİ
+======================================================================
+
+İleride payroll/official employment tarafında:
+
+- öğrenim bilgisi
+- meslek kodu
+- SGK/official identifier
+- işe giriş kodları
+- işten çıkış kodları
+- çalışma türü
+- sözleşme türü
+- diğer ülke-specific employment fields
+
+Tenant/country rules ile yönetilmeli.
+
+Türkiye-specific kodlar global modelin içine sabitlenmemeli.
+
+======================================================================
+28. MUHASEBE SaaS ENTEGRASYONU
+======================================================================
+
+Muhasebe SaaS bizim ayrı ürünümüz olacak.
+
+PersoPyro ile muhasebe ayrı bounded context/ürün olarak düşünülmeli.
+
+HR muhasebe fişi üretmeye zorlanmamalı.
+
+HR:
+finalized payroll/financial events üretir.
+
+Accounting:
+- hesap planı
+- yevmiye
+- muhasebe fişleri
+- borç/alacak
+- dönem
+- vergi/muhasebe raporları
+yönetir.
+
+Entegrasyon:
+stable internal IDs
++
+integration codes
++
+versioned contract.
+
+İdempotent olmalı.
+Aynı event iki kere gelirse çift kayıt üretmemeli.
+
+Muhasebeye ham PDKS değil,
+finalized puantaj/payroll finansal sonuçları gider.
+
+======================================================================
+29. TASARIM DİLİ
+======================================================================
+
+TailAdmin yalnız referans.
+
+İstenen görünüm:
+- modern SaaS/admin
+- sidebar/header
+- card layout
+- temiz form grid
+- status badges
+- tablolar
+- drawer/modal
+- sade border/radius/shadow
+- iyi spacing
+- desktop alanını verimli kullan
+- yaklaşık 1200–1400px içerik genişliği
+- gereksiz dar tek kolon yok
+- responsive
+
+Teknik jargon kullanıcıya gösterilmemeli.
+
+Gösterme:
+permission ∧ scope
+backend guard
+RBAC matematik dili
+
+Kullanıcı dili sade Türkçe olmalı.
+
+======================================================================
+30. SIRALI UYGULAMA PLANI
+======================================================================
+
+Hermes bu sırayı takip etsin.
+
+Her ADIMDAN sonra DUR ve kullanıcıdan ONAY AL.
+
+ADIM 1 — Mevcut dirty paketi kapatma
+- current git diff incele
+- mevcut uncommitted değişiklikleri sınıflandır
+- migration 0020 durumu
+- targeted regression
+- gerekirse package-close full suite/fresh-install
+- docs
+- commit
+- push yalnız kullanıcı onayıyla
+
+ADIM 2 — Leave decision immutable balance snapshot
+- final karar anı balance snapshot
+- detail görünümü
+- employee kendi snapshot'ı
+- authorized staff permissions
+- old records no fake backfill
+- timeline newest-first
+
+ADIM 3 — Termination UI/UX düzeltmesi
+- date picker
+- İşten Çıkış Kodu
+- Türkçe labels
+- modal
+- safe errors
+- confirmation
+- success/error feedback
+
+ADIM 4 — Reusable success/error + confirmation yaygınlaştırma
+- lifecycle
+- PII
+- department
+- roles
+- permissions
+- overtime
+- leave
+- delete/remove/approve
+
+ADIM 5 — Employee list/search/pagination/active-passive
+- server-side filtering
+- sensitive-aware search
+- department drilldown
+- active/passive
+- pagination
+
+ADIM 6 — Employee Excel export
+- configurable columns
+- permission-aware
+- audit
+- no sensitive leak
+
+ADIM 7 — Leave v2 authorization/workflow
+- SELF-only general request
+- manager-on-behalf from employee detail
+- withdraw permissions
+- leave type active/archive/delete
+- confirmation
+- logs
+- approver route configurable
+- manager picker only eligible users
+
+ADIM 8 — Leave email notifications
+- submit
+- approve
+- reject
+- cancel if needed
+- async/idempotent
+
+ADIM 9 — Leave policy configurability
+- entitlement policy
+- accrual policy
+- day-count policy
+- required documents
+- start/end weekday restrictions interface
+
+ADIM 10 — Work calendar/public holidays
+- work weekdays
+- leave-count weekdays
+- start/end restriction
+- public holidays
+- tenant calendar
+- permission/audit
+
+ADIM 11 — Employee 360 cleanup
+- Genel
+- İzinler
+- Fazla Mesai
+- Yaşananlar
+- Yetkiler
+- lazy partials
+- performance
+
+ADIM 12 — Directory/org chart
+- cross-department directory
+- configurable directory-safe fields
+- profile photo placeholder
+- TailAdmin-style layout
+
+ADIM 13 — Self-service personal-data change request
+- employee request
+- approver
+- approve/reject
+- apply
+- timeline
+- safe diff
+
+ADIM 14 — P3 Document/storage core
+- OD46/47/48 close
+- object storage abstraction
+- quota
+- upload lifecycle
+- security
+- retention
+
+ADIM 15 — Leave attachments + onboarding documents
+- requires_document backend enforcement
+- leave upload
+- employee personnel documents HR-only
+- conditional required documents
+
+ADIM 16 — Configurable onboarding / custom fields
+- system field config
+- custom fields
+- conditional logic
+- custom values
+- document requirements
+- preview
+- permissions
+
+ADIM 17 — Password reset
+- email reset
+- admin-set new password
+- permission
+- auth_version invalidate
+- audit
+
+ADIM 18 — Overtime v2
+- self vs manager entry policy
+- on-behalf permissions
+- configurable approver route
+- 1–9 periods
+- multipliers
+- TIME_OFF
+- PAY
+- email
+- timeline
+
+ADIM 19 — Integration code catalog
+- stable internal ID
+- editable machine code
+- historical code snapshot
+- reporting/accounting mapping
+
+ADIM 20 — Contractual work hours
+- weekly/monthly
+- effective-dated
+- tenant/country/terms
+
+ADIM 21 — Shift system
+- templates
+- assignments
+- calendar integration
+
+ADIM 22 — PDKS
+- entry/exit raw events
+- attendance
+- exceptions
+
+ADIM 23 — Puantaj
+- period aggregation
+- leave/overtime/calendar/PDKS merge
+- finalize/lock
+
+ADIM 24 — Compensation/salary history
+- effective-dated
+- gross/net
+- currency
+- components
+
+ADIM 25 — Advances
+- request
+- approval
+- payment
+- payroll deduction
+
+ADIM 26 — Payroll core
+- payroll period
+- salary
+- overtime
+- leave
+- deductions
+- taxes
+- social security
+- matrah
+- finalized payroll
+
+ADIM 27 — Country rule engine
+- Türkiye first if desired
+- country-specific employment/payroll rules
+- no global hard-code
+
+ADIM 28 — Payroll documents/reporting
+- payroll PDF
+- employee payroll view
+- Excel/reporting
+
+ADIM 29 — Accounting integration contract
+- event schema
+- integration codes
+- idempotency
+- mapping
+
+ADIM 30 — Own Accounting SaaS
+- separate bounded context
+- chart of accounts
+- journal
+- accounting entries
+- payroll posting
+- reporting
+
+======================================================================
+31. HERMES ONAY PROTOKOLÜ
+======================================================================
+
+Her adım şu formatta yürütülecek:
+
+1. Kullanıcının isteğini oku.
+2. `docs/AI_WORKING_RULES.md` kurallarını çalışma disiplini olarak uygula.
+3. Bu dosyadaki ilgili ADIM'ı bul.
+4. Sadece o adımı mikro görevlere böl.
+5. İlk mikro görevi uygula.
+6. Minimum targeted automated test çalıştır.
+7. Kullanıcıya kısa rapor ver.
+8. ŞUNU MUTLAKA SOR:
+
+"Bu mikro adımı onaylıyor musun?
+Onay verirsen sonraki mikro adıma geçeceğim."
+
+9. Kullanıcı EVET/DEVAM demeden:
+- sonraki task
+- full suite
+- docs
+- commit
+- push
+yapma.
+
+Kullanıcı manuel test yapmak isterse DUR.
+
+Kullanıcı bug bildirirse:
+- yeni mikro task oluştur
+- yalnız bugı çöz
+- sonra tekrar onay iste.
+
+======================================================================
+32. KULLANICIYLA İLETİŞİM KURALI
+======================================================================
+
+Kullanıcı başlangıç seviyesinde olabilir.
+Teknik raporları sade Türkçe yaz.
+
+Kullanıcı konuşurken/karar verirken gereksiz yeni fikir üretme.
+
+Ürün kararı gerçekten eksikse:
+Hermes aynı terminal içinde kullanıcıya tek, kısa soru sorsun.
+
+Örnek:
+"Reddedilen izinlerde de karar anı bakiye snapshot'ı tutulmasını ister misin?"
+
+Kullanıcının başka bir AI'ya gidip prompt almasını isteme.
+
+Bu dosya ve repo docs source-of-truth olarak kullanılacak.
+
+======================================================================
+33. DEĞİŞMEZ GÜVENLİK KURALLARI
+======================================================================
+
+- Tenant dışına veri sızmaz.
+- Scope dışı entity mümkünse 404/fail-closed.
+- Self-elevation yasak.
+- Platform rolü tenant PII'ya otomatik erişmez.
+- BYPASSRLS yok.
+- Sensitive values yalnız gereken permission ile.
+- UI visibility güvenlik değildir.
+- Backend enforcement zorunlu.
+- Audit append-only.
+- Password/token/secret loglanmaz.
+- File objects public değildir.
+- Destructive action confirmation ister.
+- Historical records overwrite edilmez.
+- Financial/payroll finalized records silent-edit edilmez.
+
+======================================================================
+34. SON NOT
+======================================================================
+
+Bu plan canlıdır.
+
+Kullanıcı yeni ihtiyaç söyledikçe:
+- mevcut sıraya uygun yere ekle
+- önceki kararla çelişiyorsa bunu açıkça belirt
+- eski kararı supersede et
+- sessizce iki farklı kural bırakma
+
+Ama kullanıcı onayı olmadan büyük roadmap sırasını değiştirme.
+
+HER ZAMAN:
+KÜÇÜK GÖREV
+→ MİNİMUM TEST
+→ KISA RAPOR
+→ KULLANICI ONAYI
+→ SONRAKİ GÖREV

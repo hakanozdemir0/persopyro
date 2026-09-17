@@ -22,10 +22,11 @@ import uuid
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.db import transaction
-from django.db.models import Q
+from django.db import DatabaseError, transaction
+from django.db.models import Count, Prefetch, Q
 from django.http import Http404
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import exceptions as drf_exceptions
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
@@ -40,7 +41,7 @@ from apps.accounts.auth_version import (
     oturum_auth_version_dogrula,
 )
 from apps.accounts.models import UserStatus
-from apps.common.crypto import SecretDecryptionError
+from apps.common.crypto import SecretDecryptionError, decrypt_str, encrypt_str
 from apps.leave.leave_type_catalog import LeaveCategory
 from apps.leave.models import (
     ApprovalStep,
@@ -64,6 +65,7 @@ from apps.leave.services import (
     can_approve_step,
     can_cancel_leave_request,
     can_create_leave_request_for,
+    direct_reports,
     can_manage_balances,
     can_manage_leave_types,
     can_view_leave_request,
@@ -72,8 +74,10 @@ from apps.leave.services import (
     create_leave_type,
     current_step,
     deactivate_leave_type,
+    activate_leave_type,
     decide_approval_step,
     update_leave_policy,
+    update_leave_type,
     user_employee,
 )
 from apps.leave.services.balances import (
@@ -82,18 +86,24 @@ from apps.leave.services.balances import (
     period_year_for,
     set_leave_entitlement,
 )
-from apps.organization.history import employee_history
+from apps.organization.history import employee_history, timeline_sayfa
 from apps.organization.lifecycle import (
     LifecycleStateError,
     LifecycleValidationError,
-    archive_employee,
     change_manager,
     notice_etiketi,
     restore_employee,
     suspend_employee,
     terminate_employee,
 )
-from apps.organization.models import BloodType, Department, Employee, Position
+from apps.organization.models import (
+    BloodType,
+    Department,
+    Employee,
+    EmployeeManager,
+    FormFieldDefinition,
+    Position,
+)
 from apps.organization.services import (
     OrganizationAuthorizationError,
     OrganizationError,
@@ -113,6 +123,7 @@ from apps.organization.services import (
 from apps.overtime.models import (
     OVERTIME_MAX_MINUTES,
     OvertimeRequest,
+    OvertimeRule,
     OvertimeStatus,
 )
 from apps.overtime.services import (
@@ -125,8 +136,12 @@ from apps.overtime.services import (
     can_create_overtime_for,
     can_view_overtime,
     cancel_overtime_request,
+    create_overtime_rule,
     create_overtime_request,
+    delete_overtime_rule,
     decide_overtime_request,
+    list_overtime_rules,
+    update_overtime_rule,
 )
 from apps.overtime.services import (
     current_step as current_overtime_step,
@@ -155,14 +170,23 @@ from apps.rbac.services import (
     update_role_permissions,
     user_has_permission,
 )
-from apps.rbac.services.scope import user_org_scope
+from apps.rbac.services.scope import object_in_org_scope, user_org_scope
 from apps.testui.labels import (
     MODUL_ACIKLAMALARI,
+    izin_aciklamasi,
     istisna_etiketi,
     kapsam_metni,
     kapsam_tipi_etiketi,
     modul_etiketi,
 )
+
+
+def _sayfa_no(request, varsayilan: int = 1) -> int:  # noqa: ANN001
+    """`?page=N` parametresini güvenli sayfa numarasına çevirir (min 1)."""
+    try:
+        return max(1, int(request.query_params.get("page", varsayilan)))
+    except (TypeError, ValueError):
+        return varsayilan
 
 
 def _test_ui_kapali() -> None:
@@ -307,7 +331,7 @@ def _tarih(deger, alan: str):  # noqa: ANN001, ANN202
     try:
         return date.fromisoformat(str(deger))
     except ValueError as hata:
-        raise LeaveError(f"'{alan}' GG-AA-YYYY biçiminde olmalı.") from hata
+        raise LeaveError(f"'{alan}' YYYY-AA-GG (ISO) biçiminde olmalı.") from hata
 
 
 def _saat(deger, alan: str):  # noqa: ANN001, ANN202
@@ -352,6 +376,20 @@ def kapsamdaki_calisanlar(user):  # noqa: ANN001, ANN202
     kapsam = user_org_scope(user)
     temel = Employee.objects.filter(deleted_at__isnull=True).select_related(
         "department", "position", "user", "tenant"
+    ).prefetch_related(
+        # P1-B performans: liste satırı başına manager-relation sorgusunu (N+1)
+        # önler. Prefetch edilmiş related manager üzerinde `.filter()` cache'i
+        # kullanmadığı için filtre/sıralama **queryset'te** yapılır ve sonuç
+        # `to_attr` ile taşınır (`_calisan_ozeti` bu listeden okur).
+        Prefetch(
+            "manager_relations",
+            queryset=EmployeeManager.objects.filter(
+                relation_type="primary", effective_to__isnull=True, deleted_at__isnull=True
+            )
+            .select_related("manager_employee")
+            .order_by("-effective_from"),
+            to_attr="birincil_yonetici_iliskileri",
+        )
     )
     if kapsam.tenant_wide:
         return temel
@@ -393,20 +431,35 @@ def _calisan_ozeti(employee: Employee, izin_durumu: dict | None = None) -> dict:
         izin_durumu = _izin_durumu_haritasi([employee]).get(
             employee.pk, {"izinde": False, "kalan_gun": None, "isaret": "yok", "bitis": None}
         )
-    iliski = (
-        employee.manager_relations.filter(
-            relation_type="primary", effective_to__isnull=True, deleted_at__isnull=True
+    if hasattr(employee, "birincil_yonetici_iliskileri"):
+        # Prefetch edilmiş (liste yolu): filtre/sıralama queryset'te yapıldı,
+        # satır başına ek sorgu yok.
+        iliskiler = employee.birincil_yonetici_iliskileri
+        iliski = iliskiler[0] if iliskiler else None
+    else:
+        # Prefetch yoksa (ör. tekil detay yolu) mevcut sorgu korunur.
+        iliski = (
+            employee.manager_relations.filter(
+                relation_type="primary", effective_to__isnull=True, deleted_at__isnull=True
+            )
+            .select_related("manager_employee")
+            .order_by("-effective_from")
+            .first()
         )
-        .select_related("manager_employee")
-        .order_by("-effective_from")
-        .first()
-    )
     return {
         "id": str(employee.pk),
         "employee_no": employee.employee_no,
         # P1-B: liste filtreleri (çıkış süreci / askıda sekmeleri) için türetilmiş alanlar.
         "termination_date": (
             employee.termination_date.isoformat() if employee.termination_date else None
+        ),
+        # Çıkış süreci tablosu ("Çalışanlar → İşten Çıkış / Çıkış Süreci") tarihi
+        # sunucudan hazır okunur biçimde gösterir; liste satırında `lifecycle`
+        # bulunmadığı için tarih burada türetilir (kaynak tek: termination_date).
+        "termination_date_display": (
+            employee.termination_date.strftime("%d.%m.%Y")
+            if employee.termination_date
+            else None
         ),
         # Unvan (position) ile birim (department) ayrı kavramlardır (M10/M12):
         # arayüzde ikisi ayrı satırda gösterilir.
@@ -438,6 +491,37 @@ def _calisan_ozeti(employee: Employee, izin_durumu: dict | None = None) -> dict:
             if iliski is not None
             else None
         ),
+    }
+
+
+def _departman_calisan_ozeti(employee: Employee, acik_alanlar: list[FormFieldDefinition]) -> dict:
+    """Şirket içi dizin için ad, kurumsal e-posta ve açık iş bilgileri."""
+    kayit = getattr(employee, "personal_data", None)
+    ozel = (getattr(kayit, "custom_fields", {}) or {}) if kayit is not None else {}
+    alanlar = []
+    for alan in acik_alanlar:
+        if alan.data_class == "K3":
+            continue
+        deger = getattr(kayit, alan.field_code, None) if alan.field_code in PII_ALANLARI else ozel.get(alan.field_code)
+        if deger not in (None, ""):
+            alanlar.append({"code": alan.field_code, "label": _form_alani_yanit(alan)["label"], "value": str(deger)})
+    ad = f"{employee.user.first_name} {employee.user.last_name}".strip() if employee.user_id else employee.employee_no
+    iliski = (getattr(employee, "departman_yonetici_iliskileri", []) or [])
+    yonetici = iliski[0].manager_employee if iliski else None
+    return {
+        "id": str(employee.pk),
+        "employee_no": employee.employee_no,
+        "name": ad or employee.employee_no,
+        "email": employee.user.email if employee.user_id else None,
+        "department_id": str(employee.department_id) if employee.department_id else None,
+        "department": employee.department.name if employee.department_id else None,
+        "position": employee.position.name if employee.position_id else None,
+        "manager": (
+            f"{yonetici.user.first_name} {yonetici.user.last_name}".strip()
+            if yonetici is not None and yonetici.user_id
+            else (yonetici.employee_no if yonetici is not None else None)
+        ),
+        "public_fields": alanlar,
     }
 
 
@@ -574,6 +658,95 @@ def _onay_adimlari(talep) -> list[dict]:  # noqa: ANN001
     ]
 
 
+def _bakiye_degerleri_gorunur(user, employee) -> bool:  # noqa: ANN001
+    """İzin bakiyesi **değerlerini** görme: `leave.balance.read` ∧ kapsam (fail-closed)."""
+    if employee is None:
+        return False
+    return user_has_permission(user, "leave.balance.read") and object_in_org_scope(
+        user,
+        department_id=employee.department_id,
+        owner_user_id=employee.user_id,
+    )
+
+
+def _karar_bakiye_ozeti(talep, user) -> dict:  # noqa: ANN001
+    """
+    **Karar anındaki** izin bakiyesi (immutable snapshot) özeti.
+
+    * Değerler yalnız `leave.balance.read` ∧ kapsam sahibine döner; aksi halde
+      yanıta **konmaz** (`gorunur=False`, tüm değer alanları `None`).
+    * Snapshot yoksa **backfill yapılmaz**: bugünkü bakiye geçmişmiş gibi
+      gösterilmez; arayüz "Karar anı bakiyesi kayıtlı değil" der (`var=False`).
+    * Alanlar `leave_balances` semantiğiyle aynıdır; yeni kavram üretilmez.
+    """
+    snapshot = getattr(talep, "decision_snapshot", None)
+    gorunur = _bakiye_degerleri_gorunur(user, talep.employee)
+    ozet = {
+        "var": snapshot is not None,
+        "gorunur": bool(gorunur and snapshot is not None),
+        "uses_balance": snapshot.uses_balance if snapshot is not None else None,
+        "snapshot_at": (
+            snapshot.snapshot_at.isoformat()
+            if snapshot is not None and gorunur
+            else None
+        ),
+        "entitled_days": None,
+        "carried_forward_days": None,
+        "adjustment_days": None,
+        "hak_toplam": None,
+        "used_days": None,
+        "reserved_days": None,
+        "available_days": None,
+    }
+    if snapshot is None or not gorunur:
+        return ozet
+
+    def metin(alan: str):  # noqa: ANN202
+        deger = getattr(snapshot, alan)
+        return None if deger is None else str(deger)
+
+    hak = [snapshot.entitled_days, snapshot.carried_forward_days, snapshot.adjustment_days]
+    ozet.update(
+        {
+            "entitled_days": metin("entitled_days"),
+            "carried_forward_days": metin("carried_forward_days"),
+            "adjustment_days": metin("adjustment_days"),
+            "hak_toplam": (
+                str(sum(hak, Decimal("0.0"))) if all(d is not None for d in hak) else None
+            ),
+            "used_days": metin("used_days"),
+            "reserved_days": metin("reserved_days"),
+            "available_days": metin("available_days"),
+        }
+    )
+    return ozet
+
+
+def _karar_gerekcesi(talep) -> str | None:  # noqa: ANN001
+    """
+    Karara bağlanan adımın gerekçesi (red gerekçesi dahil); yoksa None.
+
+    Kaynak `approval_steps.decision_reason`: red durumunda **reddeden** adımın,
+    onay durumunda karara bağlanmış adımların gerekçesi okunur (iptal edilen
+    adımların "Talep reddedildi" metni karar gerekçesi sayılmaz).
+    """
+    hedef_durum = (
+        ApprovalStepStatus.REJECTED
+        if talep.status == LeaveRequestStatus.REJECTED
+        else ApprovalStepStatus.APPROVED
+    )
+    gerekce = (
+        ApprovalStep.objects.filter(
+            subject_id=talep.pk, status=hedef_durum, deleted_at__isnull=True
+        )
+        .exclude(decision_reason="")
+        .order_by("-step_no")
+        .values_list("decision_reason", flat=True)
+        .first()
+    )
+    return gerekce or None
+
+
 def _talep_ozeti(talep, user, bakiye_dahil: bool = False) -> dict:  # noqa: ANN001
     adim = current_step(talep)
     kendi_employee_id = getattr(user_employee(user), "pk", None)
@@ -589,12 +762,21 @@ def _talep_ozeti(talep, user, bakiye_dahil: bool = False) -> dict:  # noqa: ANN0
         "leave_type_code": talep.leave_type.code,
         "start_date": talep.start_date.isoformat(),
         "end_date": talep.end_date.isoformat(),
+        "start_time": talep.start_time.isoformat() if talep.start_time else None,
+        "end_time": talep.end_time.isoformat() if talep.end_time else None,
         "days_requested": str(talep.days_requested),
         "status": talep.status,  # gerçek durum kodu (kapalı küme)
         "status_label": talep.get_status_display(),  # Türkçe karşılığı (sunum)
         "reason": talep.reason,
         "submitted_at": talep.submitted_at.isoformat() if talep.submitted_at else None,
         "decided_at": talep.decided_at.isoformat() if talep.decided_at else None,
+        "karar_veren": (
+            _onaylayici_gosterimi(talep.decided_by)["etiket"] if talep.decided_by_id else None
+        ),
+        # Karar detayı (M14/K): karar gerekçesi + **karar anı** bakiyesi (snapshot).
+        # Bugünkü bakiye burada gösterilmez; snapshot yoksa değer dönmez.
+        "karar_gerekcesi": _karar_gerekcesi(talep),
+        "karar_bakiye": _karar_bakiye_ozeti(talep, user),
         "canceled_at": talep.canceled_at.isoformat() if talep.canceled_at else None,
         "requires_document": talep.leave_type.requires_document,
         "document_ref": str(talep.document_ref) if talep.document_ref else None,
@@ -605,6 +787,16 @@ def _talep_ozeti(talep, user, bakiye_dahil: bool = False) -> dict:  # noqa: ANN0
         "siradaki_onaylayici": siradaki,
         "kendi_talebi": kendi_employee_id is not None
         and talep.employee_id == kendi_employee_id,
+        "can_edit": (
+            kendi_employee_id is not None
+            and talep.employee_id == kendi_employee_id
+            and talep.status in (
+                LeaveRequestStatus.DRAFT,
+                LeaveRequestStatus.PENDING,
+                LeaveRequestStatus.APPROVED,
+            )
+            and can_cancel_leave_request(user, talep)
+        ),
         "can_approve": can_approve_step(user, adim, talep),
         "can_cancel": can_cancel_leave_request(user, talep),
         "can_view": can_view_leave_request(user, talep),
@@ -695,12 +887,12 @@ def _yillik_ozet(employee, yil: int | None = None) -> dict:  # noqa: ANN001
         "period_year": bakiye.period_year,
         "leave_type": bakiye.leave_type.name,
         "leave_type_code": bakiye.leave_type.code,
-        "entitled_days": str(bakiye.entitled_days),
-        "carried_forward_days": str(bakiye.carried_forward_days),
-        "adjustment_days": str(bakiye.adjustment_days),
-        "used_days": str(bakiye.used_days),
-        "reserved_days": str(bakiye.reserved_days),
-        "available_days": str(bakiye.available_days),
+        "entitled_days": _gun_metin(bakiye.entitled_days),
+        "carried_forward_days": _gun_metin(bakiye.carried_forward_days),
+        "adjustment_days": _gun_metin(bakiye.adjustment_days),
+        "used_days": _gun_metin(bakiye.used_days),
+        "reserved_days": _gun_metin(bakiye.reserved_days),
+        "available_days": _gun_metin(bakiye.available_days),
         "mesaj": "",
     }
 
@@ -754,8 +946,6 @@ def _lifecycle_ozeti(user, calisan: Employee) -> dict:  # noqa: ANN001
             and user_has_permission(user, "employee.restore"),
             "terminate": calisan.status in ("active", "suspended")
             and user_has_permission(user, "employee.terminate"),
-            "archive": calisan.status == "terminated"
-            and user_has_permission(user, "employee.delete"),
             "history": user_has_permission(user, "employee.history.read"),
         },
         "gecisler": sorted(_IZINLI.get(calisan.status, frozenset())),
@@ -791,6 +981,11 @@ def _atama_getir(assignment_id) -> UserRole:  # noqa: ANN001
     return atama
 
 
+def _gun_metin(deger) -> str:  # noqa: ANN001
+    """Gün tabanlı eski UI sözleşmesini tek ondalıkla korur."""
+    return str(Decimal(deger).quantize(Decimal("0.1")))
+
+
 def _bakiye_ozeti(bakiye: LeaveBalance) -> dict:  # noqa: ANN001
     """
     Bakiye — türetilen değerler **backend'den** gelir (üretilen kolon).
@@ -799,17 +994,31 @@ def _bakiye_ozeti(bakiye: LeaveBalance) -> dict:  # noqa: ANN001
     (`next_accrual_date`); arayüz hesap yapmaz, yalnız gösterir.
     """
     sonraki = next_accrual_date(bakiye.employee.hire_date) if bakiye.employee_id else None
+    saatli = bakiye.leave_type.is_time_based and bakiye.leave_type.workday_minutes
+    saat = lambda deger: (
+        str((Decimal(deger) * Decimal(bakiye.leave_type.workday_minutes) / Decimal("60")).normalize())
+        if saatli and deger is not None else None
+    )
+    gun = lambda deger: _gun_metin(deger) if deger is not None else None
     return {
         "leave_type": bakiye.leave_type.name,
         "leave_type_code": bakiye.leave_type.code,
         "leave_type_id": str(bakiye.leave_type_id),
         "period_year": bakiye.period_year,
-        "entitled_days": str(bakiye.entitled_days),
-        "carried_forward_days": str(bakiye.carried_forward_days),
-        "adjustment_days": str(bakiye.adjustment_days),
-        "used_days": str(bakiye.used_days),
-        "reserved_days": str(bakiye.reserved_days),
-        "available_days": str(bakiye.available_days),
+        "entitled_days": gun(bakiye.entitled_days),
+        "carried_forward_days": gun(bakiye.carried_forward_days),
+        "adjustment_days": gun(bakiye.adjustment_days),
+        "used_days": gun(bakiye.used_days),
+        "reserved_days": gun(bakiye.reserved_days),
+        "available_days": gun(bakiye.available_days),
+        "is_time_based": bool(saatli),
+        "workday_minutes": bakiye.leave_type.workday_minutes if saatli else None,
+        "entitled_hours": saat(bakiye.entitled_days),
+        "carried_forward_hours": saat(bakiye.carried_forward_days),
+        "adjustment_hours": saat(bakiye.adjustment_days),
+        "used_hours": saat(bakiye.used_days),
+        "reserved_hours": saat(bakiye.reserved_days),
+        "available_hours": saat(bakiye.available_days),
         "sonraki_hakedis": sonraki.isoformat() if sonraki else None,
         "sonraki_hakedis_metin": sonraki.strftime("%d.%m.%Y") if sonraki else None,
     }
@@ -861,6 +1070,12 @@ def _izin_haklari_listesi(employee, yil: int) -> list[dict]:  # noqa: ANN001
                     "kalan": None,
                     "sonraki_hakedis_metin": None,
                     "mesaj": "Bu dönem için hak tanımlanmamış.",
+                    "is_time_based": tur.is_time_based,
+                    "workday_minutes": tur.workday_minutes,
+                    "hak_toplam_hours": None,
+                    "used_hours": None,
+                    "reserved_hours": None,
+                    "kalan_hours": None,
                 }
             )
             continue
@@ -881,13 +1096,31 @@ def _izin_haklari_listesi(employee, yil: int) -> list[dict]:  # noqa: ANN001
                 "period_year": yil,
                 "hakedis_var": True,
                 "hakedis_tanimli": hakedis_tanimli,
-                "hak_toplam": str(hak_toplam),
-                "entitled_days": str(bakiye.entitled_days),
-                "carried_forward_days": str(bakiye.carried_forward_days),
-                "adjustment_days": str(bakiye.adjustment_days),
-                "used_days": str(bakiye.used_days),
-                "reserved_days": str(bakiye.reserved_days),
-                "kalan": str(bakiye.available_days),
+                "hak_toplam": _gun_metin(hak_toplam) if not tur.is_time_based else str(hak_toplam),
+                "entitled_days": _gun_metin(bakiye.entitled_days) if not tur.is_time_based else str(bakiye.entitled_days),
+                "carried_forward_days": _gun_metin(bakiye.carried_forward_days) if not tur.is_time_based else str(bakiye.carried_forward_days),
+                "adjustment_days": _gun_metin(bakiye.adjustment_days) if not tur.is_time_based else str(bakiye.adjustment_days),
+                "used_days": _gun_metin(bakiye.used_days) if not tur.is_time_based else str(bakiye.used_days),
+                "reserved_days": _gun_metin(bakiye.reserved_days) if not tur.is_time_based else str(bakiye.reserved_days),
+                "kalan": _gun_metin(bakiye.available_days) if not tur.is_time_based else str(bakiye.available_days),
+                "is_time_based": tur.is_time_based,
+                "workday_minutes": tur.workday_minutes if tur.is_time_based else None,
+                "hak_toplam_hours": (
+                    str((hak_toplam * Decimal(tur.workday_minutes) / Decimal("60")).normalize())
+                    if tur.is_time_based and tur.workday_minutes else None
+                ),
+                "used_hours": (
+                    str((Decimal(bakiye.used_days) * Decimal(tur.workday_minutes) / Decimal("60")).normalize())
+                    if tur.is_time_based and tur.workday_minutes else None
+                ),
+                "reserved_hours": (
+                    str((Decimal(bakiye.reserved_days) * Decimal(tur.workday_minutes) / Decimal("60")).normalize())
+                    if tur.is_time_based and tur.workday_minutes else None
+                ),
+                "kalan_hours": (
+                    str((Decimal(bakiye.available_days) * Decimal(tur.workday_minutes) / Decimal("60")).normalize())
+                    if tur.is_time_based and tur.workday_minutes else None
+                ),
                 "sonraki_hakedis_metin": sonraki.strftime("%d.%m.%Y") if sonraki else None,
                 "mesaj": "",
             }
@@ -976,6 +1209,9 @@ def _fazla_mesai_ozeti(talep, user) -> dict:  # noqa: ANN001
         "total_minutes": talep.total_minutes,
         "sure_metin": _sure_metin(talep.total_minutes),
         "description": talep.description,
+        "overtime_rule_id": str(talep.overtime_rule_id) if talep.overtime_rule_id else None,
+        "overtime_rule_code": talep.overtime_rule.code if talep.overtime_rule_id else None,
+        "overtime_rule_name": talep.overtime_rule.name if talep.overtime_rule_id else None,
         "status": talep.status,
         "status_label": talep.get_status_display(),
         "compensation_type": talep.compensation_type,
@@ -1000,7 +1236,7 @@ def _fazla_mesai_getir(user, talep_id):  # noqa: ANN001
     kimlik = _uuid(talep_id, "overtime_id")
     talep = (
         OvertimeRequest.objects.filter(pk=kimlik, deleted_at__isnull=True)
-        .select_related("employee__department", "employee__user", "decided_by")
+        .select_related("employee__department", "employee__user", "decided_by", "overtime_rule")
         .first()
     )
     if talep is None or not can_view_overtime(user, talep):
@@ -1018,7 +1254,7 @@ def _gorunur_fazla_mesailer(user):  # noqa: ANN001, ANN202
         return []
     kayitlar = (
         OvertimeRequest.objects.filter(deleted_at__isnull=True)
-        .select_related("employee__department", "employee__user", "decided_by")
+        .select_related("employee__department", "employee__user", "decided_by", "overtime_rule")
         .order_by("-work_date", "-start_time")[:200]
     )
     return [t for t in kayitlar if can_view_overtime(user, t)]
@@ -1035,6 +1271,18 @@ class MeView(TestUiView):
         roller = _kullanicinin_rolleri(user)
         calisan = user_employee(user)
         izinler = sorted(effective_permission_codes(user))
+        arayuz_izinleri = {kod for kod in izinler if kod.startswith("ui.")}
+
+        def arayuz_menu(kod: str, eski_kod: str | tuple[str, ...] | None = None) -> bool:
+            # Migration uygulanmamış/yeni kiracıda mevcut menü davranışı korunur;
+            # en az bir ui kodu tanımlandığında görünürlük yalnız ui koduna bağlıdır.
+            eski_kodlar = (eski_kod,) if isinstance(eski_kod, str) else (eski_kod or ())
+            return (
+                user_has_permission(user, kod)
+                if arayuz_izinleri
+                else any(user_has_permission(user, eski) for eski in eski_kodlar)
+            )
+
         return Response(
             {
                 "data": {
@@ -1050,6 +1298,26 @@ class MeView(TestUiView):
                     "employee": _calisan_ozeti(calisan) if calisan is not None else None,
                     "permissions": izinler,
                     "menu": {
+                        # Her ana sekmenin görünürlüğü backend yetki kararından
+                        # gelir; istemci yalnızca bu sonucu uygular.
+                        "panel": arayuz_menu("ui.panel.view", ("employee.read", "leave.request.read", "leave.request.create", "overtime.request.read", "role.manage")),
+                        "departments": arayuz_menu("ui.departments.view", "org.department.read"),
+                        "employees": arayuz_menu("ui.employees.view", "employee.read"),
+                        "employees_list": arayuz_menu("ui.employees.list", "employee.read"),
+                        "employees_new": arayuz_menu("ui.employees.new", "employee.create"),
+                        "employees_form": arayuz_menu("ui.employees.form", "employee.form.manage"),
+                        "employees_exit": arayuz_menu("ui.employees.exit", ("employee.terminate", "employee.restore")),
+                        "employees_suspended": arayuz_menu("ui.employees.suspended", ("employee.suspend", "employee.restore")),
+                        "leave": arayuz_menu("ui.leave.view", ("leave.request.read", "leave.request.create")),
+                        "leave_request": arayuz_menu("ui.leave.request", ("leave.request.read", "leave.request.create")),
+                        "leave_policy": arayuz_menu("ui.leave.policy", "leave.type.manage"),
+                        "leave_types": arayuz_menu("ui.leave.types", "leave.type.manage"),
+                        "leave_entitlements": arayuz_menu("ui.leave.entitlements", ("leave.balance.read", "leave.balance.manage")),
+                        "overtime": arayuz_menu("ui.overtime.view", ("overtime.request.read", "overtime.request.create")),
+                        "overtime_requests": arayuz_menu("ui.overtime.requests", ("overtime.request.read", "overtime.request.create")),
+                        "overtime_rules": arayuz_menu("ui.overtime.rules", "overtime.rule.read"),
+                        "approvals": arayuz_menu("ui.approvals.view", ("leave.request.approve", "overtime.request.approve")),
+                        "roles_view": arayuz_menu("ui.roles.view", ("role.read", "role.manage")),
                         "departments_manage": user_has_permission(user, "org.department.manage"),
                         "employees_create": user_has_permission(user, "employee.create"),
                         "leave_create": user_has_permission(user, "leave.request.create")
@@ -1177,7 +1445,9 @@ class DashboardView(TestUiView):
                     deleted_at__isnull=True,
                     status__in=[LeaveRequestStatus.APPROVED, LeaveRequestStatus.REJECTED],
                 )
-                .select_related("employee__department", "leave_type", "employee")
+                .select_related(
+                    "employee__department", "leave_type", "employee", "decision_snapshot"
+                )
                 .order_by("-decided_at")[:20]
             )
             if can_view_leave_request(user, t)
@@ -1282,9 +1552,37 @@ class DepartmentListView(TestUiView):
     """Departman ağacı (kiracı içi; mutasyon yetkisi servis katmanında)."""
 
     def get(self, request):  # noqa: ANN001
+        acik_alanlar = list(FormFieldDefinition.objects.filter(
+            tenant_id=request.user.tenant_id,
+            form_code="employee_onboarding",
+            deleted_at__isnull=True,
+            is_visible=True,
+            is_public=True,
+        ).order_by("sort_order", "created_at"))
+        calisanlar = list(Employee.objects.filter(
+            tenant_id=request.user.tenant_id,
+            deleted_at__isnull=True,
+        ).select_related("user", "department", "position").prefetch_related(
+            "personal_data",
+            Prefetch(
+                "manager_relations",
+                queryset=EmployeeManager.objects.filter(
+                    relation_type="primary", effective_to__isnull=True, deleted_at__isnull=True
+                ).select_related("manager_employee__user"),
+                to_attr="departman_yonetici_iliskileri",
+            ),
+        ))
         kayitlar = list(
             Department.objects.filter(deleted_at__isnull=True)
             .select_related("parent", "manager_employee")
+            .annotate(
+                # P1-B performans: birim başına ayrı COUNT (N+1) yerine tek sorgu.
+                employee_count_annotated=Count(
+                    "employees",
+                    filter=Q(employees__deleted_at__isnull=True),
+                    distinct=True,
+                )
+            )
             .order_by("code")
         )
         # `moves_for=<id>`: yalnızca o birimin **taşınabileceği** üst birimler
@@ -1307,7 +1605,7 @@ class DepartmentListView(TestUiView):
             ]
         return Response(
             {
-                "data": [
+                    "data": [
                     {
                         "id": str(d.id),
                         "code": d.code,
@@ -1318,10 +1616,11 @@ class DepartmentListView(TestUiView):
                         "manager_employee_no": (
                             d.manager_employee.employee_no if d.manager_employee_id else None
                         ),
-                        "employee_count": d.employees.filter(deleted_at__isnull=True).count(),
+                        "employee_count": d.employee_count_annotated,
                     }
-                    for d in kayitlar
-                ],
+                        for d in kayitlar
+                    ],
+                "employees": [_departman_calisan_ozeti(e, acik_alanlar) for e in calisanlar],
                 "meta": {
                     "can_manage": user_has_permission(request.user, "org.department.manage"),
                     "moves_for": str(hedef_id) if hedef_id else None,
@@ -1450,6 +1749,213 @@ def _dizin_kaydi(employee: Employee) -> dict:  # noqa: ANN001
     }
 
 
+def _form_alani_yanit(alan: FormFieldDefinition) -> dict:
+    etiket = alan.label_override or {
+        "first_name": "Ad", "last_name": "Soyad", "email": "Kurumsal e-posta",
+        "password": "Parola", "hire_date": "İşe giriş tarihi", "department_id": "Birim",
+        "employee_no": "Çalışan numarası", "status": "Durum", "position_id": "Unvan",
+        "manager_employee_id": "Bağlı olduğu yönetici", "employment_type": "İstihdam türü",
+        "working_model": "Çalışma modeli", "workplace_id": "İşyeri", "contract_type": "Sözleşme türü",
+        "contract_start_date": "Sözleşme başlangıç tarihi", "contract_end_date": "Sözleşme bitiş tarihi",
+        "probation_end_date": "Deneme süresi bitiş tarihi", "birth_date": "Doğum tarihi",
+        "national_id": "Kimlik numarası", "citizenship": "Vatandaşlık",
+        "personal_email": "Kişisel e-posta", "personal_phone": "Kişisel telefon",
+        "address": "Adres", "emergency_contact_phone": "Acil durum telefonu",
+        "emergency_contact_relation": "Acil durum yakını", "bank_name": "Banka adı",
+        "iban": "IBAN", "work_permit_type": "Çalışma izni",
+        "work_permit_valid_until": "Çalışma izni geçerlilik tarihi", "blood_type": "Kan grubu",
+        "health_notes": "Sağlık notları", "disability_status": "Engellilik durumu",
+        "biometric_ref": "Biyometrik referans",
+    }.get(alan.field_code, alan.field_code.removeprefix("custom_").replace("_", " ").title())
+    return {
+        "id": str(alan.pk),
+        "code": alan.field_code,
+        "label": etiket,
+        "field_type": alan.field_type,
+        "options": alan.options or [],
+        "layout_width": alan.layout_width,
+        "is_required": alan.is_required,
+        "is_visible": alan.is_visible,
+        "is_public": alan.is_public,
+        "section_label": alan.section_label,
+        "helper_text": alan.helper_text,
+        "sort_order": alan.sort_order,
+        "is_custom": alan.field_code.startswith("custom_"),
+        "active": alan.deleted_at is None and alan.is_visible,
+        "deleted": alan.deleted_at is not None,
+        "can_toggle": alan.lock_level != "A",
+        "lock_level": alan.lock_level,
+    }
+
+
+class EmployeeFormFieldListView(TestUiView):
+    """Yeni çalışan formuna tenant'a özel alan ekleme/düzenleme/kapatma."""
+
+    def _izin(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "employee.form.manage"):
+            raise TestUiAuthorizationError("Çalışan formu alanlarını yönetme izniniz yok.")
+
+    def get(self, request):  # noqa: ANN001
+        try:
+            self._izin(request)
+        except TestUiAuthorizationError as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({
+            "data": [
+                _form_alani_yanit(alan)
+                for alan in FormFieldDefinition.objects.filter(
+                    tenant_id=request.user.tenant_id,
+                    form_code="employee_onboarding",
+                ).order_by("sort_order", "created_at")
+            ]
+        })
+
+    def post(self, request):  # noqa: ANN001
+        try:
+            self._izin(request)
+            veri = request.data
+            etiket = str(veri.get("label") or "").strip()
+            tip = str(veri.get("field_type") or "text").strip().lower()
+            try:
+                genislik = int(veri.get("layout_width") or 1)
+            except (TypeError, ValueError):
+                raise LeaveError("Alan genişliği 1 ile 5 arasında olmalıdır.") from None
+            if genislik not in range(1, 6):
+                raise LeaveError("Alan genişliği 1 ile 5 arasında olmalıdır.")
+            if not etiket or len(etiket) > 190:
+                raise LeaveError("Alan etiketi 1-190 karakter olmalıdır.")
+            if tip not in OZEL_FORM_TIPLERI:
+                raise LeaveError("Alan tipi text, number, date veya select olmalıdır.")
+            secenekler = veri.get("options") or []
+            if isinstance(secenekler, str):
+                secenekler = [satir.strip() for satir in secenekler.splitlines() if satir.strip()]
+            if tip == "select":
+                if not isinstance(secenekler, list) or not secenekler:
+                    raise LeaveError("Seçim alanı için en az bir seçenek girilmelidir.")
+                secenekler = list(dict.fromkeys(str(x).strip() for x in secenekler if str(x).strip()))
+                if not secenekler:
+                    raise LeaveError("Seçim alanı için en az bir seçenek girilmelidir.")
+            else:
+                secenekler = []
+            kok = slugify(etiket, allow_unicode=False).replace("-", "_")[:40].strip("_")
+            if not kok:
+                raise LeaveError("Alan etiketi geçerli bir alan adı üretmiyor.")
+            kod = "custom_" + kok
+            if FormFieldDefinition.objects.filter(
+                tenant_id=request.user.tenant_id, form_code="employee_onboarding",
+                field_code=kod, deleted_at__isnull=True,
+            ).exists():
+                raise LeaveError("Bu etiketle bir özel alan zaten var.")
+            alan = FormFieldDefinition.objects.create(
+                tenant_id=request.user.tenant_id,
+                form_code="employee_onboarding",
+                field_code=kod,
+                section_code="custom",
+                section_label=str(veri.get("section_label") or "Özel bilgiler").strip()[:100],
+                sort_order=int(veri.get("sort_order") or 0),
+                is_visible=bool(veri.get("is_visible", True)),
+                is_public=bool(veri.get("is_public", False)),
+                is_required=bool(veri.get("is_required", False)),
+                label_override=etiket,
+                helper_text=str(veri.get("helper_text") or "").strip()[:300],
+                field_type=tip,
+                options=secenekler,
+                layout_width=genislik,
+                lock_level="B",
+                data_class="K2",
+                created_by=request.user,
+            )
+            from apps.audit.services import log_action  # noqa: PLC0415
+            log_action(
+                tenant_id=request.user.tenant_id, action="employee_form.field.create",
+                user=request.user, table_name="form_field_definitions", record_id=alan.pk,
+                changes={"field_code": kod, "field_type": tip},
+            )
+        except (LeaveError, TestUiAuthorizationError, ValueError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _form_alani_yanit(alan)}, status=status.HTTP_201_CREATED)
+
+
+class EmployeeFormFieldUpdateView(TestUiView):
+    def post(self, request, field_id: str):  # noqa: ANN001
+        try:
+            if not user_has_permission(request.user, "employee.form.manage"):
+                raise TestUiAuthorizationError("Çalışan formu alanlarını yönetme izniniz yok.")
+            alan = FormFieldDefinition.objects.filter(
+                pk=_uuid(field_id, "field_id"), tenant_id=request.user.tenant_id,
+                form_code="employee_onboarding",
+            ).first()
+            if alan is None:
+                raise LeaveError("Özel form alanı bulunamadı.")
+            veri = request.data
+            if alan.deleted_at is not None and veri.get("active") is not True:
+                raise LeaveError("Pasif özel alanı düzenlemek için önce aktifleştirin.")
+            if "active" in veri:
+                if alan.lock_level == "A" and not bool(veri["active"]):
+                    raise LeaveError("Sistem zorunlu alanı pasifleştirilemez.")
+                if bool(veri["active"]):
+                    alan.deleted_at = None
+                    alan.is_visible = True
+                else:
+                    alan.is_visible = False
+            if "label" in veri:
+                etiket = str(veri.get("label") or "").strip()
+                if not etiket or len(etiket) > 190:
+                    raise LeaveError("Alan etiketi 1-190 karakter olmalıdır.")
+                alan.label_override = etiket
+            if "is_required" in veri:
+                if alan.data_class == "K3" and bool(veri["is_required"]):
+                    raise LeaveError("Özel nitelikli kişisel veri alanı zorunlu yapılamaz.")
+                if alan.lock_level == "A" and not bool(veri["is_required"]):
+                    raise LeaveError("Sistem zorunlu alanı opsiyonel yapılamaz.")
+                alan.is_required = bool(veri["is_required"])
+            if "is_visible" in veri:
+                alan.is_visible = bool(veri["is_visible"])
+            if "is_public" in veri:
+                alan.is_public = bool(veri["is_public"])
+            if "helper_text" in veri:
+                alan.helper_text = str(veri.get("helper_text") or "").strip()[:300]
+            if "layout_width" in veri:
+                try:
+                    alan.layout_width = int(veri["layout_width"])
+                except (TypeError, ValueError):
+                    raise LeaveError("Alan genişliği 1 ile 5 arasında olmalıdır.") from None
+                if alan.layout_width not in range(1, 6):
+                    raise LeaveError("Alan genişliği 1 ile 5 arasında olmalıdır.")
+            if "options" in veri:
+                if alan.field_type != "select":
+                    raise LeaveError("Seçenekler yalnız seçim alanında kullanılabilir.")
+                secenekler = veri["options"]
+                if isinstance(secenekler, str):
+                    secenekler = [x.strip() for x in secenekler.splitlines() if x.strip()]
+                secenekler = list(dict.fromkeys(str(x).strip() for x in secenekler if str(x).strip()))
+                if not secenekler:
+                    raise LeaveError("Seçim alanında en az bir seçenek kalmalıdır.")
+                alan.options = secenekler
+            alan.save(update_fields=["label_override", "is_required", "is_visible", "is_public", "helper_text", "options", "layout_width", "deleted_at", "updated_at"])
+        except (LeaveError, TestUiAuthorizationError, ValueError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _form_alani_yanit(alan)})
+
+
+class EmployeeFormFieldDeleteView(TestUiView):
+    def post(self, request, field_id: str):  # noqa: ANN001
+        try:
+            if not user_has_permission(request.user, "employee.form.manage"):
+                raise TestUiAuthorizationError("Çalışan formu alanlarını yönetme izniniz yok.")
+            alan = FormFieldDefinition.objects.filter(
+                pk=_uuid(field_id, "field_id"), tenant_id=request.user.tenant_id,
+                form_code="employee_onboarding", field_code__startswith="custom_",
+            ).first()
+            if alan is None:
+                raise LeaveError("Özel form alanı bulunamadı.")
+            alan.deleted_at = timezone.now()
+            alan.save(update_fields=["deleted_at", "updated_at"])
+        except (LeaveError, TestUiAuthorizationError, ValueError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"deleted": True}})
+
+
 class EmployeeListView(TestUiView):
     """
     Kapsamdaki çalışanlar + oluşturma.
@@ -1463,6 +1969,7 @@ class EmployeeListView(TestUiView):
     def get(self, request):  # noqa: ANN001
         kendi = user_employee(request.user)
         kapsam = user_org_scope(request.user)
+        arama = str(request.query_params.get("q") or "").strip()
         # Kapsamı yalnızca **kendi kaydı** olan kullanıcı (ör. `employee`) şirket
         # dizinini görür: PII'siz kimlik bilgisi + unvan + birim ve kendi kaydı tam.
         # Böylece organizasyon şeması görünür ama başkalarının izin/bakiye detayları
@@ -1471,7 +1978,13 @@ class EmployeeListView(TestUiView):
             # Yalnız kendi kaydı (bildirim: "normal bir çalışan sadece kendini
             # görsün; diğer çalışanları ve numaralarını görmesine gerek yok").
             kayitlar = (
-                [{**_calisan_ozeti(kendi), "kendi_kaydim": True}] if kendi is not None else []
+                [{**_calisan_ozeti(kendi), "kendi_kaydim": True}]
+                if kendi is not None
+                and (
+                    request.query_params.get("include_departed") == "1"
+                    or kendi.status in ("active", "suspended")
+                )
+                else []
             )
             return Response(
                 {
@@ -1483,7 +1996,35 @@ class EmployeeListView(TestUiView):
                     },
                 }
             )
-        calisanlar = list(kapsamdaki_calisanlar(request.user))
+        calisan_sorgusu = kapsamdaki_calisanlar(request.user)
+        if request.query_params.get("for_leave") == "1":
+            # İzin formu organizasyon kapsamındaki tüm çalışanları değil,
+            # yalnızca aktörün kendisini ve aktif birincil bağlılarını gösterir.
+            calisan_sorgusu = calisan_sorgusu.filter(
+                pk__in=direct_reports(request.user), status="active"
+            )
+        if request.query_params.get("include_departed") != "1":
+            calisan_sorgusu = calisan_sorgusu.filter(
+                status__in=("active", "suspended")
+            )
+        if arama:
+            filtre = (
+                Q(employee_no__icontains=arama)
+                | Q(department__name__icontains=arama)
+                | Q(position__name__icontains=arama)
+                | Q(user__user_roles__role__name__icontains=arama)
+            )
+            # Ad/e-posta yalnızca hassas veri okuma yetkisi olan kapsamlı
+            # kullanıcılarda arama alanına girer; yetkisiz kullanıcıya PII
+            # üzerinden sonuç sızdırılmaz.
+            if user_has_permission(request.user, "employee.sensitive.read"):
+                filtre |= (
+                    Q(user__first_name__icontains=arama)
+                    | Q(user__last_name__icontains=arama)
+                    | Q(user__email__icontains=arama)
+                )
+            calisan_sorgusu = calisan_sorgusu.filter(filtre).distinct()
+        calisanlar = list(calisan_sorgusu)
         durumlar = _izin_durumu_haritasi(calisanlar)
         return Response(
             {
@@ -1501,6 +2042,8 @@ class EmployeeListView(TestUiView):
                     "can_create": user_has_permission(request.user, "employee.create"),
                     "scope": _kapsam_ozeti(request.user),
                     "self_only": False,
+                    "query": arama,
+                    "total": len(calisanlar),
                 },
             }
         )
@@ -1634,6 +2177,13 @@ class EmployeeListView(TestUiView):
                 # Kayıt formu K2 alanlarının tamamını + K3 (kan grubu) alanını toplar;
                 # yetki kapısı `_pii_yaz` içindedir (izin + kapsam), burada tekrarlanmaz.
                 pii = {a: veri[a] for a in (*PII_ALANLARI, *K3_ALANLARI) if a in veri}
+                _zorunlu_kisisel_form_alanlarini_dogrula(request.user.tenant_id, veri)
+                custom_fields = veri.get("custom_fields")
+                custom_values = _dogrula_ozel_form_degerleri(
+                    request.user, request.user.tenant_id, custom_fields
+                )
+                if custom_values:
+                    pii["custom_fields"] = custom_values
                 if pii:
                     _pii_yaz(request.user, calisan, pii)
                     for alan in ("first_name", "last_name"):
@@ -1658,7 +2208,6 @@ class EmployeeLifecycleView(TestUiView):
     * POST `/employees/<id>/suspend`   → suspend_employee (`employee.suspend`)
     * POST `/employees/<id>/restore`   → restore_employee (`employee.restore`)
     * POST `/employees/<id>/terminate` → terminate_employee (`employee.terminate`)
-    * POST `/employees/<id>/archive`   → archive_employee (`employee.delete` = arşiv)
 
     Gerekçe zorunludur; geçersiz geçiş 409, izin/kapsam reddi 403 döner.
     """
@@ -1667,7 +2216,6 @@ class EmployeeLifecycleView(TestUiView):
         "suspend": "employee.suspend",
         "restore": "employee.restore",
         "terminate": "employee.terminate",
-        "archive": "employee.delete",
     }
 
     def post(self, request, employee_id: str, islem: str):  # noqa: ANN001
@@ -1706,12 +2254,8 @@ class EmployeeLifecycleView(TestUiView):
                     reason=str(request.data.get("reason") or ""),
                     termination_note=str(request.data.get("termination_note") or ""),
                 )
-            else:  # archive
-                sonuc = archive_employee(
-                    actor=request.user,
-                    employee=calisan,
-                    reason=str(request.data.get("reason") or ""),
-                )
+            else:
+                raise LifecycleStateError("Arşivleme bu çalışan akışında kullanılmıyor.")
         except (
             LifecycleStateError,
             LifecycleValidationError,
@@ -1724,21 +2268,102 @@ class EmployeeLifecycleView(TestUiView):
 
 
 class EmployeeHistoryView(TestUiView):
-    """Birleşik iş geçmişi (`employee.history.read`); PII değeri döndürülmez."""
+    """
+    `Yaşananlar` — lazy partial (P1-B sonrası performans paketi).
+
+    * Sayfalı: `?page=N` (varsayılan 1; sayfa 20 olay) — tüm geçmiş tek seferde
+      yüklenmez.
+    * Sensitive alan maskesi (§11): timeline olay detayları K0/K1 değerlerini
+      açıkça içerir; K2 değerleri **maskeli**, K3/K4 değerleri **asla** dönmez.
+      Tam/maskesiz değer yalnız `employee.sensitive.read` ∧ kapsam sahibine
+      döner — frontend masking güvenlik kontrolü değildir; karar backend'dedir.
+    * İzin hakkı/bakiye olaylarının **değerleri** (değişim, gerekçe, işlemi yapan)
+      yalnız `leave.balance.read` ∧ kapsam sahibine döner; aksi halde maskelenir
+      (§5: izin yoksa hassas değer yanıta konmaz).
+    * Çalışan **kendi** timeline'ını görebilir: `employee.history.read` yoksa yalnız
+      kendi çalışan kaydı için okuma açılır (kapsam `_kapsamdaki_calisan` ile).
+      Başka çalışanın kaydı izinsiz okunamaz.
+    * Scope dışı çalışan → 404 (varlık sızdırılmaz).
+    """
+
+    #: K2 sınıfı değerler için maskeleme (timeline detayında uygulanır).
+    MASKED = "***"
+    #: Bakiye değeri taşıyan olay tipleri (`leave.balance.read` kapısı).
+    BAKIYE_TIPLERI = ("leave_entitlement", "leave_balance")
 
     def get(self, request, employee_id: str):  # noqa: ANN001
-        if not user_has_permission(request.user, "employee.history.read"):
+        try:
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+
+        # §5: çalışan kendi izin/timeline olaylarını görebilir; başkasının kaydı
+        # için `employee.history.read` gerekir (karar backend'de).
+        kendi = user_employee(request.user)
+        if not user_has_permission(request.user, "employee.history.read") and not (
+            kendi is not None and kendi.pk == calisan.pk
+        ):
             return TestUiErrors.cevap(
                 TestUiAuthorizationError(
                     "Geçmişi görmek için 'employee.history.read' izni gerekir."
                 )
             )
-        try:
-            calisan = _kapsamdaki_calisan(request.user, employee_id)
-        except Http404:
-            raise
+
+        page = _sayfa_no(request)
+        tum_olaylar = employee_history(calisan)
+        olaylar, toplam_sayfa = timeline_sayfa(tum_olaylar, page=page)
+
+        # K2 alanlar: maskesiz görüm yalnız `employee.sensitive.read` ∧ kapsam.
+        sensitive_ok = user_has_permission(request.user, "employee.sensitive.read") and (
+            object_in_org_scope(request.user, department_id=calisan.department_id)
+        )
+        if sensitive_ok:
+            for olay in olaylar:
+                detay = olay.get("detail") or {}
+                if isinstance(detay.get("Değişiklikler"), dict):
+                    detay["Değişiklikler"] = _audit_pii_degerlerini_coz(
+                        detay["Değişiklikler"]
+                    )
+        if not sensitive_ok:
+            for olay in olaylar:
+                detay = olay.get("detail") or {}
+                for anahtar in list(detay.keys()):
+                    if any(
+                        k in anahtar
+                        for k in ("iban", "phone", "address", "national", "emergency", "bank")
+                    ):
+                        detay[anahtar] = self.MASKED
+                if isinstance(detay.get("Değişiklikler"), dict):
+                    detay["Değişiklikler"] = {
+                        alan: {"before": self.MASKED, "after": self.MASKED}
+                        for alan in detay["Değişiklikler"]
+                    }
+
+        # İzin hakkı/bakiye değerleri: `leave.balance.read` ∧ kapsam yoksa gizlenir.
+        bakiye_ok = _bakiye_degerleri_gorunur(request.user, calisan)
+        if not bakiye_ok:
+            for olay in olaylar:
+                # Karar olayındaki "Karar sonrası kalan" (snapshot) değeri de
+                # yetkisiz yanıta **konmaz** (§6).
+                olay.pop("karar_sonrasi_kalan", None)
+                olay.pop("karar_sonrasi_kalan_snapshot_at", None)
+                if olay.get("type") not in self.BAKIYE_TIPLERI:
+                    continue
+                detay = olay.get("detail") or {}
+                for anahtar in list(detay.keys()):
+                    detay[anahtar] = self.MASKED
+                olay["summary"] = self.MASKED
+
         return Response(
-            {"data": {"employee_no": calisan.employee_no, "events": employee_history(calisan)}}
+            {
+                "data": {
+                    "employee_no": calisan.employee_no,
+                    "events": olaylar,
+                    "page": page,
+                    "total_pages": toplam_sayfa,
+                    "sensitive_visible": sensitive_ok,
+                }
+            }
         )
 
 
@@ -2143,6 +2768,7 @@ class RoleListView(TestUiView):
                     "name": rol.name,
                     "scope_type": rol.scope_type,
                     "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                    "hierarchy_level": rol.hierarchy_level,
                     "kapsam_gerekli": rol.scope_type in ORG_SCOPED_ROLE_SCOPE_TYPES,
                     "atanabilir": izin_var,
                     "gerekce": gerekce,
@@ -2216,6 +2842,12 @@ def _izin_turu_ozeti(tur) -> dict:  # noqa: ANN001
         "max_consecutive_days": (
             str(tur.max_consecutive_days) if tur.max_consecutive_days is not None else None
         ),
+        "is_time_based": tur.is_time_based,
+        "workday_minutes": tur.workday_minutes,
+        "workday_hours": (
+            str((Decimal(tur.workday_minutes) / Decimal("60")).normalize())
+            if tur.is_time_based and tur.workday_minutes else None
+        ),
     }
 
 
@@ -2270,6 +2902,8 @@ class LeaveTypeListView(TestUiView):
                 requires_approval=bool(veri.get("requires_approval", True)),
                 requires_document=bool(veri.get("requires_document", False)),
                 min_advance_notice_days=int(veri.get("min_advance_notice_days") or 0),
+                is_time_based=bool(veri.get("is_time_based", False)),
+                workday_minutes=(int(veri["workday_minutes"]) if veri.get("workday_minutes") not in (None, "") else None),
             )
         except (LeaveError, LeaveAuthorizationError) as hata:
             return TestUiErrors.cevap(hata)
@@ -2360,6 +2994,43 @@ class LeaveTypeDeactivateView(TestUiView):
         return Response({"data": _izin_turu_ozeti(tur)})
 
 
+class LeaveTypeActivateView(TestUiView):
+    """Pasif izin türünü yeniden aktifleştirir."""
+
+    def post(self, request, leave_type_id: str):  # noqa: ANN001
+        tur = LeaveType.objects.filter(
+            pk=_uuid(leave_type_id, "leave_type_id"), deleted_at__isnull=True
+        ).first()
+        if tur is None:
+            raise Http404("izin_turu_yok")
+        try:
+            activate_leave_type(
+                actor=request.user, leave_type=tur, reason=str(request.data.get("reason") or "")
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _izin_turu_ozeti(tur)})
+
+
+class LeaveTypeUpdateView(TestUiView):
+    """İzin türü ayarlarını, özellikle saat tabanlı gün uzunluğunu günceller."""
+
+    def post(self, request, leave_type_id: str):  # noqa: ANN001
+        tur = LeaveType.objects.filter(pk=_uuid(leave_type_id, "leave_type_id"), deleted_at__isnull=True).first()
+        if tur is None:
+            raise Http404("izin_turu_yok")
+        try:
+            update_leave_type(
+                actor=request.user, leave_type=tur,
+                is_time_based=(bool(request.data["is_time_based"]) if "is_time_based" in request.data else None),
+                workday_minutes=(int(request.data["workday_minutes"]) if request.data.get("workday_minutes") not in (None, "") else None),
+                workday_hours=(request.data.get("workday_hours") if request.data.get("workday_hours") not in (None, "") else None),
+            )
+        except (TypeError, ValueError, LeaveError, LeaveAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _izin_turu_ozeti(tur)})
+
+
 class RoleCreateView(TestUiView):
     """Kiracıya özel rol oluşturur (`role.manage`)."""
 
@@ -2371,6 +3042,7 @@ class RoleCreateView(TestUiView):
                 code=str(request.data.get("code") or ""),
                 name=str(request.data.get("name") or ""),
                 scope_type=str(request.data.get("scope_type") or "TENANT"),
+                hierarchy_level=(int(request.data["hierarchy_level"]) if request.data.get("hierarchy_level") not in (None, "") else 30),
                 reason=str(request.data.get("reason") or ""),
             )
         except Exception as hata:  # noqa: BLE001
@@ -2383,6 +3055,7 @@ class RoleCreateView(TestUiView):
                     "name": rol.name,
                     "scope_type": rol.scope_type,
                     "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
+                    "hierarchy_level": rol.hierarchy_level,
                 }
             },
             status=status.HTTP_201_CREATED,
@@ -2406,6 +3079,7 @@ class RoleUpdateView(TestUiView):
                 scope_type=(
                     str(request.data["scope_type"]) if request.data.get("scope_type") else None
                 ),
+                hierarchy_level=(int(request.data["hierarchy_level"]) if request.data.get("hierarchy_level") not in (None, "") else None),
                 reason=str(request.data.get("reason") or ""),
             )
         except Exception as hata:  # noqa: BLE001
@@ -2461,6 +3135,7 @@ class RolePermissionView(TestUiView):
                 {
                     "code": izin.code,
                     "name": izin.name,
+                    "aciklama": izin_aciklamasi(izin.code),
                     "secili": izin.code in secili,
                     "aktor_sahip": izin.code in aktor_izinleri,
                     # Kilit nedeni **açıkça** döner (bildirim: "checkbox disabled
@@ -2577,6 +3252,8 @@ class LookupView(TestUiView):
                             "name": t.name,
                             "uses_balance": t.uses_balance,
                             "requires_document": t.requires_document,
+                            "is_time_based": t.is_time_based,
+                            "workday_minutes": t.workday_minutes,
                         }
                         for t in LeaveType.objects.filter(
                             deleted_at__isnull=True, status=RecordStatus.ACTIVE
@@ -2588,6 +3265,12 @@ class LookupView(TestUiView):
                     "blood_types": [
                         {"value": kod, "label": etiket} for kod, etiket in KAN_GRUBU_SECENEKLERI
                     ],
+                    "employee_form_fields": _calisan_form_alani_ozet(request.user),
+                    "employee_form_fields_admin": (
+                        _calisan_form_yonetim_ozeti(request.user)
+                        if user_has_permission(request.user, "employee.form.manage")
+                        else []
+                    ),
                     # Çalışan oluştururken "Yönetici" seçimi için: yalnız
                     # kapsamdaki çalışanlar (ad/e-posta değil, kimlik + no).
                     "employees": [
@@ -2650,9 +3333,124 @@ class LookupView(TestUiView):
                     "can_manage_policy": user_has_permission(request.user, "leave.type.manage"),
                     "can_create_users": user_has_permission(request.user, "user.manage"),
                     "can_see_pii": user_has_permission(request.user, "employee.sensitive.read"),
+                    "can_manage_employee_form": user_has_permission(
+                        request.user, "employee.form.manage"
+                    ),
                 },
             }
         )
+
+
+# --- Çalışan formu özel alanları -------------------------------------------
+
+OZEL_FORM_TIPLERI = {"text", "number", "date", "select"}
+
+
+def _calisan_form_alani_ozet(user) -> list[dict]:  # noqa: ANN001
+    """Yeni çalışan ekranında kullanılabilecek aktif özel alan tanımları."""
+    try:
+        # tenant_context açık bir transaction tuttuğu için hata doğrudan
+        # yakalanırsa transaction "aborted" durumda kalır. İç atomic blok,
+        # sorgu hatasını savepoint'e geri alır ve middleware çıkışını bozmaz.
+        with transaction.atomic():
+            return [
+                {
+                    "id": str(alan.pk),
+                    "code": alan.field_code,
+                    "label": alan.label_override or alan.field_code.removeprefix("custom_").replace("_", " ").title(),
+                    "field_type": alan.field_type,
+                    "options": alan.options if alan.field_type == "select" else [],
+                    "layout_width": alan.layout_width,
+                    "is_required": alan.is_required,
+                    "is_visible": alan.is_visible,
+                    "is_custom": alan.field_code.startswith("custom_"),
+                    "section_label": alan.section_label,
+                    "helper_text": alan.helper_text,
+                }
+                for alan in FormFieldDefinition.objects.filter(
+                    tenant_id=user.tenant_id,
+                    form_code="employee_onboarding",
+                    field_code__startswith="custom_",
+                    deleted_at__isnull=True,
+                    is_visible=True,
+                ).order_by("sort_order", "created_at")
+            ]
+    except DatabaseError:
+        # Migration uygulanırken eski veritabanı ile arayüz tamamen kilitlenmesin;
+        # özel alanlar geçici olarak boş görünür, standart çalışan sekmesi açılır.
+        return []
+
+
+def _calisan_form_yonetim_ozeti(user) -> list[dict]:  # noqa: ANN001
+    """Yönetici listesi: katalog + özel alanlar, aktif ve pasif kayıtlar."""
+    try:
+        with transaction.atomic():
+            return [
+                _form_alani_yanit(alan)
+                for alan in FormFieldDefinition.objects.filter(
+                    tenant_id=user.tenant_id,
+                    form_code="employee_onboarding",
+                ).filter(
+                    Q(field_code__in=(*PII_ALANLARI, *K3_ALANLARI))
+                    | Q(field_code__startswith="custom_")
+                ).filter(Q(deleted_at__isnull=True) | ~Q(field_code__startswith="custom_")).order_by(
+                    "sort_order", "created_at"
+                )
+            ]
+    except DatabaseError:
+        return []
+
+
+def _aktif_ozel_form_alanlari(tenant_id):  # noqa: ANN001
+    return list(
+        FormFieldDefinition.objects.filter(
+            tenant_id=tenant_id,
+            form_code="employee_onboarding",
+            field_code__startswith="custom_",
+            deleted_at__isnull=True,
+            is_visible=True,
+        ).order_by("sort_order", "created_at")
+    )
+
+
+def _dogrula_ozel_form_degerleri(
+    user, tenant_id, values, *, enforce_required: bool = True
+) -> dict:  # noqa: ANN001
+    """Özel alanları tanıma, tip, seçenek ve zorunluluk açısından doğrular."""
+    if values in (None, ""):
+        values = {}
+    if not isinstance(values, dict):
+        raise LeaveError("custom_fields bir nesne olmalıdır.")
+    if values and not user_has_permission(user, "employee.sensitive.read"):
+        raise TestUiAuthorizationError("Özel çalışan bilgilerini kaydetmek için hassas veri izni gerekir.")
+    alanlar = _aktif_ozel_form_alanlari(tenant_id)
+    tanimli = {alan.field_code: alan for alan in alanlar}
+    bilinmeyen = set(values) - set(tanimli)
+    if bilinmeyen:
+        raise LeaveError("Tanımsız veya pasif özel form alanı gönderildi.")
+    sonuc = {}
+    for alan in alanlar:
+        ham = values.get(alan.field_code, "")
+        bos = ham is None or (isinstance(ham, str) and not ham.strip())
+        if enforce_required and alan.is_required and bos:
+            raise LeaveError(f"'{alan.label_override or alan.field_code}' alanı zorunludur.")
+        if bos:
+            continue
+        if alan.field_type == "select":
+            if not isinstance(ham, str) or ham not in (alan.options or []):
+                raise LeaveError(f"'{alan.label_override or alan.field_code}' için geçersiz seçenek.")
+            sonuc[alan.field_code] = ham.strip()
+        elif alan.field_type == "number":
+            try:
+                sayi = Decimal(str(ham).strip())
+            except (InvalidOperation, ValueError):
+                raise LeaveError(f"'{alan.label_override or alan.field_code}' sayı olmalıdır.") from None
+            sonuc[alan.field_code] = str(sayi)
+        elif alan.field_type == "date":
+            sonuc[alan.field_code] = _tarih(str(ham).strip(), alan.field_code).isoformat()
+        else:
+            sonuc[alan.field_code] = str(ham).strip()
+    return sonuc
 
 
 #: Kişisel veri alanları (K2) — arayüz ve API aynı listeyi kullanır.
@@ -2676,6 +3474,22 @@ PII_ALANLARI = (
 
 K3_ALANLARI = ("blood_type",)
 """Özel nitelikli (sağlık) alanlar — **şifreli** kolonlar, kapalı kümeyle doğrulanır."""
+
+
+def _zorunlu_kisisel_form_alanlarini_dogrula(tenant_id, values) -> None:  # noqa: ANN001
+    """Yeni çalışan kaydında zorunlu yapılan katalog alanlarını kontrol eder."""
+    alanlar = FormFieldDefinition.objects.filter(
+        tenant_id=tenant_id,
+        form_code="employee_onboarding",
+        field_code__in=(*PII_ALANLARI, *K3_ALANLARI),
+        deleted_at__isnull=True,
+        is_visible=True,
+        is_required=True,
+    )
+    for alan in alanlar:
+        deger = values.get(alan.field_code)
+        if deger is None or (isinstance(deger, str) and not deger.strip()):
+            raise LeaveError(f"'{_form_alani_yanit(alan)['label']}' alanı zorunludur.")
 
 KAN_GRUBU_SECENEKLERI: tuple[tuple[str, str], ...] = tuple(
     (str(kod), str(etiket)) for kod, etiket in BloodType.choices
@@ -2729,6 +3543,7 @@ def _pii_ozeti(kayit) -> dict:  # noqa: ANN001
         # K3 (şifreli): kod + okunabilir etiket birlikte döner.
         "blood_type": kan,
         "blood_type_label": _kan_grubu_etiket(kan),
+        "custom_fields": kayit.custom_fields or {},
     }
 
 
@@ -2749,6 +3564,11 @@ def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
     yeni = kayit is None
     if kayit is None:
         kayit = EmployeePersonalData(employee=calisan, tenant=calisan.tenant)
+    eski_degerler = {}
+    eski_degerler["custom_fields"] = dict(getattr(kayit, "custom_fields", {}) or {})
+    for alan in (*PII_ALANLARI, *K3_ALANLARI):
+        if alan in veri and kayit is not None:
+            eski_degerler[alan] = _sifreli_oku(kayit, alan) if alan in K3_ALANLARI else getattr(kayit, alan, None)
     for alan in PII_ALANLARI:
         if alan not in veri:
             continue
@@ -2775,6 +3595,8 @@ def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
             setattr(kayit, alan, kod)
         else:  # yeni K3 alanı eklenirse kendi doğrulaması yazılmalı (fail-closed)
             raise LeaveError(f"'{alan}' alanı bu arayüzden yazılamaz.")
+    if "custom_fields" in veri:
+        kayit.custom_fields = dict(veri["custom_fields"] or {})
     if not (kayit.first_name or "").strip() or not (kayit.last_name or "").strip():
         raise LeaveError("Kişisel veri için ad ve soyad zorunludur.")
     uyruk = (kayit.citizenship or "").strip().upper()
@@ -2796,8 +3618,87 @@ def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
         changes={
             "alanlar": sorted({a for a in PII_ALANLARI if a in veri}),
             "k3_alanlar": sorted({a for a in K3_ALANLARI if a in veri}),
+            "ozel_alanlar": sorted((veri.get("custom_fields") or {}).keys()),
+            "alan_degisiklikleri": _pii_degisiklikleri(eski_degerler, kayit, veri),
         },
     )
+
+
+def _pii_degisiklikleri(eski_degerler: dict, kayit, veri) -> dict:  # noqa: ANN001
+    """Timeline için kişisel alan değişimlerinin eski/yeni güvenli metni."""
+    sonuc = {}
+    etiketler = {
+        "first_name": "Ad", "last_name": "Soyad",
+        "personal_phone": "Telefon numarası", "personal_email": "Kişisel e-posta",
+        "address": "Adres", "national_id": "Kimlik numarası", "citizenship": "Vatandaşlık",
+        "bank_name": "Banka", "iban": "IBAN", "birth_date": "Doğum tarihi",
+        "emergency_contact_phone": "Acil durum telefonu",
+        "emergency_contact_relation": "Acil durum yakını", "work_permit_type": "Çalışma izni",
+        "work_permit_valid_until": "Çalışma izni geçerlilik tarihi",
+    }
+    for alan in PII_ALANLARI:
+        if alan not in veri:
+            continue
+        eski = eski_degerler.get(alan)
+        yeni = getattr(kayit, alan, None)
+        if hasattr(eski, "isoformat"):
+            eski = eski.isoformat()
+        if hasattr(yeni, "isoformat"):
+            yeni = yeni.isoformat()
+        eski, yeni = ("" if eski is None else str(eski)), ("" if yeni is None else str(yeni))
+        if eski != yeni:
+            sonuc[etiketler.get(alan, alan)] = {
+                "before": _audit_pii_degeri(eski),
+                "after": _audit_pii_degeri(yeni),
+            }
+    # K3 değerleri kişisel veri denetim kaydına yazılmaz; ancak alanın
+    # güncellendiği, eski/yeni değerler gizlenerek zaman çizelgesinde görünür.
+    for alan in K3_ALANLARI:
+        if alan not in veri:
+            continue
+        eski = eski_degerler.get(alan)
+        yeni = _sifreli_oku(kayit, alan)
+        eski, yeni = ("" if eski is None else str(eski)), ("" if yeni is None else str(yeni))
+        if eski != yeni:
+            sonuc["Kan grubu" if alan == "blood_type" else alan] = {
+                "before": "[gizli]", "after": "[gizli]"
+            }
+    eski_ozel = eski_degerler.get("custom_fields", {})
+    yeni_ozel = getattr(kayit, "custom_fields", {}) or {}
+    ozel_etiketler = {
+        alan.field_code: (alan.label_override or alan.field_code)
+        for alan in FormFieldDefinition.objects.filter(
+            tenant_id=kayit.tenant_id,
+            field_code__in=set(eski_ozel) | set(yeni_ozel),
+        )
+    }
+    for kod in set(eski_ozel) | set(yeni_ozel):
+        if eski_ozel.get(kod) != yeni_ozel.get(kod):
+            sonuc[ozel_etiketler.get(kod, kod)] = {
+                "before": _audit_pii_degeri(eski_ozel.get(kod)),
+                "after": _audit_pii_degeri(yeni_ozel.get(kod)),
+            }
+    return sonuc
+
+
+def _audit_pii_degeri(deger) -> dict:  # noqa: ANN001
+    """PII değişim değerini audit tablosunda açık metin bırakmadan saklar."""
+    metin = "" if deger is None else str(deger)
+    return {"__encrypted__": encrypt_str(metin)}
+
+
+def _audit_pii_degerlerini_coz(deger):  # noqa: ANN001
+    """Yetkili timeline yanıtı için şifreli değişim değerlerini çözer."""
+    if isinstance(deger, dict):
+        if set(deger) == {"__encrypted__"}:
+            try:
+                return decrypt_str(str(deger["__encrypted__"]))
+            except SecretDecryptionError:
+                return "[çözülemedi]"
+        return {anahtar: _audit_pii_degerlerini_coz(deger2) for anahtar, deger2 in deger.items()}
+    if isinstance(deger, list):
+        return [_audit_pii_degerlerini_coz(deger2) for deger2 in deger]
+    return deger
 
 
 class EmployeePersonalView(TestUiView):
@@ -2828,7 +3729,23 @@ class EmployeePersonalView(TestUiView):
     def post(self, request, employee_id: str):  # noqa: ANN001
         try:
             calisan = _kapsamdaki_calisan(request.user, employee_id)
-            _pii_yaz(request.user, calisan, request.data)
+            veri = dict(request.data)
+            if "custom_fields" in veri:
+                veri["custom_fields"] = _dogrula_ozel_form_degerleri(
+                    request.user,
+                    request.user.tenant_id,
+                    veri["custom_fields"],
+                    enforce_required=False,
+                )
+            _pii_yaz(request.user, calisan, veri)
+            # Kişisel formdaki ad/soyad, çalışan listesinin kaynak hesabında da
+            # tutulur. Böylece detaydan yapılan değişiklik listeye anında yansır.
+            if calisan.user_id and any(alan in veri for alan in ("first_name", "last_name")):
+                if "first_name" in veri:
+                    calisan.user.first_name = str(veri.get("first_name") or "").strip()
+                if "last_name" in veri:
+                    calisan.user.last_name = str(veri.get("last_name") or "").strip()
+                calisan.user.save(update_fields=["first_name", "last_name", "updated_at"])
         except (TestUiAuthorizationError, LeaveError, OrganizationError) as hata:
             return TestUiErrors.cevap(hata)
         return Response({"data": _pii_ozeti(calisan.personal_data)})
@@ -2948,6 +3865,12 @@ class EmployeeDetailView(TestUiView):
             "assignable_roles": [],
             # P1-B: yaşam döngüsü türetilmiş değerleri + aksiyon yetkileri.
             "lifecycle": _lifecycle_ozeti(request.user, calisan),
+            "can_reset_password": bool(
+                calisan.user_id and user_has_permission(request.user, "user.manage")
+            ),
+            "can_update_email": bool(
+                calisan.user_id and user_has_permission(request.user, "user.manage")
+            ),
         }
         if detay["yetki_gorunur"] and calisan.user_id:
             atamalar = (
@@ -2983,6 +3906,87 @@ class EmployeeDetailView(TestUiView):
                 for rol in _atanabilir_roller(request.user)
             ]
         return Response({"data": detay})
+
+
+class EmployeePasswordResetView(TestUiView):
+    """Yetkili yönetici, kapsamındaki çalışan hesabına yeni parola belirler."""
+
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            if not user_has_permission(request.user, "user.manage"):
+                raise TestUiAuthorizationError("Parola sıfırlamak için 'user.manage' izni gerekir.")
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+            if calisan.user_id is None:
+                raise LeaveError("Bu çalışana bağlı bir giriş hesabı yok.")
+            parola = str(request.data.get("password") or "")
+            if not parola:
+                raise LeaveError("Yeni parola zorunludur.")
+            from django.contrib.auth.password_validation import validate_password  # noqa: PLC0415
+            from django.core.exceptions import ValidationError  # noqa: PLC0415
+            try:
+                validate_password(parola, user=calisan.user)
+            except ValidationError as hata:
+                raise LeaveError("Parola kuralları: " + " ".join(hata.messages)) from hata
+            calisan.user.set_password(parola)
+            calisan.user.save(update_fields=["password", "password_changed_at", "updated_at"])
+            from apps.audit.services import log_action  # noqa: PLC0415
+            log_action(
+                tenant_id=calisan.tenant_id,
+                action="user.password.reset",
+                user=request.user,
+                table_name="users",
+                record_id=calisan.user_id,
+                changes={"employee_id": str(calisan.pk)},
+            )
+        except (LeaveError, OrganizationError, TestUiAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"updated": True}})
+
+
+class EmployeeEmailUpdateView(TestUiView):
+    """Yetkili yönetici, kapsamındaki çalışan hesabının kurumsal e-postasını değiştirir."""
+
+    @transaction.atomic
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            if not user_has_permission(request.user, "user.manage"):
+                raise TestUiAuthorizationError("E-posta güncellemek için 'user.manage' izni gerekir.")
+            calisan = _kapsamdaki_calisan(request.user, employee_id)
+            if calisan.user_id is None:
+                raise LeaveError("Bu çalışana bağlı bir giriş hesabı yok.")
+            eposta = str(request.data.get("email") or "").strip().lower()
+            if not eposta or "@" not in eposta:
+                raise LeaveError("Geçerli bir kurumsal e-posta adresi girin.")
+            from django.contrib.auth import get_user_model  # noqa: PLC0415
+
+            user_modelu = get_user_model()
+            if user_modelu.objects.filter(
+                tenant_id=calisan.tenant_id, email=eposta
+            ).exclude(pk=calisan.user_id).exists():
+                raise LeaveError("Bu e-posta ile kayıtlı başka bir kullanıcı var.")
+            eski = calisan.user.email
+            if eski == eposta:
+                return Response({"data": {"email": eposta, "updated": False}})
+            calisan.user.email = eposta
+            calisan.user.save(update_fields=["email", "updated_at"])
+            from apps.audit.services import log_action  # noqa: PLC0415
+
+            log_action(
+                tenant_id=calisan.tenant_id,
+                action="user.email.update",
+                user=request.user,
+                table_name="users",
+                record_id=calisan.user_id,
+                changes={
+                    "employee_id": str(calisan.pk),
+                    "alan_degisiklikleri": {
+                        "Kurumsal e-posta": {"before": eski, "after": eposta}
+                    },
+                },
+            )
+        except (LeaveError, OrganizationError, TestUiAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"email": eposta, "updated": True}})
 
 
 class EmployeeRoleAssignView(TestUiView):
@@ -3058,7 +4062,7 @@ class LeaveRequestListView(TestUiView):
         kapsam = request.query_params.get("scope", "mine")
         user = request.user
         temel = LeaveRequest.objects.filter(deleted_at__isnull=True).select_related(
-            "employee__department", "leave_type", "employee"
+            "employee__department", "leave_type", "employee", "decision_snapshot"
         )
         if kapsam == "pending":
             adaylar = temel.filter(status=LeaveRequestStatus.PENDING).order_by("start_date")
@@ -3107,6 +4111,8 @@ class LeaveRequestListView(TestUiView):
                 leave_type=tur,
                 start_date=_tarih(veri.get("start_date"), "start_date"),
                 end_date=_tarih(veri.get("end_date"), "end_date"),
+                start_time=_saat(veri.get("start_time"), "start_time") if veri.get("start_time") else None,
+                end_time=_saat(veri.get("end_time"), "end_time") if veri.get("end_time") else None,
                 reason=str(veri.get("reason", "")).strip(),
                 is_half_day=bool(veri.get("is_half_day", False)),
                 requested_days=_sayi(veri.get("requested_days")),
@@ -3202,24 +4208,25 @@ class EmployeeEntitlementView(TestUiView):
                     "Yalnız bakiye kullanan izin türleri için hak tanımlanır."
                 )
             try:
-                gun = Decimal(str(veri.get("days")).replace(",", "."))
+                miktar = Decimal(str(veri.get("hours" if tur.is_time_based else "days")).replace(",", "."))
             except (InvalidOperation, TypeError, ValueError) as hata:
                 raise LeaveError(
-                    "Hak gün sayısı sayı olmalıdır (ör. 14 veya 14.5)."
+                    "Serbest zaman hakkı saat, diğer izin hakları gün olarak sayı olmalıdır."
                 ) from hata
             sonuc = set_leave_entitlement(
                 actor=request.user,
                 employee=calisan,
                 leave_type=tur,
                 period_year=yil,
-                days=gun,
+                days=None if tur.is_time_based else miktar,
+                hours=miktar if tur.is_time_based else None,
                 reason=str(veri.get("reason") or ""),
             )
         except (LeaveError, LeaveAuthorizationError) as hata:
             return TestUiErrors.cevap(hata)
         mesajlar = {
-            "hakedis_tanimlandi": "İzin hakkı tanımlandı.",
-            "duzeltme": "İzin hakkı güncellendi.",
+            "hakedis_tanimlandi": "İzin hakkı başarıyla tanımlandı.",
+            "duzeltme": "İzin bakiyesi başarıyla güncellendi.",
             "degisiklik_yok": "Değişiklik yok: girilen değer mevcut hakkın aynısı.",
         }
         return Response(
@@ -3255,6 +4262,39 @@ class OvertimeListView(TestUiView):
             kayitlar = [t for t in kayitlar if t.status == durum]
         satirlar = [_fazla_mesai_ozeti(t, user) for t in kayitlar]
         benim = [s for s in satirlar if s["kendi_kaydim"]]
+        kural_okuma = bool(
+            user_has_permission(user, "overtime.rule.read")
+            or user_has_permission(user, "overtime.request.create")
+        )
+        kurallar = []
+        if kural_okuma:
+            kural_queryset = (
+                list_overtime_rules(actor=user)
+                if user_has_permission(user, "overtime.rule.read")
+                else OvertimeRule.objects.filter(
+                    tenant_id=user.tenant_id,
+                    deleted_at__isnull=True,
+                ).order_by("-effective_from", "min_minutes", "code")
+            )
+            kurallar = [
+                {
+                    "id": str(kural.pk),
+                    "code": kural.code,
+                    "name": kural.name,
+                    "min_minutes": kural.min_minutes,
+                    "max_minutes": kural.max_minutes,
+                    "multiplier": str(kural.multiplier),
+                    "compensation_type": kural.compensation_type,
+                    "compensation_type_label": kural.get_compensation_type_display(),
+                    "effective_from": kural.effective_from.isoformat(),
+                    "effective_until": (
+                        kural.effective_until.isoformat()
+                        if kural.effective_until
+                        else None
+                    ),
+                }
+                for kural in kural_queryset
+            ]
         return Response(
             {
                 "data": satirlar,
@@ -3274,6 +4314,9 @@ class OvertimeListView(TestUiView):
                     # Form varsayılanı: bugünün tarihi sunucudan gelir (istemci saati
                     # farklı olabilir; gelecek tarih zaten reddedilir).
                     "today": timezone.localdate().isoformat(),
+                    "can_read_rules": kural_okuma,
+                    "can_manage_rules": user_has_permission(user, "overtime.rule.manage"),
+                    "kurallar": kurallar,
                 },
             }
         )
@@ -3290,6 +4333,19 @@ class OvertimeListView(TestUiView):
             )
         veri = request.data
         try:
+            rule_id = veri.get("overtime_rule_id")
+            if not rule_id:
+                raise OvertimeValidationError("Fazla mesai kuralı seçilmelidir.")
+            overtime_rule = (
+                OvertimeRule.objects.filter(
+                    pk=_uuid(rule_id, "overtime_rule_id"),
+                    tenant_id=kendi.tenant_id,
+                    deleted_at__isnull=True,
+                )
+                .first()
+            )
+            if overtime_rule is None:
+                raise OvertimeValidationError("Seçilen fazla mesai kuralı bulunamadı.")
             talep = create_overtime_request(
                 actor=user,
                 employee=kendi,
@@ -3299,12 +4355,95 @@ class OvertimeListView(TestUiView):
                 description=str(veri.get("description") or ""),
                 # İstemci süre gönderirse **yalnızca doğrulanır** (yazılmaz).
                 client_total_minutes=veri.get("total_minutes"),
+                overtime_rule=overtime_rule,
             )
         except (OvertimeError, OvertimeAuthorizationError, OvertimeValidationError) as hata:
             return TestUiErrors.cevap(hata)
         return Response(
             {"data": _fazla_mesai_ozeti(talep, user)}, status=status.HTTP_201_CREATED
         )
+
+
+class OvertimeRuleCreateView(TestUiView):
+    """Yetkili tenant yöneticisi/İK için fazla mesai kuralı oluşturur."""
+
+    def post(self, request):  # noqa: ANN001
+        veri = request.data
+        try:
+            min_minutes = int(veri.get("min_minutes"))
+            max_raw = veri.get("max_minutes")
+            max_minutes = None if max_raw in (None, "") else int(max_raw)
+            effective_until_raw = veri.get("effective_until")
+            kural = create_overtime_rule(
+                actor=request.user,
+                code=str(veri.get("code") or ""),
+                name=str(veri.get("name") or ""),
+                min_minutes=min_minutes,
+                max_minutes=max_minutes,
+                multiplier=str(veri.get("multiplier") or ""),
+                compensation_type=str(veri.get("compensation_type") or ""),
+                effective_from=_tarih(veri.get("effective_from"), "effective_from"),
+                effective_until=(
+                    None
+                    if effective_until_raw in (None, "")
+                    else _tarih(effective_until_raw, "effective_until")
+                ),
+            )
+        except (TypeError, ValueError, LeaveError, OvertimeError, OvertimeAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response(
+            {
+                "data": {
+                    "id": str(kural.pk),
+                    "code": kural.code,
+                    "name": kural.name,
+                }
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class OvertimeRuleUpdateView(TestUiView):
+    """Canlı fazla mesai kuralını günceller; geçmiş talepler snapshot kullanır."""
+
+    def post(self, request, rule_id: str):  # noqa: ANN001
+        kural = OvertimeRule.objects.filter(
+            pk=_uuid(rule_id, "rule_id"), tenant_id=request.user.tenant_id, deleted_at__isnull=True
+        ).first()
+        if kural is None:
+            raise Http404("fazla_mesai_kurali_yok")
+        veri = request.data
+        try:
+            max_raw = veri.get("max_minutes")
+            updated = update_overtime_rule(
+                actor=request.user, rule=kural, code=str(veri.get("code") or ""),
+                name=str(veri.get("name") or ""), min_minutes=int(veri.get("min_minutes")),
+                max_minutes=None if max_raw in (None, "") else int(max_raw),
+                multiplier=str(veri.get("multiplier") or ""),
+                compensation_type=str(veri.get("compensation_type") or ""),
+                effective_from=_tarih(veri.get("effective_from"), "effective_from"),
+                effective_until=(None if veri.get("effective_until") in (None, "")
+                                 else _tarih(veri.get("effective_until"), "effective_until")),
+            )
+        except (TypeError, ValueError, LeaveError, OvertimeError, OvertimeAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"id": str(updated.pk), "code": updated.code, "name": updated.name}})
+
+
+class OvertimeRuleDeleteView(TestUiView):
+    """Fazla mesai kuralını geçmiş kayıtları koruyarak soft delete eder."""
+
+    def post(self, request, rule_id: str):  # noqa: ANN001
+        kural = OvertimeRule.objects.filter(
+            pk=_uuid(rule_id, "rule_id"), tenant_id=request.user.tenant_id, deleted_at__isnull=True
+        ).first()
+        if kural is None:
+            raise Http404("fazla_mesai_kurali_yok")
+        try:
+            delete_overtime_rule(actor=request.user, rule=kural, reason=str(request.data.get("reason") or ""))
+        except (LeaveError, OvertimeError, OvertimeAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"id": str(kural.pk), "deleted": True}})
 
 
 class OvertimeDecisionView(TestUiView):

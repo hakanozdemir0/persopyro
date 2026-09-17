@@ -69,6 +69,33 @@ FORM_KODU = "employee_onboarding"
 
 def backfill(apps, schema_editor) -> None:  # noqa: ANN001, ARG001
     with schema_editor.connection.cursor() as cur:
+        # Bu veri migration'ı 0015'te çalışırken henüz eklenmemiş kolonları
+        # kullanamaz. Testlerde veya yeniden çalıştırmalarda daha yeni şema ile
+        # çağrılabildiği için, sonradan eklenen alanları yalnızca mevcutsa ekle.
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'hr' AND table_name = 'form_field_definitions'"
+        )
+        mevcut_form_kolonlari = {satir[0] for satir in cur.fetchall()}
+        ek_kolonlar: list[str] = []
+        ek_degerler: list[str] = []
+        ek_parametreler: list[object] = []
+        if "field_type" in mevcut_form_kolonlari:
+            ek_kolonlar.append("field_type")
+            ek_degerler.append("%s")
+            ek_parametreler.append("text")
+        if "options" in mevcut_form_kolonlari:
+            ek_kolonlar.append("options")
+            ek_degerler.append("'[]'::jsonb")
+        if "layout_width" in mevcut_form_kolonlari:
+            ek_kolonlar.append("layout_width")
+            ek_degerler.append("%s")
+            ek_parametreler.append(1)
+        if "is_public" in mevcut_form_kolonlari:
+            ek_kolonlar.append("is_public")
+            ek_degerler.append("%s")
+            ek_parametreler.append(False)
+
         # Kiracı listesi: `hr.tenant_directory` RLS dışıdır ve app rolüne SELECT verilir.
         cur.execute("SELECT tenant_id, slug FROM hr.tenant_directory ORDER BY slug")
         kiracilar = cur.fetchall()
@@ -113,12 +140,16 @@ def backfill(apps, schema_editor) -> None:  # noqa: ANN001, ARG001
                     "INSERT INTO hr.form_field_definitions "
                     "(id, created_at, updated_at, deleted_at, tenant_id, form_code, field_code, "
                     " section_code, section_label, sort_order, is_visible, is_required, "
-                    " label_override, helper_text, lock_level, data_class, created_by_id) "
+                    " label_override, helper_text, lock_level, data_class, created_by_id"
+                    + (", " + ", ".join(ek_kolonlar) if ek_kolonlar else "")
+                    + ") "
                     "VALUES (gen_random_uuid(), now(), now(), NULL, %s, %s, %s, %s, %s, %s, %s, "
                     # `label_override` boş dize: kolon `0019_p1a_reason_not_null` ile NOT NULL
                     # olduğu için NULL yazımı sonradan hata verir (bu fonksiyon testlerde de
                     # çağrılır). Semantik aynıdır: boş = override yok.
-                    "        %s, '', '', %s, %s, NULL) "
+                    "        %s, '', '', %s, %s, NULL"
+                    + (", " + ", ".join(ek_degerler) if ek_degerler else "")
+                    + ") "
                     # KISMİ benzersiz indeks → predicate zorunlu (idempotans).
                     "ON CONFLICT (tenant_id, form_code, field_code) "
                     "  WHERE deleted_at IS NULL DO NOTHING",
@@ -133,6 +164,7 @@ def backfill(apps, schema_editor) -> None:  # noqa: ANN001, ARG001
                         is_required,
                         lock_level,
                         data_class,
+                        *ek_parametreler,
                     ],
                 )
             cur.execute("SELECT count(*) FROM hr.form_field_definitions")

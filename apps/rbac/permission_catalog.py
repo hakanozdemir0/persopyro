@@ -15,6 +15,25 @@ from apps.rbac.models import ORG_SCOPED_ROLE_SCOPE_TYPES, RoleScopeType  # noqa:
 
 # (kod, ad, modül)
 PERMISSIONS: list[tuple[str, str, str]] = [
+    # Arayüz başlıkları ve alt başlıkları (işlem izinlerinden bağımsız görünürlük).
+    ("ui.panel.view", "Panel başlığını görme", "ui"),
+    ("ui.departments.view", "Departmanlar başlığını görme", "ui"),
+    ("ui.employees.view", "Çalışanlar başlığını görme", "ui"),
+    ("ui.employees.list", "Çalışan Ara / Liste alt başlığını görme", "ui"),
+    ("ui.employees.new", "Yeni Çalışan alt başlığını görme", "ui"),
+    ("ui.employees.form", "Kişisel Bilgi Formu alt başlığını görme", "ui"),
+    ("ui.employees.exit", "İşten Çıkış / Çıkış Süreci alt başlığını görme", "ui"),
+    ("ui.employees.suspended", "Askıya Alınanlar alt başlığını görme", "ui"),
+    ("ui.leave.view", "İzin Talebi başlığını görme", "ui"),
+    ("ui.leave.request", "İzin talebi alt bölümünü görme", "ui"),
+    ("ui.leave.policy", "İzin politikası alt bölümünü görme", "ui"),
+    ("ui.leave.types", "İzin türleri alt bölümünü görme", "ui"),
+    ("ui.leave.entitlements", "İzin hakları alt bölümünü görme", "ui"),
+    ("ui.overtime.view", "Fazla Mesai başlığını görme", "ui"),
+    ("ui.overtime.requests", "Fazla mesai bildirimleri alt bölümünü görme", "ui"),
+    ("ui.overtime.rules", "Fazla mesai kuralları alt bölümünü görme", "ui"),
+    ("ui.approvals.view", "Onaylar başlığını görme", "ui"),
+    ("ui.roles.view", "Yetki Yönetimi başlığını görme", "ui"),
     # Kiracı ve kullanıcı yönetimi
     ("tenant.read", "Kiracı bilgilerini görme", "tenant"),
     ("tenant.manage", "Kiracı ayarlarını yönetme", "tenant"),
@@ -58,6 +77,8 @@ PERMISSIONS: list[tuple[str, str, str]] = [
         "overtime",
     ),
     ("overtime.request.cancel", "Fazla mesai bildirimi iptali", "overtime"),
+    ("overtime.rule.read", "Fazla mesai kurallarını görme", "overtime"),
+    ("overtime.rule.manage", "Fazla mesai kuralı yönetimi", "overtime"),
     # Vardiya ve devam
     ("shift.read", "Vardiyaları görme", "shift"),
     ("shift.assign", "Vardiya atama", "shift"),
@@ -74,7 +95,44 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("billing.manage", "Abonelik ve faturalama yönetimi", "billing"),
 ]
 
-ALL_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PERMISSIONS]
+UI_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PERMISSIONS if kod.startswith("ui.")]
+# İşlem izinlerinin geriye dönük sabit kümesi. `ui.*` kodları arayüz görünürlüğü
+# için ayrı yönetilir; rol şablonlarının ve mevcut sayımların anlamı değişmez.
+ALL_PERMISSION_CODES: list[str] = [kod for kod, _, _ in PERMISSIONS if not kod.startswith("ui.")]
+
+UI_PERMISSION_REQUIREMENTS: dict[str, frozenset[str]] = {
+    "ui.panel.view": frozenset({
+        "employee.read", "leave.request.read", "leave.request.create",
+        "overtime.request.read", "role.manage",
+    }),
+    "ui.departments.view": frozenset({"org.department.read"}),
+    "ui.employees.view": frozenset({"employee.read"}),
+    "ui.employees.list": frozenset({"employee.read"}),
+    "ui.employees.new": frozenset({"employee.create"}),
+    "ui.employees.form": frozenset({"employee.form.manage"}),
+    "ui.employees.exit": frozenset({"employee.terminate", "employee.restore"}),
+    "ui.employees.suspended": frozenset({"employee.suspend", "employee.restore"}),
+    "ui.leave.view": frozenset({"leave.request.read", "leave.request.create"}),
+    "ui.leave.request": frozenset({"leave.request.read", "leave.request.create"}),
+    "ui.leave.policy": frozenset({"leave.type.manage"}),
+    "ui.leave.types": frozenset({"leave.type.manage"}),
+    "ui.leave.entitlements": frozenset({"leave.balance.read", "leave.balance.manage"}),
+    "ui.overtime.view": frozenset({"overtime.request.read", "overtime.request.create"}),
+    "ui.overtime.requests": frozenset({"overtime.request.read", "overtime.request.create"}),
+    "ui.overtime.rules": frozenset({"overtime.rule.read", "overtime.rule.manage"}),
+    "ui.approvals.view": frozenset({"leave.request.approve", "overtime.request.approve"}),
+    "ui.roles.view": frozenset({"role.read", "role.manage"}),
+}
+
+
+def ui_permission_codes_for(permission_codes) -> set[str]:  # noqa: ANN001
+    """Mevcut işlem izinlerinden geriye dönük uyumlu arayüz izinlerini üretir."""
+    sahip_olunan = set(permission_codes)
+    return {
+        ui_kodu
+        for ui_kodu, gerekliler in UI_PERMISSION_REQUIREMENTS.items()
+        if sahip_olunan.intersection(gerekliler)
+    }
 
 # --- Platform izinleri (M6) --------------------------------------------------
 # `platform.*` kodları **aynı katalogda** (`hr.permissions`) yaşar — ikinci bir
@@ -236,6 +294,8 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "overtime.request.read",
             "overtime.request.approve",
             "overtime.request.cancel",
+            "overtime.rule.read",
+            "overtime.rule.manage",
             "shift.read",
             "shift.assign",
             "shift.schedule.manage",

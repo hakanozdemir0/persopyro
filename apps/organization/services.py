@@ -466,6 +466,25 @@ def create_employee(  # noqa: PLR0913
         hire_date=hire_date,
         status=status,
     )
+    # Onboarding invariant (OD60 §28.6): yeni çalışanın **ilk açık ataması** aynı
+    # transaction içinde açılır. Aksi halde ilk gerçek değişiklikte
+    # `change_assignment` yalnız yeni satırı yazar (eski taraf boş kalır) →
+    # Timeline old→new geçmişi kaybolur. `effective_from` = hire_date
+    # (0015 backfill kuralıyla aynı başlangıç tarihi).
+    try:
+        EmployeeAssignment.objects.create(
+            tenant_id=tenant.id,
+            employee=calisan,
+            department=department,
+            position=position,
+            effective_from=hire_date,
+            reason="İşe alım: başlangıç ataması",
+            created_by=actor,
+        )
+    except DatabaseError as exc:
+        raise OrganizationError(
+            f"Başlangıç ataması yazılamadı (kiracı/benzersizlik garantisi): {exc}"
+        ) from exc
     log_action(
         tenant_id=tenant.id,
         action="employee.create",
@@ -742,6 +761,66 @@ def _mevcut_atama_kilitle(employee: Employee) -> EmployeeAssignment | None:  # n
     )
 
 
+def _onboarding_baseline_duzelt(  # noqa: ANN001, PLR0913
+    *,
+    actor,
+    employee: Employee,
+    atama: EmployeeAssignment,
+    yeni_birim,  # noqa: ANN001
+    yeni_pozisyon,  # noqa: ANN001
+    eski_birim_id,  # noqa: ANN001
+    eski_pozisyon_id,  # noqa: ANN001
+    gerekce: str,
+) -> tuple[EmployeeAssignment, dict]:
+    """
+    İşe **başlamamış** çalışanın başlangıç atamasını **yerinde** düzeltir (OD60).
+
+    Çalışan henüz işe başlamadıysa (bugün < `hire_date`) ve açık atama yalnız
+    baseline satırıysa, bu iş geçmişte gerçekleşmiş bir görev değişikliği DEĞİL,
+    onboarding bilgi düzeltmesidir: **ikinci atama satırı** ve "Görev yeri
+    değişti" timeline olayı üretilmez (timeline yalnız atama satırlarından
+    okunur). `effective_from` = `hire_date` korunur (onboarding invariant),
+    `employees` snapshot'ı senkron edilir ve düzeltme denetim kaydına yazılır
+    (`employee.assignment.change` + `onboarding_correction` işareti).
+    """
+    atama.department_id = yeni_birim
+    atama.position_id = yeni_pozisyon
+    atama.save(update_fields=["department", "position", "updated_at"])
+
+    degisen: list[str] = []
+    if employee.department_id != yeni_birim:
+        employee.department_id = yeni_birim
+        degisen.append("department")
+    if employee.position_id != yeni_pozisyon:
+        employee.position_id = yeni_pozisyon
+        degisen.append("position")
+    if degisen:
+        employee.save(update_fields=[*degisen, "updated_at"])
+
+    ortak = {
+        "old_department_id": str(eski_birim_id) if eski_birim_id else None,
+        "new_department_id": str(yeni_birim),
+        "old_position_id": str(eski_pozisyon_id) if eski_pozisyon_id else None,
+        "new_position_id": str(yeni_pozisyon) if yeni_pozisyon else None,
+        "effective_from": atama.effective_from.isoformat(),
+    }
+    log_action(
+        tenant_id=employee.tenant_id,
+        action="employee.assignment.change",
+        user=actor,
+        table_name="employee_assignments",
+        record_id=atama.pk,
+        changes={
+            "employee_id": str(employee.pk),
+            "onboarding_correction": True,
+            **ortak,
+            "reason": gerekce[:200],
+        },
+    )
+    invalidate_org_scope_cache(employee.tenant_id)
+    return atama, {"degisiklik": True, "onboarding_correction": True, **ortak}
+
+
 @transaction.atomic
 def change_assignment(
     *,
@@ -757,7 +836,12 @@ def change_assignment(
 
     * Hedef birim/pozisyon aynı kiracıda ve soft-delete edilmemiş olmalıdır
       (DB guard'ı da dayatır); başlangıç tarihi en az bugün olmalıdır
-      (geçmişe dönük atama P1'de desteklenmez).
+      (geçmişe dönük atama P1'de desteklenmez) ve **işe giriş tarihinden önce
+      olamaz** (`hire_date` invariant'ı).
+    * Çalışan **henüz işe başlamadıysa** (bugün < hire_date) ve açık atama yalnız
+      baseline satırıysa, istek onboarding bilgi düzeltmesi sayılır: ikinci satır
+      ve timeline olayı üretilmez, baseline **yerinde** güncellenir
+      (`_onboarding_baseline_duzelt`).
     * Eski açık atama kapanır (effective_to = yeni başlangıç − 1 gün);
       aynı gün geçiş için eski satır aynı gün kapanır (DATE modeli: iki satır
       aynı günü paylaşabilir, kapanış ≥ başlangıç CHECK'i bozulmaz).
@@ -800,6 +884,40 @@ def change_assignment(
     # eşit olsa bile; yoksa geçmiş sorgusu boş kalır, OD60 riski).
     if eski is not None and yeni_birim == eski_birim_id and yeni_pozisyon == eski_pozisyon_id:
         return eski, {"degisiklik": False}
+
+    # Pre-hire onboarding düzeltmesi: çalışan henüz işe başlamadıysa (bugün <
+    # hire_date) ve açık atama **yalnız baseline** satırıysa (kapalı geçmiş
+    # satırı yok), kullanıcı başlangıç birim/pozisyon bilgisini düzeltiyordur.
+    # Bu durumda ikinci satır açmak yerine baseline yerinde güncellenir
+    # (timeline'da sahte "Görev yeri değişti" olayı doğmaz).
+    if (
+        eski is not None
+        and eski.effective_from == employee.hire_date
+        and employee.hire_date > timezone.localdate()
+        and not EmployeeAssignment.objects.filter(
+            employee=employee, deleted_at__isnull=True
+        ).exclude(pk=eski.pk).exists()
+        and (effective_from is None or effective_from == employee.hire_date)
+    ):
+        return _onboarding_baseline_duzelt(
+            actor=actor,
+            employee=employee,
+            atama=eski,
+            yeni_birim=yeni_birim,
+            yeni_pozisyon=yeni_pozisyon,
+            eski_birim_id=eski_birim_id,
+            eski_pozisyon_id=eski_pozisyon_id,
+            gerekce=gerekce,
+        )
+
+    # Onboarding invariant (OD60): atama başlangıcı işe giriş tarihinden ÖNCE
+    # olamaz — baseline'ın `effective_from` değeri `hire_date`'tir; daha erken
+    # bir tarih geçmişe dönük yazım olurdu.
+    if baslangic < employee.hire_date:
+        raise OrganizationError(
+            "Atama başlangıcı işe giriş tarihinden önce olamaz "
+            f"(işe giriş: {employee.hire_date})."
+        )
 
     if eski is not None:
         if eski.effective_from > baslangic:

@@ -30,7 +30,7 @@ açık `refund` kaydı ve denetimle yapılır.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -43,6 +43,7 @@ from apps.leave.models import (
     ApprovalSubjectKind,
     BalanceEntryKind,
     LeaveBalance,
+    LeaveDecisionSnapshot,
     LeaveRequest,
     LeaveRequestStatus,
     LeaveType,
@@ -54,6 +55,7 @@ from apps.leave.services.authorization import (
     can_create_leave_request_for,
     can_override_approval,
     current_step,
+    direct_reports,
     employee_in_scope,
     is_own_employee,
 )
@@ -84,6 +86,9 @@ def calculate_requested_days(
     start_date: date,
     end_date: date,
     is_half_day: bool = False,
+    start_time: time | None = None,
+    end_time: time | None = None,
+    workday_minutes: int | None = None,
 ) -> Decimal:
     """
     İstenen gün sayısını **sunucu tarafında** hesaplar (takvim günü, kapsayıcı).
@@ -93,6 +98,26 @@ def calculate_requested_days(
     """
     if end_date < start_date:
         raise LeaveError("Bitiş tarihi başlangıç tarihinden önce olamaz.")
+    if workday_minutes is not None:
+        if start_date != end_date:
+            raise LeaveError("Saat tabanlı serbest zaman izni tek gün seçilerek alınmalıdır.")
+        if workday_minutes <= 0:
+            raise LeaveError("1 gün dakika değeri pozitif olmalıdır.")
+        # Kullanıcı yalnızca tek gün seçtiğinde, o gün doğrudan tenant'ın
+        # serbest zaman çalışma günü olarak sayılır; saat alanı zorunlu değildir.
+        if start_time is None and end_time is None:
+            return Decimal("1")
+        if start_time is None or end_time is None:
+            raise LeaveError("Saat tabanlı izin için başlangıç ve bitiş birlikte girilmelidir.")
+        dakika = int((datetime.combine(start_date, end_time) - datetime.combine(start_date, start_time)).total_seconds() // 60)
+        if dakika <= 0:
+            raise LeaveError("Bitiş saati başlangıç saatinden sonra olmalıdır.")
+        if dakika % 30:
+            raise LeaveError(
+                "Serbest zaman kullanımı yalnızca 30 dakikalık aralıklarla girilebilir "
+                "(ör. 1, 1.5 veya 2 saat)."
+            )
+        return (Decimal(dakika) / Decimal(workday_minutes)).quantize(Decimal("0.0001"))
     if is_half_day:
         if start_date != end_date:
             raise LeaveError("Yarım gün izni yalnızca tek gün için tanımlanabilir.")
@@ -135,6 +160,82 @@ def _calisan_kullanilabilir(employee: Employee) -> None:
         )
 
 
+#: Yeni talebi **bloklayan** mevcut talep durumları (aynı çalışan/aynı dönem).
+#: * `pending`: onay sürecinde (onaya sunulmuş talep `pending`'dir).
+#: * `approved`: onaylanmış.
+#: * `taken`: onaylanmış iznin kullanılmış hâli — dönem fiilen tüketilmiştir.
+#: `draft` (henüz onaya sunulmadı), `rejected` ve `canceled` **bloklamaz**.
+AKTIF_TALEP_DURUMLARI = (
+    LeaveRequestStatus.PENDING,
+    LeaveRequestStatus.APPROVED,
+    LeaveRequestStatus.TAKEN,
+)
+
+#: Kullanıcıya gösterilen çakışma mesajı (ham SQL/exception ayrıntısı sızdırılmaz).
+CAKISMA_MESAJI = (
+    "Bu tarih aralığında bekleyen veya onaylanmış başka bir izin talebiniz bulunuyor."
+)
+
+
+def _cakisan_aktif_talep(
+    *,
+    employee: Employee,
+    start_date: date,
+    end_date: date,
+    exclude_pk=None,  # noqa: ANN001
+) -> LeaveRequest | None:
+    """
+    Aynı **kiracı** ve aynı **çalışan** için tarih aralığı çakışan aktif talebi bulur.
+
+    Çakışma (kapsayıcı, sınır günler dahil)::
+
+        existing.start_date <= new.end_date AND existing.end_date >= new.start_date
+
+    Kapsam tesadüfen değil **açıkça** daraltılır: `tenant_id` + `employee_id`. Farklı
+    kiracının/çalışanın kaydı bu sorguya girmez (RLS ek güvencedir).
+    """
+    sorgu = LeaveRequest.objects.filter(
+        tenant_id=employee.tenant_id,
+        employee_id=employee.pk,
+        status__in=AKTIF_TALEP_DURUMLARI,
+        deleted_at__isnull=True,
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+    )
+    if exclude_pk is not None:
+        # Kendi kaydı (taslak onaya sunulurken) çakışma sayılmaz.
+        sorgu = sorgu.exclude(pk=exclude_pk)
+    return sorgu.order_by("start_date").first()
+
+
+def _cakisma_guard(
+    *,
+    employee: Employee,
+    start_date: date,
+    end_date: date,
+    exclude_pk=None,  # noqa: ANN001
+) -> None:
+    """Çakışan aktif talep varsa **fail-closed** reddeder (izin türünden bağımsız)."""
+    if _cakisan_aktif_talep(
+        employee=employee,
+        start_date=start_date,
+        end_date=end_date,
+        exclude_pk=exclude_pk,
+    ):
+        raise LeaveStateError(CAKISMA_MESAJI)
+
+
+def _calisani_kilitle(employee_id) -> None:  # noqa: ANN001
+    """
+    Çalışan satırını kilitler (uygulama düzeyi yarış çözümü).
+
+    Aynı çalışan için eşzamanlı iki "kontrol → create" çağrısının ikisinin de
+    çakışmasız görüp duplicate üretmesini engeller: ikinci işlem, birincinin
+    commit'ini bekler ve ardından çakışmayı görür. Şema/migration gerekmez.
+    """
+    Employee.objects.select_for_update().filter(pk=employee_id).first()
+
+
 def create_leave_request(
     *,
     actor,
@@ -163,14 +264,16 @@ def create_leave_request(
         )
     _calisan_kullanilabilir(employee)
     _tur_kullanilabilir(leave_type)
-    if not (is_own_employee(actor, employee) or employee_in_scope(actor, employee)):
+    if employee.pk not in direct_reports(actor):
         raise LeaveAuthorizationError(
-            "Bu çalışan adına izin talebi oluşturmak için 'leave.request.create' izni "
-            "ve organizasyon kapsamı (ya da kayıt sahipliği) gerekir."
+            "'leave.request.create' izniyle yalnızca kendiniz veya size bağlı çalışanlar "
+            "adına izin talebi oluşturabilirsiniz."
         )
 
     gun = calculate_requested_days(
-        start_date=start_date, end_date=end_date, is_half_day=is_half_day
+        start_date=start_date, end_date=end_date, is_half_day=is_half_day,
+        start_time=start_time, end_time=end_time,
+        workday_minutes=leave_type.workday_minutes if leave_type.is_time_based else None,
     )
     _dogrula_istenen_gun(gun, requested_days)
 
@@ -192,6 +295,9 @@ def create_leave_request(
         )
 
     with transaction.atomic():
+        # Yarış güvencesi: aynı çalışan için eşzamanlı talep oluşturma serileştirilir.
+        _calisani_kilitle(employee.pk)
+        _cakisma_guard(employee=employee, start_date=start_date, end_date=end_date)
         request = LeaveRequest.objects.create(
             tenant_id=employee.tenant_id,
             employee=employee,
@@ -242,6 +348,15 @@ def _onaya_sun(request: LeaveRequest, *, actor) -> LeaveRequest:
             f"Yalnızca taslak talep onaya sunulabilir (mevcut durum: {request.status})."
         )
     _tur_kullanilabilir(request.leave_type)
+    # Onaya sunma (taslak → pending) de çakışma kontrolünden geçer: taslak
+    # oluşturulduktan sonra başka bir talep onaylanmış olabilir. Kendi kaydı hariç.
+    _calisani_kilitle(request.employee_id)
+    _cakisma_guard(
+        employee=request.employee,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        exclude_pk=request.pk,
+    )
     request.submitted_at = timezone.now()
     request.status = LeaveRequestStatus.PENDING
     request.save(update_fields=["submitted_at", "status", "updated_at"])
@@ -549,6 +664,55 @@ def decide_approval_step(
         return kilitli
 
 
+def _karar_snapshot_yaz(request: LeaveRequest, *, karar: str) -> LeaveDecisionSnapshot:
+    """
+    Karar anındaki izin bakiyesini **immutable** snapshot olarak yazar (M14/K).
+
+    * Bir talep için **en fazla 1** snapshot: mevcut kayıt varsa tekrar yazılmaz
+      (idempotent; `leave_request_id` benzersizliği DB'de de korur) ve mevcut
+      kayıt **güncellenmez** (DB tetikleyicisi UPDATE/DELETE'i reddeder).
+    * Çağrı sırası önemlidir: onayda `_tuket` **sonrasında**, redde rezervasyon
+      çözüldükten sonra çağrılır → snapshot kararın **etkisi uygulandıktan
+      sonraki** bakiyeyi gösterir.
+    * Alan adları `leave_balances` ile aynıdır; bakiye satırı yoksa (bakiye
+      kullanmayan tür) değerler NULL kalır — bugünkü bakiye geçmiş gibi yazılmaz.
+    """
+    mevcut = LeaveDecisionSnapshot.objects.filter(leave_request_id=request.pk).first()
+    if mevcut is not None:
+        return mevcut
+
+    donem = period_year_for(request.start_date)
+    bakiye = None
+    if request.leave_type.uses_balance:
+        bakiye = LeaveBalance.objects.filter(
+            tenant_id=request.tenant_id,
+            employee_id=request.employee_id,
+            leave_type_id=request.leave_type_id,
+            period_year=donem,
+            deleted_at__isnull=True,
+        ).first()
+
+    def deger(alan: str):  # noqa: ANN202
+        return getattr(bakiye, alan) if bakiye is not None else None
+
+    return LeaveDecisionSnapshot.objects.create(
+        tenant_id=request.tenant_id,
+        leave_request=request,
+        employee_id=request.employee_id,
+        leave_type_id=request.leave_type_id,
+        period_year=donem,
+        decision_status=karar,
+        uses_balance=request.leave_type.uses_balance,
+        entitled_days=deger("entitled_days"),
+        carried_forward_days=deger("carried_forward_days"),
+        adjustment_days=deger("adjustment_days"),
+        used_days=deger("used_days"),
+        reserved_days=deger("reserved_days"),
+        available_days=deger("available_days"),
+        snapshot_at=timezone.now(),
+    )
+
+
 def _nihai_onay(request: LeaveRequest, *, actor, otomatik: bool = False) -> LeaveRequest:
     """Nihai onay: bakiye **tek kez** tüketilir, talep `approved` olur."""
     if request.leave_type.requires_document and request.document_ref is None:
@@ -561,6 +725,8 @@ def _nihai_onay(request: LeaveRequest, *, actor, otomatik: bool = False) -> Leav
     request.decided_at = timezone.now()
     request.decided_by = actor
     request.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
+    # Karar anı bakiyesi: tüketim **uygulandıktan sonra** dondurulur.
+    _karar_snapshot_yaz(request, karar=LeaveRequestStatus.APPROVED)
     log_action(
         tenant_id=request.tenant_id,
         action="leave.request.approve",
@@ -625,6 +791,8 @@ def _reddet(request: LeaveRequest, *, actor, reason: str, adim) -> LeaveRequest:
     request.decided_at = simdi
     request.decided_by = actor
     request.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
+    # Redde bakiye tüketilmez; rezervasyon çözüldükten sonraki durum dondurulur.
+    _karar_snapshot_yaz(request, karar=LeaveRequestStatus.REJECTED)
     log_action(
         tenant_id=request.tenant_id,
         action="leave.request.reject",
@@ -657,7 +825,8 @@ def cancel_leave_request(*, actor, request: LeaveRequest, reason: str) -> LeaveR
         raise LeaveError("İptal için gerekçe zorunludur.")
     if not can_cancel_leave_request(actor, request):
         raise LeaveAuthorizationError(
-            "İptal için 'leave.request.cancel' izni ve kapsam (ya da kayıt sahipliği) gerekir."
+            "Kendi talebiniz için 'leave.request.create'; başkasının talebi için "
+            "'leave.request.cancel' izni ve organizasyon kapsamı gerekir."
         )
 
     with transaction.atomic():

@@ -39,6 +39,17 @@ class LeaveCategory(models.TextChoices):
 #: `requires_document=True` olan tür belge olmadan **onaylanamaz** (fail-closed).
 DEFAULT_LEAVE_TYPES: tuple[dict, ...] = (
     {
+        "code": "time_off",
+        "name": "Serbest Zaman",
+        "category": LeaveCategory.OTHER,
+        "is_paid": True,
+        "uses_balance": True,
+        "requires_approval": True,
+        "requires_document": False,
+        "is_time_based": True,
+        "workday_minutes": 480,
+    },
+    {
         "code": "annual_leave",
         "name": "Yıllık İzin",
         "category": LeaveCategory.ANNUAL,

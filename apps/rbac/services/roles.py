@@ -25,7 +25,10 @@ from apps.rbac.models import (
     UserRole,
 )
 from apps.rbac.permission_catalog import DEFAULT_ROLE_TEMPLATES
-from apps.rbac.services.permissions import effective_permission_codes
+from apps.rbac.services.permissions import (
+    effective_permission_codes,
+    invalidate_permission_cache,
+)
 
 
 class MissingPermissionError(RuntimeError):
@@ -195,6 +198,10 @@ def assign_role_to_user(  # noqa: ANN001, PLR0913
     NOT: M10 (`departments`) öncesi kapsam **çözülemez**; bu yüzden atanan
     `UNIT`/`UNIT_DIRECT` rol **izin üretmez** (fail-closed, `services/scope.py`).
     """
+    # Onbellek: rol/izin degisimi committe gecersizlesir (request-scope cache).
+    invalidate_permission_cache()  # anında (atomic içi okumalar güncel görür)
+    transaction.on_commit(invalidate_permission_cache)  # commit sonrası da garanti
+
     if actor is None or target_user is None or role is None:
         raise RoleAssignmentValidationError("Aktör, hedef kullanıcı ve rol zorunludur.")
     if str(getattr(actor, "pk", None)) == str(getattr(target_user, "pk", None)):
@@ -250,6 +257,7 @@ def assign_role_to_user(  # noqa: ANN001, PLR0913
         table_name="user_roles",
         record_id=atama.pk,
         changes={
+            "target_user_id": str(target_user.pk),
             "role_code": role.code,
             "scope_type": role.scope_type,
             "scope_org_unit_id": str(scope_org_unit_id) if scope_org_unit_id else None,
@@ -297,6 +305,10 @@ def revoke_role_assignment(*, actor, assignment, reason: str = ""):  # noqa: ANN
     * Yalnızca `role.manage` sahibi ve atanabilir rollü aktörler çağırabilir; kullanıcı
       kendi atamasını kaldıramaz (self-elevation yasağı).
     """
+    # Onbellek: rol/izin degisimi committe gecersizlesir (request-scope cache).
+    invalidate_permission_cache()  # anında (atomic içi okumalar güncel görür)
+    transaction.on_commit(invalidate_permission_cache)  # commit sonrası da garanti
+
     _atama_guardlari(actor, assignment)
     if assignment.deleted_at is not None:
         raise RoleAssignmentValidationError("Bu atama zaten kaldırılmış.")
@@ -328,6 +340,10 @@ def restore_role_assignment(*, actor, assignment, reason: str = ""):  # noqa: AN
     OD21: geri alma sessizce olmaz; açık talep + denetim kaydı gerekir. Guard'lar
     atama ile aynıdır (`role.manage`, self-elevation yasağı, kiracı eşitliği).
     """
+    # Onbellek: rol/izin degisimi committe gecersizlesir (request-scope cache).
+    invalidate_permission_cache()  # anında (atomic içi okumalar güncel görür)
+    transaction.on_commit(invalidate_permission_cache)  # commit sonrası da garanti
+
     _atama_guardlari(actor, assignment)
     if assignment.deleted_at is None:
         raise RoleAssignmentValidationError("Bu atama zaten etkin (geri alınacak bir şey yok).")
@@ -387,6 +403,10 @@ def update_role_permissions(*, actor, role, permission_codes, reason: str = ""):
         (boş rol sessiz kilitlenme yaratır),
       * değişiklik `audit_logs`'a yazılır (`role.permissions.update`).
     """
+    # Onbellek: rol/izin degisimi committe gecersizlesir (request-scope cache).
+    invalidate_permission_cache()  # anında (atomic içi okumalar güncel görür)
+    transaction.on_commit(invalidate_permission_cache)  # commit sonrası da garanti
+
     _rol_izin_guardlari(actor, role)
 
     hedef = {str(kod).strip().lower() for kod in permission_codes if str(kod).strip()}
@@ -496,6 +516,7 @@ def create_custom_role(  # noqa: ANN001, PLR0913
     name: str,
     scope_type: str = RoleScopeType.TENANT,
     reason: str = "",
+    hierarchy_level: int | None = 30,
 ):
     """
     Kiracıya özel (`role_type=custom`) yeni rol oluşturur ve denetler.
@@ -508,6 +529,10 @@ def create_custom_role(  # noqa: ANN001, PLR0913
         **platform (`SYS`) reddedilir** (OD3),
       * yeni rol **boş** doğar: izin kümesi "Yetki Yönetimi"nden düzenlenir.
     """
+    # Onbellek: rol/izin degisimi committe gecersizlesir (request-scope cache).
+    invalidate_permission_cache()  # anında (atomic içi okumalar güncel görür)
+    transaction.on_commit(invalidate_permission_cache)  # commit sonrası da garanti
+
     _rol_yazma_guardlari(actor, tenant)
     kod = (code or "").strip().lower()
     ad = (name or "").strip()
@@ -524,6 +549,8 @@ def create_custom_role(  # noqa: ANN001, PLR0913
             "Kapsam tipi TENANT/UNIT/UNIT_DIRECT/SELF olmalıdır (platform rolleri "
             "kiracı arayüzünden oluşturulamaz — OD3)."
         )
+    if hierarchy_level is not None and hierarchy_level not in range(1, 31):
+        raise RoleAssignmentValidationError("Kiracı rolü hiyerarşi seviyesi 1 ile 30 arasında olmalıdır.")
     mevcut = Role.objects.filter(tenant=tenant, code=kod).first()
     if mevcut is not None and mevcut.deleted_at is None:
         raise RoleAssignmentValidationError(f"'{kod}' koduyla bir rol zaten var.")
@@ -540,6 +567,7 @@ def create_custom_role(  # noqa: ANN001, PLR0913
         role_type=RoleType.CUSTOM,
         scope_type=scope_type,
         is_assignable=True,
+        hierarchy_level=hierarchy_level,
     )
     log_action(
         tenant_id=tenant.pk,
@@ -560,6 +588,7 @@ def update_role_meta(  # noqa: ANN001
     name: str | None = None,
     scope_type: str | None = None,
     reason: str = "",
+    hierarchy_level: int | None = None,
 ):
     """
     Rolün **adını** ve/veya **kapsam tipini** değiştirir (izin kümesi ayrı işlemdir).
@@ -569,6 +598,10 @@ def update_role_meta(  # noqa: ANN001
       kapsamsız atamalarla fail-closed kalırdı (yanlış yapılandırma).
     * Değişiklik `audit_logs`'a yazılır (`role.update`).
     """
+    # Onbellek: rol/izin degisimi committe gecersizlesir (request-scope cache).
+    invalidate_permission_cache()  # anında (atomic içi okumalar güncel görür)
+    transaction.on_commit(invalidate_permission_cache)  # commit sonrası da garanti
+
     _rol_yazma_guardlari(actor, role.tenant)
     if role is None or role.deleted_at is not None:
         raise RoleAssignmentValidationError("Rol bulunamadı veya silinmiş.")
@@ -593,6 +626,11 @@ def update_role_meta(  # noqa: ANN001
             )
         degisen["scope_type"] = {"before": role.scope_type, "after": scope_type}
         role.scope_type = scope_type
+    if hierarchy_level is not None and hierarchy_level != role.hierarchy_level:
+        if hierarchy_level not in range(1, 31):
+            raise RoleAssignmentValidationError("Kiracı rolü hiyerarşi seviyesi 1 ile 30 arasında olmalıdır.")
+        degisen["hierarchy_level"] = {"before": role.hierarchy_level, "after": hierarchy_level}
+        role.hierarchy_level = hierarchy_level
 
     if not degisen:
         return role

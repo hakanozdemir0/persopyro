@@ -24,6 +24,7 @@ from apps.leave.services.authorization import (
     can_read_balances,
     can_view_leave_request,
     current_step,
+    direct_reports,
     is_assigned_to_step,
     user_employee,
 )
@@ -60,6 +61,7 @@ from apps.leave.services.types import (
     create_default_leave_types,
     create_leave_type,
     deactivate_leave_type,
+    activate_leave_type,
     update_leave_type,
 )
 
@@ -80,9 +82,11 @@ __all__ = [
     "can_manage_leave_types",
     "can_read_balances",
     "can_view_leave_request",
+    "direct_reports",
     "cancel_leave_request",
     "create_default_leave_types",
     "deactivate_leave_type",
+    "activate_leave_type",
     "create_leave_policy",
     "create_leave_request",
     "create_leave_type",

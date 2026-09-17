@@ -16,13 +16,16 @@ Koşullar (docs/AUTHORIZATION.md §5.4 kapalı kümesi):
 
 from __future__ import annotations
 
+from django.db.models import Q
+from django.utils import timezone
+
 from apps.leave.models import (
     ApprovalStep,
     ApprovalStepStatus,
     LeaveRequest,
     LeaveRequestStatus,
 )
-from apps.organization.models import Employee, EmployeeStatus
+from apps.organization.models import Employee, EmployeeManager, EmployeeStatus
 from apps.rbac.services import active_role_assignments, user_has_permission
 from apps.rbac.services.scope import object_in_org_scope, user_org_scope
 
@@ -74,6 +77,27 @@ def employee_in_scope(user, employee: Employee | None) -> bool:
     )
 
 
+def direct_reports(user) -> set:
+    """Aktörün kendi çalışan kaydı ve aktif birincil bağlı çalışanları."""
+    kendi = user_employee(user)
+    if kendi is None:
+        return set()
+    bugun = timezone.localdate()
+    ids = {kendi.pk}
+    ids.update(
+        EmployeeManager.objects.filter(
+            tenant_id=kendi.tenant_id,
+            manager_employee_id=kendi.pk,
+            relation_type="primary",
+            effective_from__lte=bugun,
+            deleted_at__isnull=True,
+        )
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=bugun))
+        .values_list("employee_id", flat=True)
+    )
+    return ids
+
+
 def is_own_employee(user, employee: Employee | None) -> bool:
     """`SELF` koşulu: kayıt, aktörün kendi çalışan kaydı mı."""
     return (
@@ -109,7 +133,7 @@ def can_create_leave_request_for(actor, employee: Employee | None) -> bool:
         return False
     if not _aktif_calisan(employee):
         return False
-    return is_own_employee(actor, employee) or employee_in_scope(actor, employee)
+    return employee.pk in direct_reports(actor)
 
 
 def can_view_leave_request(actor, request: LeaveRequest | None) -> bool:
@@ -130,17 +154,26 @@ def can_view_leave_request(actor, request: LeaveRequest | None) -> bool:
 
 def can_cancel_leave_request(actor, request: LeaveRequest | None) -> bool:
     """
+    Kendi talebi için `leave.request.create`, başkasının talebi için
     `leave.request.cancel` ∧ kapsam.
 
     Çalışan kendi talebini **onay öncesi** iptal edebilir (docs §6.2E: `SELF, onay
-    öncesi`); onaylanmış talebin iptali kapsam/izin sahibine aittir.
+    öncesi`); onaylanmış talebin iptali de kendi talebi için mümkündür ve
+    politika iade kontrolü `cancel_leave_request` içinde uygulanır. Başkasının
+    talebinin iptali ayrı iptal yetkisi ve organizasyon kapsamı ister.
     """
     if request is None or not _ayni_kiracida(actor, request.tenant_id):
         return False
+    if is_own_employee(actor, request.employee):
+        if not user_has_permission(actor, "leave.request.create"):
+            return False
+        return request.status in (
+            LeaveRequestStatus.DRAFT,
+            LeaveRequestStatus.PENDING,
+            LeaveRequestStatus.APPROVED,
+        )
     if not user_has_permission(actor, "leave.request.cancel"):
         return False
-    if is_own_employee(actor, request.employee):
-        return request.status in (LeaveRequestStatus.DRAFT, LeaveRequestStatus.PENDING)
     return employee_in_scope(actor, request.employee)
 
 
