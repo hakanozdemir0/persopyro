@@ -73,6 +73,7 @@ nokta bu dokümana eklenir.
 |---|---|---|---|
 | `/api/v1/auth/login` | POST | Yok (giriş) | Gövde: `tenant`, `email`, `password`, `totp_code?`. Oturum çerezi (HttpOnly) döner; **CSRF korumalı** |
 | `/api/v1/auth/logout` | POST | Oturum | Oturumu kapatır; denetim kaydı yazar |
+| `/api/v1/auth/password/reset/confirm` | POST | E-posta bağlantısındaki tek kullanımlık token | Gövde: `tenant`, `uid`, `token`, `new_password`, `new_password_confirm`. Token süresi dolunca veya kullanıldıktan sonra geçersiz olur; parola kuralları uygulanır ve önceki oturum/token sürümleri iptal edilir |
 | `/api/v1/auth/token` | POST | Yok (giriş) | Gövde: `tenant`, `email`, `password`, `totp_code?` + **`purpose`, `scopes`, `kind?`, `ttl_hours?`** (OD26 — kapalı, uygulandı ✅); opak API token döner (**201**) |
 | `/api/v1/auth/token/logout` | POST | Token | Yalnızca isteği yapan token'ı **iptal eder** (satır silinmez; `revoked_reason='logout'`) ✅ — başarılı çıkış **204**, çıkış sonrası aynı token **401** |
 | `/api/v1/auth/token/revoke-all` | POST | Token | Sahibinin **tüm** token'larını iptal eder ✅ (OD26); döner: `{"data": {"revoked": <sayı>}}` (`200`) |
@@ -143,7 +144,14 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/users` | POST | Giriş hesabı açar (`user.manage`): `email` + `password` (+ ad/soyad). Zayıf parola/çakışan e-posta `400`; parola yanıtta **dönmez**, denetimde yalnız e-posta yazılır |
 | `/test-ui/api/roles/create` | POST | Kiracıya özel rol oluşturur (`role.manage`, `create_custom_role`): `name`, `code`, `scope_type` (TENANT/UNIT/UNIT_DIRECT/SELF). Varsayılan/var olan kod veya platform kapsamı `400` |
 | `/test-ui/api/roles/<uuid>/update` | POST | Rol adını ve (etkin ataması yoksa) kapsam tipini günceller (`update_role_meta`); `role.manage` gerekir |
+| `/test-ui/api/roles/<uuid>/delete` | POST | Özel rolü soft-delete eder (`role.manage`, OD21); varsayılan/sistem rollerinde veya aktif atama varsa reddedilir |
 | `/test-ui/api/roles/<uuid>/permissions` | GET / POST | Rolün izin kümesini okur (modül gruplu, Türkçe adlarla) / yazar (`role.manage`) |
+| `/test-ui/api/shifts` | GET / POST | Vardiya şablonlarını listeler / oluşturur (`shift.read`, `shift.schedule.manage`) |
+| `/test-ui/api/shifts/<uuid>/update` | POST | Vardiya adı, saatleri, mola ve çalışma modelini günceller (`shift.schedule.manage`) |
+| `/test-ui/api/shifts/<uuid>/delete` | POST | Ataması olmayan vardiya şablonunu soft-delete eder (`shift.schedule.manage`) |
+| `/test-ui/api/shift-assignments` | GET / POST | Günlük planı listeler; tek gün veya tarih aralığında seçili haftanın günlerine vardiya atar (`shift.read`, `shift.assign`) |
+| `/test-ui/api/shift-assignments/<uuid>/update` | POST | Kapsam içindeki tek günlük vardiya atamasını başka bir vardiya şablonuyla günceller (`shift.assign`; izin çakışması denetlenir) |
+| `/test-ui/api/shift-control` | GET | Vardiya planını, onaylı izin/serbest zaman ve onaylı fazla mesai kayıtlarını aynı kontrol akışında listeler (`shift.read` + ilgili kapsam) |
 
 Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama (ör. `UNIT` rolde
 eksik birim kapsamı), `401/403` kimlik ve yetki/kapsam, `404` kapsam dışı veya yok,

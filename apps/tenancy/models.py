@@ -57,7 +57,11 @@ class Tenant(UUIDModel):
         choices=TenantStatus.choices,
         default=TenantStatus.TRIAL,
     )
+    valid_from = models.DateField("kullanım başlangıcı", null=True, blank=True)
+    valid_until = models.DateField("kullanım sonu", null=True, blank=True)
     max_users = models.PositiveIntegerField("kullanıcı limiti", default=10)
+    max_active_employees = models.PositiveIntegerField("aktif çalışan limiti", default=0)
+    max_employee_records = models.PositiveIntegerField("çalışan kayıt limiti", default=0)
     max_storage_mb = models.DecimalField(
         "depolama limiti (MB)", max_digits=12, decimal_places=2, default=500
     )
@@ -74,6 +78,14 @@ class Tenant(UUIDModel):
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(max_users__gte=0), name="tenants_max_users_nonneg"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(max_active_employees__gte=0),
+                name="tenants_max_active_emp_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(max_employee_records__gte=0),
+                name="tenants_max_emp_records_nonneg",
             ),
             models.CheckConstraint(
                 condition=models.Q(max_storage_mb__gte=0),

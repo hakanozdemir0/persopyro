@@ -15,12 +15,16 @@ import sys
 
 import pytest
 from django.core.management import CommandError, call_command
-from django.db import connection
+from django.db import connections
 
 from apps.platform import permissions as platform_yetki
-from apps.platform.constants import PLATFORM_ROLE_PERMISSIONS
+from apps.platform.constants import (
+    PLATFORM_ROLE_PERMISSIONS,
+    PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS,
+)
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(databases=["default", "platform"])
+connection = connections["platform"]
 
 KOMUT = "create_platform_superadmin"
 PAROLA = "Kuvvetli-Parola-42!"
@@ -85,7 +89,7 @@ def test_bootstrap_superadmin_olusturur(monkeypatch) -> None:  # noqa: ANN001
     assert platform_yetki.active_roles(kullanici_id) == ["superadmin"]
     assert platform_yetki.effective_permissions(kullanici_id) == set(
         PLATFORM_ROLE_PERMISSIONS["superadmin"]
-    )
+    ) | set(PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS)
     with connection.cursor() as cur:
         cur.execute(
             "SELECT granted_by_id, granted_at IS NOT NULL FROM platform.user_roles"

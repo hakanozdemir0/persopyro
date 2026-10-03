@@ -1,0 +1,191 @@
+{% extends "platform/base.html" %}
+
+{% block title %}Şirketler · PersoPyro{% endblock %}
+
+{% block header_actions %}
+  <span class="user-email">{{ email }}</span>
+  <form method="post" action="{% url 'platform-logout' %}">
+    {% csrf_token %}<button class="ghost" type="submit">Çıkış yap</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+  <nav class="panel-tabs" aria-label="Şirket yönetimi">
+    <a class="{% if tab == 'create' %}selected{% endif %}" href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>
+    <a class="{% if tab == 'companies' %}selected{% endif %}" href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
+    <a href="{% url 'platform-plans' %}">Planlar ve plan düzenleme</a>
+  </nav>
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">Sistem yönetimi</p>
+      <h1>Şirketler</h1>
+      <p>Kayıtlı şirketleri ve planlarını yönetin. Kullanım tarihleri ve çalışanlar şirket ayrıntılarındadır.</p>
+    </div>
+  </section>
+
+  {% if can_create_tenant and tab == 'create' %}
+  <section class="card" aria-labelledby="company-create-title">
+    <div class="section-head">
+      <h2 id="company-create-title">Yeni şirket oluştur</h2>
+      <span class="badge">SUPERADMIN</span>
+    </div>
+    <p class="card-intro">Şirket ve ilk şirket yöneticisi tek işlemde oluşturulur. Parola denetim kaydına yazılmaz.</p>
+    <form method="post" action="{% url 'platform-tenant-create' %}" class="form-grid" id="create-company-form">
+      {% csrf_token %}
+      <section class="company-form-section field-span">
+      <h3>Temel ayarlar ve limitler</h3>
+      <div class="company-form-grid">
+      <div class="field">
+        <label for="company-name">Şirket adı</label>
+        <input id="company-name" name="name" maxlength="200" autocomplete="organization" required>
+      </div>
+      <div class="field">
+        <label for="company-slug">Şirket kodu</label>
+        <input id="company-slug" name="slug" maxlength="60" pattern="[a-zA-Z0-9_-]+" required>
+      </div>
+      <div class="field">
+        <label for="company-domain">Alan adı <span class="muted">(isteğe bağlı)</span></label>
+        <input id="company-domain" name="domain" maxlength="190" placeholder="ik.ornek.com" autocomplete="url">
+      </div>
+      <div class="field">
+        <label for="company-max-users">Şirket kullanıcı hesabı limiti <span class="muted">(giriş yapabilen hesap sayısı)</span></label>
+        <input id="company-max-users" type="number" name="max_users" min="0" value="10" required>
+      </div>
+      <div class="field"><label for="company-plan">Plan</label>
+        <select id="company-plan" name="plan_code" required>{% for plan in plan_specs %}<option value="{{ plan.0 }}" data-users="{{ plan.2 }}" data-storage="{{ plan.3 }}" data-active="{{ plan.4 }}" data-records="{{ plan.5 }}">{{ plan.1 }}</option>{% endfor %}</select>
+      </div>
+      <div class="field"><label for="company-storage">Depolama limiti (MB; 0 = sınırsız)</label>
+        <input id="company-storage" type="number" name="max_storage_mb" min="0" step="0.01" value="500" required>
+      </div>
+      <div class="field"><label for="company-active-limit">Aktif çalışan limiti (0 = sınırsız)</label>
+        <input id="company-active-limit" type="number" name="max_active_employees" min="0" value="0" required>
+      </div>
+      <div class="field"><label for="company-record-limit">Toplam çalışan kayıt limiti (0 = sınırsız)</label>
+        <input id="company-record-limit" type="number" name="max_employee_records" min="0" value="0" required>
+      </div>
+      <div class="field"><label for="company-valid-from">Kullanım başlangıcı</label>
+        <input id="company-valid-from" type="date" name="valid_from">
+      </div>
+      <div class="field"><label for="company-valid-until">Kullanım bitişi</label>
+        <input id="company-valid-until" type="date" name="valid_until">
+      </div>
+      </div>
+      </section>
+
+      <section class="company-form-section field-span">
+      <h3>Sabit şirket bilgileri</h3>
+      <div class="company-form-grid">
+      {% for field, label in profile_fields %}
+      <div class="company-profile-row"><label for="company-{{ field }}">{{ label }}</label><input id="company-{{ field }}" name="{{ field }}" placeholder="{{ label }}" {% if field == "email" %}type="email"{% endif %}></div>
+      {% endfor %}
+      </div>
+      </section>
+
+      <section class="company-form-section field-span">
+      <h3>Ek şirket bilgileri</h3>
+      <p class="card-intro">Şirkete özel alanları ve değerlerini ekleyin.</p>
+      <input type="hidden" name="custom_fields_json" id="create-custom-fields-json" value="[]">
+      <div id="create-custom-fields"></div>
+      <div><button type="button" id="create-add-custom-field">+ Alan ekle</button></div>
+      </section>
+
+      <section class="company-form-section field-span">
+      <h3>İlk şirket yöneticisi</h3>
+      <div class="company-form-grid">
+      <div class="field">
+        <label for="admin-email">E-posta</label>
+        <input id="admin-email" type="email" name="admin_email" maxlength="190" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="admin-first-name">Ad</label>
+        <input id="admin-first-name" name="admin_first_name" maxlength="150" autocomplete="given-name" required>
+      </div>
+      <div class="field">
+        <label for="admin-last-name">Soyad</label>
+        <input id="admin-last-name" name="admin_last_name" maxlength="150" autocomplete="family-name" required>
+      </div>
+      <div class="field">
+        <label for="admin-password">Başlangıç parolası</label>
+        <input id="admin-password" type="password" name="admin_password" autocomplete="new-password" required>
+      </div>
+      </div>
+      <div class="form-actions">
+        <button class="primary" type="submit">Şirketi oluştur</button>
+      </div>
+      </section>
+    </form>
+  </section>
+  {% endif %}
+
+  {% if tab != 'create' %}<section class="card" aria-labelledby="company-list-title">
+    <div class="section-head">
+      <h2 id="company-list-title">Şirket listesi</h2>
+      <span class="muted">{{ tenants|length }} kayıt</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Şirket kodu</th><th>Alan adı</th><th>Durum</th><th>Şirket kullanıcı hesabı limiti</th><th>Plan</th><th>Oluşturulma</th><th>İşlemler</th></tr>
+        </thead>
+        <tbody>
+        {% for tenant in tenants %}
+          <tr>
+            <td><strong>{{ tenant.1 }}</strong></td>
+            <td>{{ tenant.2|default:"—" }}</td>
+            <td><span class="badge">{{ tenant.3 }}</span></td>
+            <td>{{ tenant.4 }}</td>
+            <td>{{ tenant.5|default:"—" }}</td>
+            <td>{{ tenant.6|date:"d.m.Y" }}</td>
+            <td><div class="row-actions"><a class="button" href="{% url 'platform-tenant-detail' tenant.0 %}">Ayrıntılar</a>{% if can_manage_companies %}<a class="button primary" href="{% url 'platform-tenant-detail' tenant.0 %}#company-edit">Düzenle</a>{% endif %}</div></td>
+          </tr>
+        {% empty %}
+          <tr><td class="empty-state" colspan="7">Henüz şirket kaydı yok.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(() => {
+  const customBox = document.getElementById('create-custom-fields');
+  if (customBox) {
+    const customJson = document.getElementById('create-custom-fields-json');
+    function syncCustom() {
+      const fields = [], used = new Set();
+      customBox.querySelectorAll('[data-custom-row]').forEach((row) => {
+        const label = row.querySelector('[data-label]').value.trim();
+        const slug = label.toLowerCase().replace(/ı/g,'i').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'alan';
+        let code = `custom_${slug}`, n = 2; while (used.has(code)) code = `custom_${slug}_${n++}`; used.add(code);
+        const type = row.querySelector('[data-type]').value, required = false;
+        const options = row.querySelector('[data-options]').value.split('\n').map((x) => x.trim()).filter(Boolean);
+        const value = row.querySelector('[data-value]'); value.name = `custom_value_${code}`; value.required = required;
+        if (type === 'select') { const selected = value.value; const select = value.tagName === 'SELECT' ? value : document.createElement('select'); select.dataset.value=''; select.name=value.name; select.required=required; select.replaceChildren(new Option('Seçiniz','')); options.forEach((x)=>select.add(new Option(x,x))); select.value=selected; if (select !== value) value.replaceWith(select); }
+        else { let input=value; if(value.tagName==='SELECT'){input=document.createElement('input');input.dataset.value='';input.value=value.value;value.replaceWith(input);} input.name=`custom_value_${code}`;input.required=required;input.type = type === 'email' ? 'email' : type === 'number' ? 'number' : type === 'date' ? 'date' : 'text'; }
+        fields.push({code,label,type,required,options});
+      });
+      customJson.value = JSON.stringify(fields);
+    }
+    document.getElementById('create-add-custom-field').addEventListener('click', () => {
+      const row = document.createElement('div'); row.className='custom-company-field'; row.dataset.customRow='';
+      row.innerHTML='<label>Bilgi adı<input data-label placeholder="Örn. Şirket türü" required></label><label>Bilgi türü<select data-type><option value="text">Metin</option><option value="email">E-posta</option><option value="number">Sayı</option><option value="date">Tarih</option><option value="select">Seçim listesi</option></select></label><label>Seçenekler<textarea data-options rows="2" placeholder="Seçim listesinde her satıra bir seçenek"></textarea></label><label>Şirket bilgisi<input data-value></label><button type="button" data-remove-custom>Alanı kaldır</button>';
+      customBox.appendChild(row); syncCustom();
+    });
+    customBox.addEventListener('input', syncCustom); customBox.addEventListener('change', syncCustom);
+    customBox.addEventListener('click', (event)=>{if(event.target.matches('[data-remove-custom]')){event.target.closest('[data-custom-row]').remove();syncCustom();}});
+    document.getElementById('create-company-form')?.addEventListener('submit', syncCustom);
+  }
+  const plan = document.getElementById('company-plan');
+  if (!plan) return;
+  plan.addEventListener('change', () => {
+    const option = plan.selectedOptions[0];
+    document.getElementById('company-max-users').value = option.dataset.users;
+    document.getElementById('company-storage').value = option.dataset.storage;
+    document.getElementById('company-active-limit').value = option.dataset.active;
+    document.getElementById('company-record-limit').value = option.dataset.records;
+  });
+})();
+</script>
+{% endblock %}

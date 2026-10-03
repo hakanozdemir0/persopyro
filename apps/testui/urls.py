@@ -16,8 +16,14 @@ urlpatterns = [
     # Sayfalar
     path("", views.app_page, name="test-ui-app"),
     path("login/", views.login_page, name="test-ui-login"),
+    path("profile/", views.profile_page, name="test-ui-profile"),
+    path("password-reset/", views.password_reset_page, name="test-ui-password-reset"),
     # JSON uçları (yalnızca bu ad alanı: üretim `/api/v1` sözleşmesine dokunulmaz)
     path("api/me", api.MeView.as_view(), name="test-ui-me"),
+    path("api/profile", api.EmployeeProfileView.as_view(), name="test-ui-profile-api"),
+    path("api/profile/password/change", api.EmployeePasswordChangeView.as_view(), name="test-ui-profile-password-change"),
+    path("api/profile/change-requests", api.EmployeeProfileChangeRequestsView.as_view(), name="test-ui-profile-change-requests"),
+    path("api/profile/change-requests/<str:request_id>/decide", api.EmployeeProfileChangeRequestsView.as_view(), name="test-ui-profile-change-request-decide"),
     path("api/dashboard", api.DashboardView.as_view(), name="test-ui-dashboard"),
     path("api/lookups", api.LookupView.as_view(), name="test-ui-lookups"),
     path("api/departments", api.DepartmentListView.as_view(), name="test-ui-departments"),
@@ -37,6 +43,10 @@ urlpatterns = [
         name="test-ui-department-delete",
     ),
     path("api/employees", api.EmployeeListView.as_view(), name="test-ui-employees"),
+    path("api/employees/<str:employee_id>/photo", api.EmployeePhotoView.as_view(), name="test-ui-employee-photo"),
+    path("api/employees/<str:employee_id>/documents", api.EmployeeDocumentListView.as_view(), name="test-ui-employee-documents"),
+    path("api/employees/<str:employee_id>/documents/<str:document_id>/download", api.EmployeeDocumentDownloadView.as_view(), name="test-ui-employee-document-download"),
+    path("api/employees/<str:employee_id>/documents/<str:document_id>/delete", api.EmployeeDocumentDeleteView.as_view(), name="test-ui-employee-document-delete"),
     path(
         "api/employee-form-fields",
         api.EmployeeFormFieldListView.as_view(),
@@ -74,6 +84,16 @@ urlpatterns = [
     ),
     path("api/balances", api.BalanceListView.as_view(), name="test-ui-balances"),
     path("api/balances/adjust", api.BalanceAdjustView.as_view(), name="test-ui-balance-adjust"),
+    path("api/shifts", api.ShiftListView.as_view(), name="test-ui-shifts"),
+    path("api/shifts/<str:shift_id>/update", api.ShiftUpdateView.as_view(), name="test-ui-shift-update"),
+    path("api/shifts/<str:shift_id>/delete", api.ShiftDeleteView.as_view(), name="test-ui-shift-delete"),
+    path("api/shift-assignments", api.ShiftAssignmentListView.as_view(), name="test-ui-shift-assignments"),
+    path(
+        "api/shift-assignments/<str:assignment_id>/update",
+        api.ShiftAssignmentUpdateView.as_view(),
+        name="test-ui-shift-assignment-update",
+    ),
+    path("api/shift-control", api.ShiftControlView.as_view(), name="test-ui-shift-control"),
     path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
     path("api/roles/create", api.RoleCreateView.as_view(), name="test-ui-role-create"),
     path("api/leave-policies", api.LeavePolicyListView.as_view(), name="test-ui-leave-policies"),
@@ -87,6 +107,11 @@ urlpatterns = [
         api.RoleUpdateView.as_view(),
         name="test-ui-role-update",
     ),
+    path(
+        "api/roles/<str:role_id>/delete",
+        api.RoleDeleteView.as_view(),
+        name="test-ui-role-delete",
+    ),
     path("api/users", api.UserCreateView.as_view(), name="test-ui-users"),
     path(
         "api/employees/<str:employee_id>/personal",
@@ -99,6 +124,11 @@ urlpatterns = [
         name="test-ui-role-permissions",
     ),
     path("api/positions", api.PositionCreateView.as_view(), name="test-ui-positions"),
+    path(
+        "api/positions/<str:position_id>",
+        api.PositionDetailView.as_view(),
+        name="test-ui-position-detail",
+    ),
     path("api/leave-types", api.LeaveTypeListView.as_view(), name="test-ui-leave-types"),
     path(
         "api/leave-types/<str:leave_type_id>/deactivate",
@@ -191,6 +221,11 @@ urlpatterns = [
         "api/leave-requests/<str:request_id>/cancel",
         api.LeaveRequestCancelView.as_view(),
         name="test-ui-leave-cancel",
+    ),
+    path(
+        "api/leave-requests/<str:request_id>/revise",
+        api.LeaveRequestReviseView.as_view(),
+        name="test-ui-leave-revise",
     ),
     path("api/leave-types/<str:leave_type_id>/update", api.LeaveTypeUpdateView.as_view(), name="test-ui-leave-type-update"),
 ]

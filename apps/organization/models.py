@@ -23,6 +23,8 @@ anahtarlar `hr.ensure_same_tenant_ref()` tetikleyicileriyle korunur (RLS yalnız
 satırın kendi `tenant_id`'sini denetler).
 """
 
+import uuid
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
@@ -32,6 +34,12 @@ from django.db import models
 from apps.common.fields import EncryptedCharField, EncryptedTextField
 from apps.common.models import SoftDeleteModel, TenantScopedModel, TimeStampedModel
 from apps.organization.employee_form_catalog import FIELD_CODES
+
+
+def employee_upload_path(instance, filename: str) -> str:
+    """Dosyaları kullanıcıdan gelen ad yerine rastgele adla sakla."""
+    extension = Path(filename).suffix.lower()[:10]
+    return f"tenant-files/{instance.tenant_id}/{uuid.uuid4().hex}{extension}"
 
 
 def validate_iana_timezone(value: str) -> None:
@@ -315,6 +323,9 @@ class Employee(TenantScopedModel):
     )
     employee_no = models.CharField("personel numarası", max_length=50)
     hire_date = models.DateField("işe giriş tarihi")
+    profile_photo = models.FileField(
+        "profil fotoğrafı", upload_to=employee_upload_path, blank=True
+    )
     termination_date = models.DateField("çıkış tarihi", null=True, blank=True)
     status = models.CharField(
         "durum", max_length=20, choices=EmployeeStatus.choices, default=EmployeeStatus.ACTIVE
@@ -403,6 +414,29 @@ class Employee(TenantScopedModel):
         return f"{self.employee_no} ({self.department_id})"
 
 
+class EmployeeDocument(TenantScopedModel):
+    """Çalışana bağlı, yetki denetimli evrak dosyası."""
+
+    tenant = models.ForeignKey("tenancy.Tenant", on_delete=models.CASCADE)
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="documents"
+    )
+    title = models.CharField("evrak adı", max_length=180)
+    file = models.FileField("dosya", upload_to=employee_upload_path)
+    original_filename = models.CharField("dosya adı", max_length=255)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL
+    )
+
+    class Meta:
+        db_table = "employee_documents"
+        verbose_name = "çalışan evrakı"
+        verbose_name_plural = "çalışan evrakları"
+
+    def __str__(self) -> str:
+        return self.title
+
+
 class EmployeePersonalData(TimeStampedModel, SoftDeleteModel):
     """
     Kişisel veri (K2) ve özel nitelikli veri (K3) — `employees` ile **1:1**.
@@ -486,6 +520,50 @@ class EmployeePersonalData(TimeStampedModel, SoftDeleteModel):
 
     def __str__(self) -> str:
         return f"kişisel veri ({self.employee_id})"
+
+
+class EmployeeProfileChangeStatus(models.TextChoices):
+    PENDING = "pending", "Onay bekliyor"
+    APPROVED = "approved", "Onaylandı"
+    REJECTED = "rejected", "Reddedildi"
+
+
+class EmployeeProfileChangeRequest(TenantScopedModel):
+    """Çalışanın onay gerektiren profil değişiklik talebi; değerler şifreli saklanır."""
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant", on_delete=models.CASCADE,
+        related_name="employee_profile_change_requests", verbose_name="kiracı",
+    )
+    employee = models.ForeignKey(
+        "organization.Employee", on_delete=models.PROTECT,
+        related_name="profile_change_requests", verbose_name="çalışan",
+    )
+    requester = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="profile_change_requests", verbose_name="talep sahibi",
+    )
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="reviewed_profile_change_requests", verbose_name="karar veren",
+    )
+    field_codes = models.JSONField("alan kodları", default=list)
+    payload = EncryptedTextField("şifreli değişiklik değerleri")
+    status = models.CharField(
+        "durum", max_length=12, choices=EmployeeProfileChangeStatus.choices,
+        default=EmployeeProfileChangeStatus.PENDING,
+    )
+    review_note = models.CharField("karar notu", max_length=500, blank=True, default="")
+    reviewed_at = models.DateTimeField("karar zamanı", null=True, blank=True)
+
+    class Meta:
+        db_table = "employee_profile_change_requests"
+        verbose_name = "çalışan profil değişikliği talebi"
+        verbose_name_plural = "çalışan profil değişikliği talepleri"
+        indexes = [
+            models.Index(fields=["tenant", "status", "created_at"], name="profile_req_status_idx"),
+            models.Index(fields=["employee", "created_at"], name="profile_req_employee_idx"),
+        ]
 
 
 class EmployeeManager(TenantScopedModel):

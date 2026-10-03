@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import uuid
 
-from django.db import connection, transaction
+from django.db import connections, transaction
 from django.utils import timezone
 
 from apps.platform.constants import (
@@ -100,7 +100,7 @@ def _kodlar(cur, sql: str, params: list) -> frozenset[str]:
 
 def platform_user_row(platform_user_id) -> tuple | None:  # noqa: ANN001
     """`(id, public_id, email, status, is_active, deleted_at)` veya `None`."""
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute(
             "SELECT id, public_id, email, status, is_active, deleted_at"
             " FROM platform.users WHERE id = %s",
@@ -134,7 +134,7 @@ def effective_permissions(platform_user_id) -> frozenset[str]:  # noqa: ANN001
     """Etkin platform izinleri (aktif kullanıcı değilse **boş küme**)."""
     if not platform_user_is_active(platform_user_id):
         return frozenset()
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         return _kodlar(
             cur,
             ETKIN_IZIN_SQL,
@@ -144,7 +144,7 @@ def effective_permissions(platform_user_id) -> frozenset[str]:  # noqa: ANN001
 
 def active_roles(platform_user_id) -> list[str]:  # noqa: ANN001
     """Kullanıcının **etkin** platform rolleri (kapalı kümeden)."""
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute(AKTIF_ROL_SQL, [str(platform_user_id)])
         return [satir[0] for satir in cur.fetchall()]
 
@@ -153,7 +153,7 @@ def role_permissions(role_code: str) -> frozenset[str]:
     """Rolün **tanımdan** gelen izin kümesi (DB; devralma yok)."""
     if role_code not in PLATFORM_ROLE_CODES:
         raise PlatformAuthorizationError(f"Bilinmeyen platform rolü: {role_code}")
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         return _kodlar(cur, ROL_IZIN_SQL, [role_code, f"{PLATFORM_PERMISSION_PREFIX}%"])
 
 
@@ -236,7 +236,7 @@ def can_assign_role(actor_id, role_code: str) -> tuple[bool, str]:  # noqa: ANN0
     return (False, engel) if engel else (True, "Atanabilir.")
 
 
-@transaction.atomic
+@transaction.atomic(using="platform")
 def assign_role(  # noqa: ANN001
     *,
     actor_id,
@@ -258,7 +258,7 @@ def assign_role(  # noqa: ANN001
     if expires_at is not None and expires_at <= timezone.now():
         raise PlatformAuthorizationError("expires_at gelecekte olmalıdır.")
 
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute("SELECT id FROM platform.roles WHERE code = %s", [role_code])
         rol_id = cur.fetchone()[0]
 
@@ -287,7 +287,7 @@ def assign_role(  # noqa: ANN001
         return cur.fetchone()[0]
 
 
-@transaction.atomic
+@transaction.atomic(using="platform")
 def revoke_role(*, actor_id, target_user_id, role_code: str) -> bool:  # noqa: ANN001
     """
     Rol atamasını **soft-delete** ile kaldırır (satır kalır → denetim izi).
@@ -312,7 +312,7 @@ def revoke_role(*, actor_id, target_user_id, role_code: str) -> bool:  # noqa: A
             "Aktör, kaldıracağı rolün tüm izinlerine sahip değil: " + ", ".join(sorted(eksik))
         )
 
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute(
             """
             UPDATE platform.user_roles ur
@@ -330,7 +330,7 @@ def revoke_role(*, actor_id, target_user_id, role_code: str) -> bool:  # noqa: A
 # --- M9: bootstrap (aktörsüz sistem operasyonu) ------------------------------
 
 
-@transaction.atomic
+@transaction.atomic(using="platform")
 def bootstrap_assign_role(*, target_user_id, role_code: str, reason: str) -> uuid.UUID:
     """
     **Yalnızca M9 bootstrap** için: aktörsüz rol ataması (`granted_by_id = NULL`).
@@ -347,7 +347,7 @@ def bootstrap_assign_role(*, target_user_id, role_code: str, reason: str) -> uui
     if not platform_user_is_active(target_user_id):
         raise PlatformAuthorizationError("Hedef platform kullanıcısı aktif değil.")
 
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute("SELECT id FROM platform.roles WHERE code = %s", [role_code])
         satir = cur.fetchone()
         if satir is None:

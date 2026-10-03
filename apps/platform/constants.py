@@ -17,7 +17,7 @@ PLATFORM_ROLE_CODES = ("superadmin", "platform_admin")
 PLATFORM_PERMISSION_PREFIX = "platform."
 
 PLATFORM_ROLE_PERMISSIONS = {
-    # SUPERADMIN: katalogdaki tüm platform izinleri (6/6).
+    # Bu küme M31 migration'ının tarihsel seed kümesidir; yeni izinler için değiştirilmez.
     "superadmin": (
         "platform.tenant.read",
         "platform.tenant.manage",
@@ -37,6 +37,11 @@ PLATFORM_ROLE_PERMISSIONS = {
     ),
 }
 
+# M31 sonrasında eklenen ve yalnızca superadmin rolüne bağlanan izinler.
+PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS = (
+    "platform.tenant.create",
+)
+
 # Yönetim hiyerarşisi (izin devralma DEĞİL): "üst rol, alt rolü atayabilir".
 # Atama için ek koşullar `apps/platform/permissions.py` içinde uygulanır:
 # aktör `platform.role.assign` yetkisine sahip olmalı VE atayacağı rolün tüm
@@ -51,6 +56,24 @@ PLATFORM_ROLE_ASSIGN_PERMISSION = "platform.role.assign"
 
 # Platform kullanıcısı public ID ön eki (OD27/OD28): kiracı ad alanından ayrı.
 PLATFORM_PUBLIC_ID_PREFIX = "plt"
+
+# Platform şirket profili: plan kodları ticari fiyatlandırma değil, panel seçeneğidir.
+TENANT_PLAN_CHOICES = (
+    ("trial", "Deneme"),
+    ("starter", "Başlangıç"),
+    ("professional", "Profesyonel"),
+    ("enterprise", "Kurumsal"),
+    ("custom", "Özel"),
+)
+TENANT_PROFILE_FIELDS = (
+    ("legal_name", "Tüzel unvan"),
+    ("tax_number", "Vergi numarası"),
+    ("email", "Şirket e-postası"),
+    ("phone", "Telefon"),
+    ("address", "Adres"),
+    ("country", "Ülke"),
+    ("city", "Şehir"),
+)
 
 # Platform token türleri — KAPALI küme (DATABASE.md M3 `token_kind` + CHECK).
 # Tek kaynak aşağıdaki demettir; tekil adlar ondan türetilir. Değerler SIR DEĞİL,

@@ -18,13 +18,20 @@ Manuel test arayüzü — JSON uç noktaları (yalnızca geliştirme).
 
 from __future__ import annotations
 
+import json
 import uuid
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from django.conf import settings
+from django.contrib.auth.hashers import check_password
+from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models import Count, Prefetch, Q
-from django.http import Http404
+from django.http import FileResponse, Http404
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import exceptions as drf_exceptions
@@ -71,6 +78,7 @@ from apps.leave.services import (
     can_view_leave_request,
     cancel_leave_request,
     create_leave_request,
+    revise_leave_request,
     create_leave_type,
     current_step,
     deactivate_leave_type,
@@ -100,10 +108,20 @@ from apps.organization.models import (
     BloodType,
     Department,
     Employee,
+    EmployeeDocument,
     EmployeeManager,
+    EmployeeProfileChangeRequest,
+    EmployeeProfileChangeStatus,
     FormFieldDefinition,
     Position,
 )
+from apps.tenancy.file_policy import (
+    employee_file_usage_bytes,
+    file_policy,
+    tenant_file_usage_bytes,
+    uploaded_extension,
+)
+from apps.tenancy.models import Tenant
 from apps.organization.services import (
     OrganizationAuthorizationError,
     OrganizationError,
@@ -117,8 +135,10 @@ from apps.organization.services import (
     move_employee,
     set_primary_manager,
     soft_delete_department,
+    soft_delete_position,
     sub_tree_department_ids,
     update_department,
+    update_position,
 )
 from apps.overtime.models import (
     OVERTIME_MAX_MINUTES,
@@ -143,6 +163,18 @@ from apps.overtime.services import (
     list_overtime_rules,
     update_overtime_rule,
 )
+from apps.shifts.models import Shift, ShiftAssignment
+from apps.shifts.services import (
+    ShiftAuthorizationError,
+    ShiftConflictError,
+    ShiftError,
+    assign_shifts,
+    can_manage_shifts,
+    create_shift,
+    delete_shift,
+    ensure_shift_manager_access,
+    update_shift,
+)
 from apps.overtime.services import (
     current_step as current_overtime_step,
 )
@@ -154,6 +186,7 @@ from apps.rbac.models import (
     Permission,
     Role,
     RolePermission,
+    RoleType,
     UserPermissionOverride,
     UserRole,
 )
@@ -163,6 +196,7 @@ from apps.rbac.services import (
     assign_role_to_user,
     can_assign_role,
     create_custom_role,
+    delete_role,
     effective_permission_codes,
     restore_role_assignment,
     revoke_role_assignment,
@@ -209,6 +243,7 @@ class TestUiErrors:
         LeaveBalanceError,
         OrganizationTreeError,
         OvertimeStateError,
+        ShiftConflictError,
     )
     #: Yetki/kapsam reddi olarak raporlanan hatalar (403). `RoleAssignmentError`
     #: self-elevation/kapsam/izin redlerini taşır (Python `PermissionError` alt sınıfı).
@@ -217,6 +252,7 @@ class TestUiErrors:
         OrganizationAuthorizationError,
         RoleAssignmentError,
         OvertimeAuthorizationError,
+        ShiftAuthorizationError,
     )
 
     @classmethod
@@ -258,7 +294,7 @@ class TestUiErrors:
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-        if isinstance(hata, (LeaveError, OrganizationError, OvertimeError)):
+        if isinstance(hata, (LeaveError, OrganizationError, OvertimeError, ShiftError)):
             return Response(
                 {"error": {"code": "bad_request", "message": str(hata), "detail": ""}},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -468,6 +504,9 @@ def _calisan_ozeti(employee: Employee, izin_durumu: dict | None = None) -> dict:
         "position": employee.position.name if employee.position_id else None,
         "position_id": str(employee.position_id) if employee.position_id else None,
         "status": employee.status,
+        "photo_url": (
+            f"/test-ui/api/employees/{employee.pk}/photo" if employee.profile_photo else None
+        ),
         "status_label": employee.get_status_display(),
         "hire_date": employee.hire_date.isoformat() if employee.hire_date else None,
         "user_email": employee.user.email if employee.user_id else None,
@@ -1316,6 +1355,9 @@ class MeView(TestUiView):
                         "overtime": arayuz_menu("ui.overtime.view", ("overtime.request.read", "overtime.request.create")),
                         "overtime_requests": arayuz_menu("ui.overtime.requests", ("overtime.request.read", "overtime.request.create")),
                         "overtime_rules": arayuz_menu("ui.overtime.rules", "overtime.rule.read"),
+                        "shifts": can_manage_shifts(user, "shift.read"),
+                        "shift_definitions": can_manage_shifts(user, "shift.schedule.manage"),
+                        "shift_assignments": can_manage_shifts(user, "shift.assign"),
                         "approvals": arayuz_menu("ui.approvals.view", ("leave.request.approve", "overtime.request.approve")),
                         "roles_view": arayuz_menu("ui.roles.view", ("role.read", "role.manage")),
                         "departments_manage": user_has_permission(user, "org.department.manage"),
@@ -1562,6 +1604,7 @@ class DepartmentListView(TestUiView):
         calisanlar = list(Employee.objects.filter(
             tenant_id=request.user.tenant_id,
             deleted_at__isnull=True,
+            status__in=("active", "suspended"),
         ).select_related("user", "department", "position").prefetch_related(
             "personal_data",
             Prefetch(
@@ -1579,7 +1622,10 @@ class DepartmentListView(TestUiView):
                 # P1-B performans: birim başına ayrı COUNT (N+1) yerine tek sorgu.
                 employee_count_annotated=Count(
                     "employees",
-                    filter=Q(employees__deleted_at__isnull=True),
+                    filter=Q(
+                        employees__deleted_at__isnull=True,
+                        employees__status__in=("active", "suspended"),
+                    ),
                     distinct=True,
                 )
             )
@@ -2201,6 +2247,178 @@ class EmployeeListView(TestUiView):
         return Response({"data": _calisan_ozeti(calisan)}, status=status.HTTP_201_CREATED)
 
 
+class EmployeePhotoView(TestUiView):
+    """Çalışan fotoğrafını yalnız çalışan kapsamı içindeki oturumlara sunar."""
+
+    def get(self, request, employee_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if not user_has_permission(request.user, "employee.read") or not employee.profile_photo:
+            raise Http404
+        return FileResponse(employee.profile_photo.open("rb"))
+
+    @transaction.atomic
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if employee.user_id == request.user.pk:
+            return Response({"error": {"code": "forbidden", "message": "Kendi profil fotoğrafınızı yükleyemezsiniz. Yetkili yöneticinizden yardım isteyin."}}, status=403)
+        if not user_has_permission(request.user, "employee.photo.upload"):
+            return Response({"error": {"code": "forbidden", "message": "Fotoğraf değiştirme yetkiniz yok."}}, status=403)
+        uploaded = request.FILES.get("file")
+        allowed = {".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff", ".png": b"\x89PNG\r\n\x1a\n", ".webp": b"RIFF"}
+        suffix = Path(uploaded.name).suffix.lower() if uploaded else ""
+        tenant = Tenant.objects.select_for_update().get(pk=employee.tenant_id)
+        max_file_mb, _allowed_extensions = file_policy(tenant.settings)
+        used_bytes = tenant_file_usage_bytes(employee.tenant_id)
+        employee_used_bytes = employee_file_usage_bytes(employee)
+        old_size = employee.profile_photo.storage.size(employee.profile_photo.name) if employee.profile_photo else 0
+        storage_limit = int(float(tenant.max_storage_mb) * 1024 * 1024)
+        if not uploaded or uploaded.size > int(max_file_mb * 1024 * 1024) or suffix not in allowed:
+            return Response({"error": {"code": "bad_request", "message": f"Şirket ayarlarına göre en fazla {max_file_mb:g} MB JPG, PNG veya WebP fotoğraf yükleyin."}}, status=400)
+        if employee_used_bytes - old_size + uploaded.size > int(max_file_mb * 1024 * 1024):
+            return Response({"error": {"code": "employee_storage_limit", "message": "Çalışan başına dosya kotası bu fotoğrafı karşılamıyor."}}, status=400)
+        if tenant.max_storage_mb > 0 and used_bytes - old_size + uploaded.size > storage_limit:
+            return Response({"error": {"code": "storage_limit", "message": "Şirketin toplam dosya depolama kotası dolu."}}, status=400)
+        header = uploaded.read(12)
+        uploaded.seek(0)
+        if not header.startswith(allowed[suffix]) or (suffix == ".webp" and header[8:12] != b"WEBP"):
+            return Response({"error": {"code": "bad_request", "message": "Dosya içeriği fotoğraf biçimiyle eşleşmiyor."}}, status=400)
+        previous = employee.profile_photo.name
+        employee.profile_photo = uploaded
+        employee.save(update_fields=["profile_photo", "updated_at"])
+        if previous:
+            employee.profile_photo.storage.delete(previous)
+        from apps.audit.services import log_action  # noqa: PLC0415
+
+        log_action(
+            tenant_id=employee.tenant_id, action="employee.photo.upload", user=request.user,
+            table_name="employees", record_id=employee.pk, changes={"photo": "updated"},
+        )
+        return Response({"data": {"photo_url": f"/test-ui/api/employees/{employee.pk}/photo"}})
+
+    @transaction.atomic
+    def delete(self, request, employee_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if not user_has_permission(request.user, "employee.photo.upload"):
+            return Response({"error": {"code": "forbidden", "message": "Fotoğraf kaldırma yetkiniz yok."}}, status=403)
+        if employee.profile_photo:
+            photo_name = employee.profile_photo.name
+            employee.profile_photo.storage.delete(photo_name)
+            employee.profile_photo = ""
+            employee.save(update_fields=["profile_photo", "updated_at"])
+            from apps.audit.services import log_action  # noqa: PLC0415
+
+            log_action(
+                tenant_id=employee.tenant_id, action="employee.photo.delete", user=request.user,
+                table_name="employees", record_id=employee.pk, changes={"photo": "removed"},
+            )
+        return Response({"data": {"deleted": True}})
+
+
+class EmployeeDocumentListView(TestUiView):
+    """Çalışan evraklarını listeler ve yetkili kullanıcının yüklemesini sağlar."""
+
+    def get(self, request, employee_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if not user_has_permission(request.user, "document.read"):
+            return Response({"error": {"code": "forbidden", "message": "Evrak görme yetkiniz yok."}}, status=403)
+        rows = EmployeeDocument.objects.filter(employee=employee, deleted_at__isnull=True).order_by("-created_at")
+        return Response({"data": [{
+            "id": str(row.pk), "title": row.title,
+            "filename": row.original_filename,
+            "created_at": row.created_at.isoformat(),
+            "url": f"/test-ui/api/employees/{employee.pk}/documents/{row.pk}/download",
+        } for row in rows]})
+
+    @transaction.atomic
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if employee.user_id == request.user.pk:
+            return Response({"error": {"code": "forbidden", "message": "Kendi çalışan kaydınıza evrak yükleyemezsiniz. Yetkili yöneticinizden yardım isteyin."}}, status=403)
+        if not user_has_permission(request.user, "document.upload"):
+            return Response({"error": {"code": "forbidden", "message": "Evrak yükleme yetkiniz yok."}}, status=403)
+        files = request.FILES.getlist("files") or ([request.FILES["file"]] if request.FILES.get("file") else [])
+        if not files:
+            return Response({"error": {"code": "bad_request", "message": "Yüklenecek evrak seçin."}}, status=400)
+        tenant = Tenant.objects.select_for_update().get(pk=employee.tenant_id)
+        max_file_mb, allowed_extensions = file_policy(tenant.settings)
+        max_file_bytes = int(max_file_mb * 1024 * 1024)
+        if any(
+            uploaded.size > max_file_bytes
+            or uploaded_extension(uploaded) not in allowed_extensions
+            for uploaded in files
+        ):
+            return Response(
+                {"error": {"code": "bad_request", "message": f"Şirket ayarlarına göre dosya başına en fazla {max_file_mb:g} MB ve izin verilen biçimlerden biri yüklenebilir."}},
+                status=400,
+            )
+        incoming_bytes = sum(uploaded.size for uploaded in files)
+        employee_used_bytes = employee_file_usage_bytes(employee)
+        if employee_used_bytes + incoming_bytes > int(max_file_mb * 1024 * 1024):
+            return Response(
+                {"error": {"code": "employee_storage_limit", "message": f"Bu çalışanın toplam dosya alanı {max_file_mb:g} MB sınırını aşamaz."}},
+                status=400,
+            )
+        used_bytes = tenant_file_usage_bytes(employee.tenant_id)
+        storage_limit = int(float(tenant.max_storage_mb) * 1024 * 1024)
+        if tenant.max_storage_mb > 0 and used_bytes + incoming_bytes > storage_limit:
+            return Response(
+                {"error": {"code": "storage_limit", "message": "Şirketin toplam dosya depolama kotası bu yüklemeyi karşılamıyor."}},
+                status=400,
+            )
+        if incoming_bytes > 50 * 1024 * 1024:
+            return Response(
+                {"error": {"code": "bad_request", "message": "Tek yüklemede toplam 50 MB sınırı var."}},
+                status=400,
+            )
+        created = []
+        for uploaded in files:
+            title = str(request.data.get("title") or Path(uploaded.name).stem).strip()[:180]
+            row = EmployeeDocument.objects.create(
+                tenant_id=employee.tenant_id, employee=employee, title=title or "Çalışan evrakı",
+                file=uploaded, original_filename=Path(uploaded.name).name[:255], uploaded_by=request.user,
+            )
+            created.append(str(row.pk))
+        return Response({"data": {"created": created}}, status=201)
+
+
+class EmployeeDocumentDownloadView(TestUiView):
+    def get(self, request, employee_id: str, document_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if not user_has_permission(request.user, "document.read"):
+            raise Http404
+        try:
+            document = EmployeeDocument.objects.get(
+                pk=_uuid(document_id, "document_id"), employee=employee, deleted_at__isnull=True
+            )
+        except EmployeeDocument.DoesNotExist as exc:
+            raise Http404 from exc
+        return FileResponse(document.file.open("rb"), as_attachment=True, filename=document.original_filename)
+
+
+class EmployeeDocumentDeleteView(TestUiView):
+    def post(self, request, employee_id: str, document_id: str):  # noqa: ANN001
+        employee = _kapsamdaki_calisan(request.user, employee_id)
+        if not user_has_permission(request.user, "document.delete"):
+            return Response({"error": {"code": "forbidden", "message": "Evrak kaldırma yetkiniz yok."}}, status=403)
+        try:
+            document = EmployeeDocument.objects.get(
+                pk=_uuid(document_id, "document_id"), employee=employee, deleted_at__isnull=True
+            )
+        except EmployeeDocument.DoesNotExist as exc:
+            raise Http404 from exc
+        file_name = document.file.name
+        document.deleted_at = timezone.now()
+        document.save(update_fields=["deleted_at", "updated_at"])
+        document.file.storage.delete(file_name)
+        from apps.audit.services import log_action  # noqa: PLC0415
+
+        log_action(
+            tenant_id=employee.tenant_id, action="employee.document.delete", user=request.user,
+            table_name="employee_documents", record_id=document.pk, changes={"file": "removed"},
+        )
+        return Response({"data": {"deleted": True}})
+
+
 class EmployeeLifecycleView(TestUiView):
     """
     Çalışan yaşam döngüsü işlemleri — **merkezi lifecycle servisi** üzerinden (P1-B).
@@ -2735,13 +2953,13 @@ def _atanabilir_roller(user) -> list[Role]:  # noqa: ANN001
             "role_id", flat=True
         )
     )
-    return [
-        rol
-        for rol in Role.objects.filter(
+    roller = [
+        rol for rol in Role.objects.filter(
             tenant=user.tenant_id, deleted_at__isnull=True, is_assignable=True
         ).order_by("name")
         if rol.pk not in platform_izinli
     ]
+    return sorted(roller, key=lambda role: (role.code != "tenant_admin", role.name.casefold()))
 
 
 class RoleListView(TestUiView):
@@ -2758,14 +2976,34 @@ class RoleListView(TestUiView):
             return TestUiErrors.cevap(
                 RoleAssignmentError("Rolleri görüntülemek için 'role.read' izni gerekir.")
             )
+        platform_izinli = set(
+            RolePermission.objects.filter(permission__code__startswith="platform.")
+            .values_list("role_id", flat=True)
+        )
         roller = []
-        for rol in _atanabilir_roller(request.user):
+        tum_roller = Role.objects.filter(
+            tenant=request.user.tenant_id, deleted_at__isnull=True
+        ).order_by("name")
+        for rol in tum_roller:
+            if rol.pk in platform_izinli:
+                continue
             izin_var, gerekce = can_assign_role(request.user, rol)
+            aktif_atama_sayisi = UserRole.objects.filter(
+                role=rol, deleted_at__isnull=True
+            ).count()
+            silme_nedeni = (
+                "Varsayılan ve sistem rolleri silinemez."
+                if rol.role_type in (RoleType.DEFAULT, RoleType.SYSTEM)
+                else f"Önce {aktif_atama_sayisi} aktif rol atamasını kaldırın."
+                if aktif_atama_sayisi
+                else ""
+            )
             roller.append(
                 {
                     "id": str(rol.pk),
                     "code": rol.code,
                     "name": rol.name,
+                    "description": rol.description,
                     "scope_type": rol.scope_type,
                     "scope_type_label": kapsam_tipi_etiketi(rol.scope_type),
                     "hierarchy_level": rol.hierarchy_level,
@@ -2773,25 +3011,27 @@ class RoleListView(TestUiView):
                     "atanabilir": izin_var,
                     "gerekce": gerekce,
                     "role_type": rol.role_type,
+                    "is_assignable": rol.is_assignable,
+                    "can_delete": not silme_nedeni,
+                    "delete_block_reason": silme_nedeni,
                     "can_edit_meta": not UserRole.objects.filter(
                         user=request.user, role=rol, deleted_at__isnull=True
                     ).exists(),
                     "permission_count": RolePermission.objects.filter(role=rol).count(),
-                    "user_count": UserRole.objects.filter(
-                        role=rol, deleted_at__isnull=True
-                    ).count(),
+                    "user_count": aktif_atama_sayisi,
                 }
             )
+        roller.sort(key=lambda role: (role["code"] != "tenant_admin", role["name"].casefold()))
         return Response(
             {
                 "data": roller,
                 "meta": {
                     "can_manage": user_has_permission(request.user, "role.manage"),
                     "scope_types": [
-                        {"value": "TENANT", "label": "Tüm kiracı"},
-                        {"value": "UNIT", "label": "Seçili birim + alt birimleri"},
-                        {"value": "UNIT_DIRECT", "label": "Yalnızca seçili birim"},
-                        {"value": "SELF", "label": "Yalnızca kendi kaydı"},
+                        {"value": "TENANT", "label": "Şirket genelinde"},
+                        {"value": "UNIT", "label": "Atandığı departman ve alt departmanları"},
+                        {"value": "UNIT_DIRECT", "label": "Yalnızca atandığı departman"},
+                        {"value": "SELF", "label": "Yalnızca kendi hesabı ve çalışan kaydı"},
                     ],
                 },
             }
@@ -2869,6 +3109,41 @@ class PositionCreateView(TestUiView):
             {"data": {"id": str(pozisyon.pk), "code": pozisyon.code, "name": pozisyon.name}},
             status=status.HTTP_201_CREATED,
         )
+
+
+class PositionDetailView(TestUiView):
+    """Unvan güncelleme ve arşivleme (`org.position.manage`)."""
+
+    def put(self, request, position_id):  # noqa: ANN001
+        try:
+            pozisyon = Position.objects.get(
+                pk=_uuid(position_id, "position_id"), deleted_at__isnull=True
+            )
+            pozisyon = update_position(
+                actor=request.user,
+                position=pozisyon,
+                code=str(request.data.get("code", "")),
+                name=str(request.data.get("name", "")),
+                level=str(request.data.get("level", "")),
+            )
+        except Position.DoesNotExist:
+            raise Http404("Unvan bulunamadı.")
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"id": str(pozisyon.pk), "code": pozisyon.code,
+                                  "name": pozisyon.name, "level": pozisyon.level}})
+
+    def delete(self, request, position_id):  # noqa: ANN001
+        try:
+            pozisyon = Position.objects.get(
+                pk=_uuid(position_id, "position_id"), deleted_at__isnull=True
+            )
+            soft_delete_position(actor=request.user, position=pozisyon)
+        except Position.DoesNotExist:
+            raise Http404("Unvan bulunamadı.")
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LeaveTypeListView(TestUiView):
@@ -3031,6 +3306,364 @@ class LeaveTypeUpdateView(TestUiView):
         return Response({"data": _izin_turu_ozeti(tur)})
 
 
+def _vardiya_ozeti(vardiya: Shift) -> dict:
+    return {
+        "id": str(vardiya.pk),
+        "code": vardiya.code,
+        "name": vardiya.name,
+        "start_time": vardiya.start_time.strftime("%H:%M"),
+        "end_time": vardiya.end_time.strftime("%H:%M"),
+        "break_minutes": vardiya.break_minutes,
+        "crosses_midnight": vardiya.crosses_midnight,
+        "work_model": vardiya.work_model,
+        "work_model_label": vardiya.get_work_model_display(),
+        "description": vardiya.description,
+        "assignment_count": vardiya.assignments.filter(deleted_at__isnull=True).count(),
+    }
+
+
+def _vardiya_atama_ozeti(atama: ShiftAssignment) -> dict:
+    employee = atama.employee
+    return {
+        "id": str(atama.pk),
+        "created_at": atama.created_at.isoformat(),
+        "work_date": atama.work_date.isoformat(),
+        "employee_id": str(employee.pk),
+        "employee_no": employee.employee_no,
+        "employee_name": (
+            f"{employee.user.first_name} {employee.user.last_name}".strip()
+            if employee.user_id else employee.employee_no
+        ),
+        "department": employee.department.name if employee.department_id else None,
+        "shift_id": str(atama.shift_id),
+        "shift_name": atama.shift.name,
+        "shift_code": atama.shift.code,
+        "start_time": atama.shift.start_time.strftime("%H:%M"),
+        "end_time": atama.shift.end_time.strftime("%H:%M"),
+        "assignment_source": atama.assignment_source,
+        "assigned_by": (
+            f"{atama.assigned_by.first_name} {atama.assigned_by.last_name}".strip()
+            if atama.assigned_by_id and (atama.assigned_by.first_name or atama.assigned_by.last_name)
+            else (atama.assigned_by.email if atama.assigned_by_id else None)
+        ),
+        "note": atama.note,
+    }
+
+
+def _saat_metin(deger, alan: str):  # noqa: ANN001
+    if deger in (None, ""):
+        raise ShiftError(f"'{alan}' zorunludur.")
+    try:
+        return datetime.strptime(str(deger), "%H:%M").time()
+    except ValueError as exc:
+        raise ShiftError(f"'{alan}' SS:DD biçiminde olmalıdır.") from exc
+
+
+def _demo_yonetici_rolunu_guvenceye_al(user) -> None:  # noqa: ANN001
+    """Manuel test arayüzünün sabit demo hesabını eski DB'lerde onarır."""
+    if user.email != "demo@persopyro.test" or getattr(user.tenant, "slug", "") != "demo":
+        return
+    rol = Role.objects.filter(
+        tenant_id=user.tenant_id, code="tenant_admin", deleted_at__isnull=True
+    ).first()
+    if rol is not None:
+        UserRole.objects.get_or_create(tenant_id=user.tenant_id, user_id=user.pk, role_id=rol.pk)
+
+
+class ShiftListView(TestUiView):
+    """Vardiya şablonları (`shift.read`) ve yeni şablon oluşturma."""
+
+    def get(self, request):  # noqa: ANN001
+        _demo_yonetici_rolunu_guvenceye_al(request.user)
+        ensure_shift_manager_access(request.user)
+        if not user_has_permission(request.user, "shift.read"):
+            return TestUiErrors.cevap(ShiftAuthorizationError("Vardiyaları görüntülemek için 'shift.read' gerekir."))
+        vardiyalar = Shift.objects.filter(tenant=request.user.tenant_id, deleted_at__isnull=True)
+        return Response({
+            "data": [_vardiya_ozeti(v) for v in vardiyalar],
+            "meta": {
+                "can_manage": can_manage_shifts(request.user, "shift.schedule.manage"),
+                "can_assign": can_manage_shifts(request.user, "shift.assign"),
+                "work_models": [{"value": k, "label": v} for k, v in (("office", "Ofis"), ("hybrid", "Hibrit"), ("remote", "Uzaktan"), ("flex", "Esnek"))],
+            },
+        })
+
+    def post(self, request):  # noqa: ANN001
+        _demo_yonetici_rolunu_guvenceye_al(request.user)
+        ensure_shift_manager_access(request.user)
+        try:
+            vardiya = create_shift(
+                actor=request.user, tenant=request.user.tenant,
+                code=request.data.get("code", ""), name=request.data.get("name", ""),
+                start_time=_saat_metin(request.data.get("start_time"), "start_time"),
+                end_time=_saat_metin(request.data.get("end_time"), "end_time"),
+                break_minutes=request.data.get("break_minutes", 0),
+                crosses_midnight=bool(request.data.get("crosses_midnight", False)),
+                work_model=str(request.data.get("work_model") or "office"),
+                description=str(request.data.get("description") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _vardiya_ozeti(vardiya)}, status=status.HTTP_201_CREATED)
+
+
+class ShiftUpdateView(TestUiView):
+    def post(self, request, shift_id: str):  # noqa: ANN001
+        vardiya = Shift.objects.filter(pk=_uuid(shift_id, "shift_id"), tenant=request.user.tenant_id,
+                                        deleted_at__isnull=True).first()
+        if vardiya is None:
+            raise Http404("vardiya_yok")
+        try:
+            vardiya = update_shift(
+                actor=request.user, shift=vardiya,
+                code=request.data.get("code") if "code" in request.data else None,
+                name=request.data.get("name") if "name" in request.data else None,
+                start_time=_saat_metin(request.data["start_time"], "start_time") if request.data.get("start_time") else None,
+                end_time=_saat_metin(request.data["end_time"], "end_time") if request.data.get("end_time") else None,
+                break_minutes=request.data.get("break_minutes") if "break_minutes" in request.data else None,
+                crosses_midnight=bool(request.data["crosses_midnight"]) if "crosses_midnight" in request.data else None,
+                work_model=request.data.get("work_model") if "work_model" in request.data else None,
+                description=request.data.get("description") if "description" in request.data else None,
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _vardiya_ozeti(vardiya)})
+
+
+class ShiftDeleteView(TestUiView):
+    def post(self, request, shift_id: str):  # noqa: ANN001
+        vardiya = Shift.objects.filter(pk=_uuid(shift_id, "shift_id"), tenant=request.user.tenant_id,
+                                        deleted_at__isnull=True).first()
+        if vardiya is None:
+            raise Http404("vardiya_yok")
+        try:
+            delete_shift(actor=request.user, shift=vardiya, reason=str(request.data.get("reason") or ""))
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"silindi": True, "name": vardiya.name}})
+
+
+class ShiftAssignmentListView(TestUiView):
+    def get(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "shift.read"):
+            return TestUiErrors.cevap(ShiftAuthorizationError("Vardiya planını görüntülemek için 'shift.read' gerekir."))
+        bugun = timezone.localdate()
+        baslangic = _tarih(request.query_params.get("from") or bugun.isoformat(), "from")
+        bitis = _tarih(request.query_params.get("to") or (bugun + timedelta(days=30)).isoformat(), "to")
+        atamalar = ShiftAssignment.objects.filter(
+            tenant=request.user.tenant_id, deleted_at__isnull=True,
+            work_date__range=(baslangic, bitis),
+            employee_id__in=direct_reports(request.user),
+            employee__status__in=("active", "suspended"),
+        ).select_related("employee__user", "employee__department", "shift", "assigned_by")
+        if request.query_params.get("employee_id"):
+            atamalar = atamalar.filter(employee_id=request.query_params["employee_id"])
+        data = [
+            _vardiya_atama_ozeti(a) for a in atamalar
+            if object_in_org_scope(request.user, department_id=a.employee.department_id, owner_user_id=a.employee.user_id)
+        ]
+        return Response({"data": data, "meta": {"from": baslangic.isoformat(), "to": bitis.isoformat(),
+                                                    "can_assign": can_manage_shifts(request.user, "shift.assign")}})
+
+
+    def post(self, request):  # noqa: ANN001
+        try:
+            if not request.data.get("shift_id"):
+                raise ShiftError("Vardiya seçiniz.")
+            shift = Shift.objects.filter(pk=_uuid(request.data.get("shift_id"), "shift_id"),
+                                         tenant=request.user.tenant_id, deleted_at__isnull=True).first()
+            if shift is None:
+                raise ShiftError("Vardiya bulunamadı.")
+            employee_ids = request.data.get("employee_ids") or ([request.data.get("employee_id")] if request.data.get("employee_id") else [])
+            mode = str(request.data.get("mode") or "daily")
+            dates = [_tarih(x, "dates") for x in (request.data.get("dates") or [])]
+            start_date = _tarih(request.data.get("start_date"), "start_date") if request.data.get("start_date") else None
+            end_date = _tarih(request.data.get("end_date"), "end_date") if request.data.get("end_date") else None
+            assignments = assign_shifts(
+                actor=request.user, shift=shift, employee_ids=employee_ids, mode=mode,
+                dates=dates, start_date=start_date, end_date=end_date,
+                weekdays=request.data.get("weekdays") or [], note=str(request.data.get("note") or ""),
+                replace_existing=bool(request.data.get("replace_existing", False)),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"count": len(assignments)}} , status=status.HTTP_201_CREATED)
+
+
+class ShiftAssignmentUpdateView(TestUiView):
+    """Mevcut bir günlük atamanın vardiya tanımını değiştirir."""
+
+    def post(self, request, assignment_id: str):  # noqa: ANN001
+        ensure_shift_manager_access(request.user)
+        if not can_manage_shifts(request.user, "shift.assign"):
+            return TestUiErrors.cevap(ShiftAuthorizationError("Vardiya atamasını düzenlemek için 'shift.assign' gerekir."))
+        atama = ShiftAssignment.objects.filter(
+            pk=_uuid(assignment_id, "assignment_id"),
+            tenant=request.user.tenant_id,
+            deleted_at__isnull=True,
+            employee__status__in=("active", "suspended"),
+        ).select_related("employee", "shift").first()
+        if atama is None or atama.employee_id not in direct_reports(request.user):
+            raise Http404("vardiya_atamasi_yok")
+        if not object_in_org_scope(
+            request.user,
+            department_id=atama.employee.department_id,
+            owner_user_id=atama.employee.user_id,
+        ):
+            return TestUiErrors.cevap(ShiftAuthorizationError("Atama organizasyon kapsamınız dışında."))
+        shift = Shift.objects.filter(
+            pk=_uuid(request.data.get("shift_id"), "shift_id"),
+            tenant=request.user.tenant_id,
+            deleted_at__isnull=True,
+        ).first()
+        if shift is None:
+            return TestUiErrors.cevap(ShiftError("Vardiya bulunamadı."))
+        try:
+            assignments = assign_shifts(
+                actor=request.user,
+                shift=shift,
+                employee_ids=[atama.employee_id],
+                mode="daily",
+                dates=[atama.work_date],
+                note=str(request.data.get("note") or ""),
+                replace_existing=True,
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _vardiya_atama_ozeti(assignments[0])})
+
+
+class ShiftControlView(TestUiView):
+    """Vardiya, onaylı izin/serbest zaman ve onaylı fazla mesaiyi birlikte gösterir."""
+
+    def get(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "shift.read"):
+            return TestUiErrors.cevap(ShiftAuthorizationError("Vardiya kontrolünü görüntülemek için 'shift.read' gerekir."))
+        bugun = timezone.localdate()
+        baslangic = _tarih(request.query_params.get("from") or bugun.isoformat(), "from")
+        bitis = _tarih(request.query_params.get("to") or (bugun + timedelta(days=30)).isoformat(), "to")
+        visible_employees_qs = kapsamdaki_calisanlar(request.user).filter(
+            status__in=("active", "suspended")
+        ).select_related("department", "user")
+        employee_ids = request.query_params.getlist("employee_id")
+        if len(employee_ids) == 1 and "," in employee_ids[0]:
+            employee_ids = [x for x in employee_ids[0].split(",") if x]
+        selected_employees = visible_employees_qs.filter(pk__in=employee_ids) if employee_ids else visible_employees_qs.none()
+        if employee_ids and selected_employees.count() != len(set(employee_ids)):
+            raise Http404("çalışan_yok")
+        visible_employees = [
+            {
+                "id": str(employee.pk),
+                "employee_no": employee.employee_no,
+                "employee": _calisan_etiketi(employee),
+                "department": employee.department.name if employee.department_id else None,
+            }
+            for employee in visible_employees_qs.order_by("employee_no")
+        ]
+
+        # İlk çağrıda yalnızca çalışan seçicisini doldururuz. Büyük şirketlerde
+        # bütün çalışanların bütün olaylarını tek seferde taşımak gereksizdir.
+        if not employee_ids:
+            return Response({"data": [], "meta": {"from": baslangic.isoformat(), "to": bitis.isoformat(),
+                                                       "employees": visible_employees}})
+
+        events = []
+        atamalar = ShiftAssignment.objects.filter(
+            tenant=request.user.tenant_id, deleted_at__isnull=True,
+            work_date__range=(baslangic, bitis), employee__in=selected_employees,
+        ).select_related("employee__user", "employee__department", "shift")
+        for assignment in atamalar:
+            employee = assignment.employee
+            if not object_in_org_scope(request.user, department_id=employee.department_id, owner_user_id=employee.user_id):
+                continue
+            vardiya_suresi = (
+                assignment.shift.end_time.hour * 60 + assignment.shift.end_time.minute
+                - assignment.shift.start_time.hour * 60 - assignment.shift.start_time.minute
+            )
+            if assignment.shift.crosses_midnight:
+                vardiya_suresi += 24 * 60
+            vardiya_suresi = max(0, vardiya_suresi - assignment.shift.break_minutes)
+            events.append({
+                "kind": "shift", "kind_label": "Vardiya", "date": assignment.work_date.isoformat(),
+                "employee_id": str(employee.pk), "employee_no": employee.employee_no,
+                "employee": _calisan_etiketi(employee), "department": employee.department.name if employee.department_id else None,
+                "title": assignment.shift.name, "time": f"{assignment.shift.start_time:%H:%M}–{assignment.shift.end_time:%H:%M}",
+                "detail": assignment.shift.code, "duration_minutes": vardiya_suresi,
+            })
+        izinler = LeaveRequest.objects.filter(
+            tenant=request.user.tenant_id, deleted_at__isnull=True,
+            status=LeaveRequestStatus.APPROVED, start_date__lte=bitis, end_date__gte=baslangic,
+        ).select_related("employee__user", "employee__department", "leave_type")
+        # Aynı izin kaydı veri içinde birden fazla kez bulunmuşsa kişi/gün/tür
+        # bazında tek satır gösterilir; kontrol ekranı yinelenen kayıtları üretmez.
+        gorulen_izinler = set()
+        for leave in izinler.filter(employee__in=selected_employees):
+            if not can_view_leave_request(request.user, leave):
+                continue
+            ilk = max(leave.start_date, baslangic)
+            son = min(leave.end_date, bitis)
+            event_kind = "free_time" if leave.leave_type.code in {"time_off", "flex_time"} else "leave"
+            gun = ilk
+            while gun <= son:
+                event_key = (leave.employee_id, gun, event_kind, leave.leave_type_id)
+                if event_key in gorulen_izinler:
+                    gun += timedelta(days=1)
+                    continue
+                gorulen_izinler.add(event_key)
+                events.append({
+                    "kind": event_kind, "kind_label": "Serbest zaman" if event_kind == "free_time" else "İzin",
+                    "date": gun.isoformat(), "employee_id": str(leave.employee_id),
+                    "employee_no": leave.employee.employee_no, "employee": _calisan_etiketi(leave.employee),
+                    "department": leave.employee.department.name if leave.employee.department_id else None,
+                    "title": leave.leave_type.name,
+                    "time": f"{leave.start_time:%H:%M}–{leave.end_time:%H:%M}" if leave.start_time and leave.end_time else "Tüm gün",
+                    "detail": leave.reason or "Onaylandı",
+                })
+                gun += timedelta(days=1)
+        mesailer = OvertimeRequest.objects.filter(
+            tenant=request.user.tenant_id, deleted_at__isnull=True,
+            status=OvertimeStatus.APPROVED, work_date__range=(baslangic, bitis), employee__in=selected_employees,
+        ).select_related("employee__user", "employee__department")
+        for overtime in mesailer:
+            if not can_view_overtime(request.user, overtime):
+                continue
+            events.append({
+                "kind": "overtime", "kind_label": "Fazla mesai", "date": overtime.work_date.isoformat(),
+                "employee_id": str(overtime.employee_id), "employee_no": overtime.employee.employee_no,
+                "employee": _calisan_etiketi(overtime.employee),
+                "department": overtime.employee.department.name if overtime.employee.department_id else None,
+                "title": "Onaylı fazla mesai", "time": f"{overtime.start_time:%H:%M}–{overtime.end_time:%H:%M}",
+                "detail": overtime.description,
+            })
+        # Eski/demo veride iki kayıt zaten oluşmuşsa bunları iki ayrı kart gibi
+        # sunmayız: tek bir görünür çakışma kartı üretiriz. Yeni kayıtlar servis
+        # katmanındaki kontrollerle bu duruma düşemez.
+        gun_gruplari = {}
+        for event in events:
+            gun_gruplari.setdefault((event["employee_id"], event["date"]), []).append(event)
+        temiz_events = []
+        for (employee_key, tarih), gun_events in gun_gruplari.items():
+            izinler = [e for e in gun_events if e["kind"] in {"leave", "free_time"}]
+            mesailer = [e for e in gun_events if e["kind"] == "overtime"]
+            if izinler and mesailer:
+                temel = izinler[0]
+                temiz_events.append({
+                    **temel,
+                    "kind": "conflict",
+                    "kind_label": "Çakışma",
+                    "title": "İzin ve fazla mesai çakışması",
+                    "time": "Kontrol gerekli",
+                    "detail": "Bu gün hem izin hem fazla mesai kaydı var; yeni onaylar engellenir.",
+                })
+            else:
+                temiz_events.extend(gun_events)
+        events = temiz_events
+        events.sort(key=lambda item: (item["date"], item["employee"], item["time"]))
+        return Response({"data": events, "meta": {"from": baslangic.isoformat(), "to": bitis.isoformat(),
+                                                    "employees": visible_employees}})
+
+
 class RoleCreateView(TestUiView):
     """Kiracıya özel rol oluşturur (`role.manage`)."""
 
@@ -3095,6 +3728,26 @@ class RoleUpdateView(TestUiView):
                 }
             }
         )
+
+
+class RoleDeleteView(TestUiView):
+    """Özel rolü soft-delete eder (`role.manage`; OD21)."""
+
+    def post(self, request, role_id: str):  # noqa: ANN001
+        rol = Role.objects.filter(
+            pk=_uuid(role_id, "role_id"), tenant=request.user.tenant_id, deleted_at__isnull=True
+        ).first()
+        if rol is None:
+            raise Http404("rol_yok")
+        try:
+            delete_role(
+                actor=request.user,
+                role=rol,
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"silindi": True, "role": rol.name}})
 
 
 class RolePermissionView(TestUiView):
@@ -3167,10 +3820,10 @@ class RolePermissionView(TestUiView):
                     "scope_types": [
                         {"value": k, "label": v}
                         for k, v in (
-                            ("TENANT", "Tüm kiracı"),
-                            ("UNIT", "Seçili birim + alt birimleri"),
-                            ("UNIT_DIRECT", "Yalnızca seçili birim"),
-                            ("SELF", "Yalnızca kendi kaydı"),
+                            ("TENANT", "Şirket genelinde"),
+                            ("UNIT", "Atandığı departman ve alt departmanları"),
+                            ("UNIT_DIRECT", "Yalnızca atandığı departman"),
+                            ("SELF", "Yalnızca kendi hesabı ve çalışan kaydı"),
                         )
                     ],
                     "modules": [
@@ -3242,7 +3895,7 @@ class LookupView(TestUiView):
                         for d in Department.objects.filter(deleted_at__isnull=True).order_by("code")
                     ],
                     "positions": [
-                        {"id": str(p.pk), "code": p.code, "name": p.name}
+                        {"id": str(p.pk), "code": p.code, "name": p.name, "level": p.level}
                         for p in Position.objects.filter(deleted_at__isnull=True).order_by("code")
                     ],
                     "leave_types": [
@@ -3333,6 +3986,8 @@ class LookupView(TestUiView):
                     "can_manage_policy": user_has_permission(request.user, "leave.type.manage"),
                     "can_create_users": user_has_permission(request.user, "user.manage"),
                     "can_see_pii": user_has_permission(request.user, "employee.sensitive.read"),
+                    "can_upload_photo": user_has_permission(request.user, "employee.photo.upload"),
+                    "can_upload_documents": user_has_permission(request.user, "document.upload"),
                     "can_manage_employee_form": user_has_permission(
                         request.user, "employee.form.manage"
                     ),
@@ -3414,14 +4069,19 @@ def _aktif_ozel_form_alanlari(tenant_id):  # noqa: ANN001
 
 
 def _dogrula_ozel_form_degerleri(
-    user, tenant_id, values, *, enforce_required: bool = True
+    user, tenant_id, values, *, enforce_required: bool = True, allow_self: bool = False
 ) -> dict:  # noqa: ANN001
     """Özel alanları tanıma, tip, seçenek ve zorunluluk açısından doğrular."""
     if values in (None, ""):
         values = {}
     if not isinstance(values, dict):
         raise LeaveError("custom_fields bir nesne olmalıdır.")
-    if values and not user_has_permission(user, "employee.sensitive.read"):
+    self_employee = (
+        allow_self and Employee.objects.filter(
+            user=user, tenant_id=tenant_id, deleted_at__isnull=True
+        ).exists()
+    )
+    if values and not user_has_permission(user, "employee.sensitive.read") and not self_employee:
         raise TestUiAuthorizationError("Özel çalışan bilgilerini kaydetmek için hassas veri izni gerekir.")
     alanlar = _aktif_ozel_form_alanlari(tenant_id)
     tanimli = {alan.field_code: alan for alan in alanlar}
@@ -3547,17 +4207,18 @@ def _pii_ozeti(kayit) -> dict:  # noqa: ANN001
     }
 
 
-def _pii_guardlari(user, employee) -> None:  # noqa: ANN001
+def _pii_guardlari(user, employee, *, allow_self: bool = False) -> None:  # noqa: ANN001
     """Kişisel veri erişimi: tablo kapsamı izni (OD5 §5.7) + kapsam."""
-    if not user_has_permission(user, "employee.sensitive.read"):
+    own_record = allow_self and employee.user_id is not None and str(employee.user_id) == str(user.pk)
+    if not user_has_permission(user, "employee.sensitive.read") and not own_record:
         raise TestUiAuthorizationError(
             "Kişisel verileri görüntülemek için 'employee.sensitive.read' izni gerekir."
         )
 
 
-def _pii_yaz(user, calisan, veri) -> None:  # noqa: ANN001
+def _pii_yaz(user, calisan, veri, *, allow_self: bool = False) -> None:  # noqa: ANN001
     """Kişisel veriyi yazar/günceller; doğrulama ve denetim burada yapılır."""
-    _pii_guardlari(user, calisan)
+    _pii_guardlari(user, calisan, allow_self=allow_self)
     from apps.organization.models import EmployeePersonalData  # noqa: PLC0415
 
     kayit = EmployeePersonalData.objects.filter(employee=calisan).first()
@@ -3751,6 +4412,284 @@ class EmployeePersonalView(TestUiView):
         return Response({"data": _pii_ozeti(calisan.personal_data)})
 
 
+PROFILE_DIRECT_FIELDS = frozenset({
+    "personal_email", "personal_phone", "address",
+    "emergency_contact_phone", "emergency_contact_relation",
+})
+
+
+def _profile_custom_patch(user, tenant_id, values) -> dict:  # noqa: ANN001
+    """Validate submitted optional fields while preserving explicit clears."""
+    alanlar = {
+        item.field_code: item
+        for item in _aktif_ozel_form_alanlari(tenant_id)
+    }
+    bilinmeyen = set(values) - set(alanlar)
+    if bilinmeyen:
+        raise LeaveError("Özel profil alanı tanımsız veya kapalı.")
+    for code, raw in values.items():
+        if alanlar[code].is_required and raw in (None, ""):
+            raise LeaveError(f"'{alanlar[code].label_override or code}' alanı zorunludur.")
+    validated = _dogrula_ozel_form_degerleri(
+        user, tenant_id,
+        {code: value for code, value in values.items() if value not in (None, "")},
+        enforce_required=False, allow_self=True,
+    )
+    return {code: validated.get(code) for code in values}
+
+
+def _merge_profile_custom_fields(employee, patch_values: dict) -> dict:  # noqa: ANN001
+    record = getattr(employee, "personal_data", None)
+    merged = dict(getattr(record, "custom_fields", {}) or {})
+    for code, value in patch_values.items():
+        if value in (None, ""):
+            merged.pop(code, None)
+        else:
+            merged[code] = value
+    return merged
+
+
+class EmployeeProfileView(TestUiView):
+    """Çalışanın kendi profilini görmesi ve izin verilen alanlarını düzenlemesi."""
+
+    def _employee(self, user):  # noqa: ANN001
+        return Employee.objects.filter(
+            user=user, tenant_id=user.tenant_id, deleted_at__isnull=True
+        ).select_related("user", "tenant").first()
+
+    def get(self, request):  # noqa: ANN001
+        employee = self._employee(request.user)
+        personal = getattr(employee, "personal_data", None) if employee else None
+        values = _pii_ozeti(personal) if personal else {}
+        definitions = FormFieldDefinition.objects.filter(
+            tenant_id=request.user.tenant_id,
+            form_code="employee_onboarding",
+            is_visible=True,
+            deleted_at__isnull=True,
+        ).filter(
+            Q(field_code__in=(*PII_ALANLARI, *K3_ALANLARI))
+            | Q(field_code__startswith="custom_")
+        ).order_by("sort_order", "created_at")
+        fields = []
+        custom_values = values.get("custom_fields", {}) or {}
+        for definition in definitions:
+            field = _form_alani_yanit(definition)
+            code = field["code"]
+            field["value"] = custom_values.get(code, "") if code.startswith("custom_") else values.get(code, "")
+            field["edit_mode"] = "direct" if code in PROFILE_DIRECT_FIELDS else "approval"
+            fields.append(field)
+        own_requests = EmployeeProfileChangeRequest.objects.filter(
+            requester=request.user, deleted_at__isnull=True,
+        ).order_by("-created_at")[:10]
+        return Response({"data": {
+            "has_employee": employee is not None,
+            "account": {
+                "name": request.user.get_full_name(),
+                "email": request.user.email,
+                "phone": request.user.phone,
+            },
+            "fields": fields,
+            "values": values,
+            "custom_fields": custom_values,
+            "requests": [{
+                "id": str(item.pk), "status": item.status,
+                "status_label": item.get_status_display(),
+                "field_codes": item.field_codes,
+                "created_at": item.created_at.isoformat(),
+                "review_note": item.review_note,
+            } for item in own_requests],
+        }})
+
+    @transaction.atomic
+    def post(self, request):  # noqa: ANN001
+        employee = self._employee(request.user)
+        if employee is None:
+            return TestUiErrors.cevap(LeaveError("Hesabınıza bağlı çalışan profili bulunamadı."))
+        mode = str(request.data.get("mode") or "").strip()
+        changes = request.data.get("changes")
+        if mode not in {"direct", "approval"} or not isinstance(changes, dict) or not changes:
+            return TestUiErrors.cevap(LeaveError("Profil değişikliklerini ve kaydetme biçimini seçin."))
+        definitions = FormFieldDefinition.objects.filter(
+            tenant_id=request.user.tenant_id, form_code="employee_onboarding",
+            is_visible=True, deleted_at__isnull=True,
+        ).filter(
+            Q(field_code__in=(*PII_ALANLARI, *K3_ALANLARI))
+            | Q(field_code__startswith="custom_")
+        )
+        available = {item.field_code for item in definitions}
+        custom_codes = {code for code in available if code.startswith("custom_")}
+        allowed = available | {"phone"}
+        custom_changes = changes.get("custom_fields", {})
+        if "custom_fields" in changes and (
+            not isinstance(custom_changes, dict) or set(custom_changes) - custom_codes
+        ):
+            return TestUiErrors.cevap(LeaveError("Özel profil alanı tanımsız veya kapalı."))
+        unknown = set(changes) - allowed - {"custom_fields"}
+        if unknown:
+            return TestUiErrors.cevap(LeaveError("Düzenlenmek istenen profil alanı etkin değil."))
+        if mode == "direct" and not set(changes).issubset(PROFILE_DIRECT_FIELDS | {"phone"}):
+            return TestUiErrors.cevap(LeaveError("Bu alanlar onay talebiyle değiştirilebilir."))
+        if mode == "approval" and set(changes).issubset(PROFILE_DIRECT_FIELDS | {"phone"}):
+            return TestUiErrors.cevap(LeaveError("Bu değişiklikler doğrudan kaydedilebilir."))
+
+        personal_changes = {key: value for key, value in changes.items() if key != "phone"}
+        if "custom_fields" in personal_changes:
+            custom = personal_changes["custom_fields"]
+            if not isinstance(custom, dict) or set(custom) - custom_codes:
+                return TestUiErrors.cevap(LeaveError("Özel profil alanı tanımsız veya kapalı."))
+            try:
+                personal_changes["custom_fields"] = _profile_custom_patch(
+                    request.user, request.user.tenant_id, custom
+                )
+            except (LeaveError, TestUiAuthorizationError) as error:
+                return TestUiErrors.cevap(error)
+
+        if mode == "approval":
+            request_codes = set(changes) - {"custom_fields"}
+            request_codes.update(custom_changes)
+            item = EmployeeProfileChangeRequest.objects.create(
+                tenant_id=request.user.tenant_id, employee=employee,
+                requester=request.user,
+                field_codes=sorted(request_codes),
+                payload=json.dumps(changes, ensure_ascii=False),
+            )
+            from apps.audit.services import log_action  # noqa: PLC0415
+            log_action(
+                tenant_id=request.user.tenant_id, action="employee.profile.req",
+                user=request.user, table_name="employee_profile_change_requests",
+                record_id=item.pk, changes={"field_codes": sorted(request_codes)},
+            )
+            return Response({"data": {"id": str(item.pk), "status": item.status}}, status=201)
+
+        if personal_changes:
+            try:
+                if "custom_fields" in personal_changes:
+                    personal_changes["custom_fields"] = _merge_profile_custom_fields(
+                        employee, personal_changes["custom_fields"]
+                    )
+                _pii_yaz(request.user, employee, personal_changes, allow_self=True)
+            except (TestUiAuthorizationError, LeaveError, OrganizationError) as error:
+                return TestUiErrors.cevap(error)
+        if "phone" in changes:
+            phone = str(changes["phone"] or "").strip()
+            if len(phone) > 30:
+                return TestUiErrors.cevap(LeaveError("Telefon en fazla 30 karakter olabilir."))
+            request.user.phone = phone
+            request.user.save(update_fields=["phone", "updated_at"])
+            from apps.audit.services import log_action  # noqa: PLC0415
+            log_action(
+                tenant_id=request.user.tenant_id, action="user.profile.update",
+                user=request.user, table_name="users", record_id=request.user.pk,
+                changes={"fields": ["phone"]},
+            )
+        return Response({"data": {"updated": True}})
+
+
+class EmployeeProfileChangeRequestsView(TestUiView):
+    """Kapsamındaki profil güncelleme taleplerini inceler ve karara bağlar."""
+
+    def get(self, request):  # noqa: ANN001
+        if not (user_has_permission(request.user, "employee.update")
+                and user_has_permission(request.user, "employee.sensitive.read")):
+            return TestUiErrors.cevap(TestUiAuthorizationError("Profil taleplerini inceleme yetkiniz yok."))
+        employees = kapsamdaki_calisanlar(request.user)
+        items = EmployeeProfileChangeRequest.objects.filter(
+            employee__in=employees, status=EmployeeProfileChangeStatus.PENDING,
+            deleted_at__isnull=True,
+        ).select_related("employee", "requester").order_by("created_at")[:100]
+        return Response({"data": [{
+            "id": str(item.pk), "employee_id": str(item.employee_id),
+            "employee_no": item.employee.employee_no,
+            "requester": item.requester.get_full_name() or item.requester.email,
+            "field_codes": item.field_codes,
+            "changes": json.loads(item.payload),
+            "created_at": item.created_at.isoformat(),
+        } for item in items]})
+
+    @transaction.atomic
+    def post(self, request, request_id: str):  # noqa: ANN001
+        if not (user_has_permission(request.user, "employee.update")
+                and user_has_permission(request.user, "employee.sensitive.read")):
+            return TestUiErrors.cevap(TestUiAuthorizationError("Profil taleplerine karar verme yetkiniz yok."))
+        item = EmployeeProfileChangeRequest.objects.select_for_update().filter(
+            pk=_uuid(request_id, "request_id"), tenant_id=request.user.tenant_id,
+            deleted_at__isnull=True,
+        ).first()
+        if item is None:
+            raise Http404("profil_talebi_yok")
+        employee = _kapsamdaki_calisan(request.user, item.employee_id)
+        if str(item.requester_id) == str(request.user.pk):
+            return TestUiErrors.cevap(TestUiAuthorizationError("Kendi profil talebinize karar veremezsiniz."))
+        if item.status != EmployeeProfileChangeStatus.PENDING:
+            return TestUiErrors.cevap(LeaveError("Bu profil talebi daha önce karara bağlandı."))
+        decision = str(request.data.get("decision") or "").strip()
+        note = " ".join(str(request.data.get("note") or "").split())
+        if decision not in {"approve", "reject"}:
+            return TestUiErrors.cevap(LeaveError("Karar onay veya ret olmalıdır."))
+        if decision == "reject" and len(note) < 10:
+            return TestUiErrors.cevap(LeaveError("Ret açıklaması en az 10 karakter olmalıdır."))
+        if decision == "approve":
+            changes = json.loads(item.payload)
+            personal = {key: value for key, value in changes.items() if key != "phone"}
+            if personal:
+                if "custom_fields" in personal:
+                    personal["custom_fields"] = _merge_profile_custom_fields(
+                        employee, personal["custom_fields"]
+                    )
+                _pii_yaz(request.user, employee, personal)
+                if employee.user_id and any(key in personal for key in ("first_name", "last_name")):
+                    if "first_name" in personal:
+                        employee.user.first_name = str(personal["first_name"]).strip()
+                    if "last_name" in personal:
+                        employee.user.last_name = str(personal["last_name"]).strip()
+                    employee.user.save(update_fields=["first_name", "last_name", "updated_at"])
+            item.status = EmployeeProfileChangeStatus.APPROVED
+        else:
+            item.status = EmployeeProfileChangeStatus.REJECTED
+        item.reviewer = request.user
+        item.review_note = note
+        item.reviewed_at = timezone.now()
+        item.save(update_fields=["status", "reviewer", "review_note", "reviewed_at", "updated_at"])
+        from apps.audit.services import log_action  # noqa: PLC0415
+        log_action(
+            tenant_id=request.user.tenant_id,
+            action="employee.profile." + decision,
+            user=request.user, table_name="employee_profile_change_requests",
+            record_id=item.pk, changes={"field_codes": item.field_codes, "note": note},
+        )
+        return Response({"data": {"id": str(item.pk), "status": item.status}})
+
+
+class EmployeePasswordChangeView(TestUiView):
+    """Kullanıcı mevcut parolasıyla kendi parolasını değiştirir."""
+
+    @transaction.atomic
+    def post(self, request):  # noqa: ANN001
+        current = str(request.data.get("current_password") or "")
+        new = str(request.data.get("new_password") or "")
+        confirm = str(request.data.get("new_password_confirm") or "")
+        if not check_password(current, request.user.password):
+            return TestUiErrors.cevap(LeaveError("Mevcut parola doğru değil."))
+        if not new or new != confirm:
+            return TestUiErrors.cevap(LeaveError("Yeni parola ve tekrarı aynı olmalıdır."))
+        try:
+            validate_password(new, user=request.user)
+        except ValidationError as error:
+            return TestUiErrors.cevap(LeaveError("Parola kuralları: " + " ".join(error.messages)))
+        request.user.set_password(new)
+        request.user.auth_version += 1
+        request.user.save(update_fields=["password", "password_changed_at", "auth_version", "updated_at"])
+        request.session["auth_version"] = int(request.user.auth_version)
+        update_session_auth_hash(request, request.user)
+        from apps.audit.services import log_action  # noqa: PLC0415
+        log_action(
+            tenant_id=request.user.tenant_id, action="user.password.change",
+            user=request.user, table_name="users", record_id=request.user.pk,
+            changes={"password_changed": True},
+        )
+        return Response({"data": {"changed": True}})
+
+
 class UserCreateView(TestUiView):
     """Giriş hesabı açar (`user.manage`). Parola **yanıtta dönmez**, denetime yazılmaz."""
 
@@ -3871,6 +4810,15 @@ class EmployeeDetailView(TestUiView):
             "can_update_email": bool(
                 calisan.user_id and user_has_permission(request.user, "user.manage")
             ),
+            "can_upload_photo": bool(
+                calisan.user_id != request.user.pk
+                and user_has_permission(request.user, "employee.photo.upload")
+            ),
+            "can_upload_documents": bool(
+                calisan.user_id != request.user.pk
+                and user_has_permission(request.user, "document.upload")
+            ),
+            "can_delete_documents": user_has_permission(request.user, "document.delete"),
         }
         if detay["yetki_gorunur"] and calisan.user_id:
             atamalar = (
@@ -3909,7 +4857,7 @@ class EmployeeDetailView(TestUiView):
 
 
 class EmployeePasswordResetView(TestUiView):
-    """Yetkili yönetici, kapsamındaki çalışan hesabına yeni parola belirler."""
+    """Yetkili yönetici, kapsamındaki çalışana tek kullanımlık sıfırlama bağlantısı yollar."""
 
     def post(self, request, employee_id: str):  # noqa: ANN001
         try:
@@ -3918,21 +4866,15 @@ class EmployeePasswordResetView(TestUiView):
             calisan = _kapsamdaki_calisan(request.user, employee_id)
             if calisan.user_id is None:
                 raise LeaveError("Bu çalışana bağlı bir giriş hesabı yok.")
-            parola = str(request.data.get("password") or "")
-            if not parola:
-                raise LeaveError("Yeni parola zorunludur.")
-            from django.contrib.auth.password_validation import validate_password  # noqa: PLC0415
-            from django.core.exceptions import ValidationError  # noqa: PLC0415
             try:
-                validate_password(parola, user=calisan.user)
-            except ValidationError as hata:
-                raise LeaveError("Parola kuralları: " + " ".join(hata.messages)) from hata
-            calisan.user.set_password(parola)
-            calisan.user.save(update_fields=["password", "password_changed_at", "updated_at"])
+                from apps.accounts.views import send_password_reset_link  # noqa: PLC0415
+                send_password_reset_link(request, calisan.user)
+            except Exception as hata:  # noqa: BLE001
+                raise LeaveError("Parola sıfırlama e-postası gönderilemedi.") from hata
             from apps.audit.services import log_action  # noqa: PLC0415
             log_action(
                 tenant_id=calisan.tenant_id,
-                action="user.password.reset",
+                action="user.password.reset_link.sent",
                 user=request.user,
                 table_name="users",
                 record_id=calisan.user_id,
@@ -4178,6 +5120,36 @@ class LeaveRequestCancelView(TestUiView):
         except (LeaveError, LeaveAuthorizationError) as hata:
             return TestUiErrors.cevap(hata)
         return Response({"data": _talep_ozeti(sonuc, request.user)})
+
+
+class LeaveRequestReviseView(TestUiView):
+    """Talebi tek işlemde yeniler ve yeni onay akışına gönderir."""
+
+    def post(self, request, request_id: str):  # noqa: ANN001
+        talep = LeaveRequest.objects.filter(pk=_uuid(request_id, "id")).first()
+        if talep is None:
+            raise Http404("izin_talebi_yok")
+        veri = request.data
+        try:
+            tur = LeaveType.objects.filter(
+                pk=_uuid(veri.get("leave_type_id"), "leave_type_id"),
+                tenant_id=request.user.tenant_id, deleted_at__isnull=True,
+            ).first()
+            if tur is None:
+                raise LeaveError("İzin türü bulunamadı.")
+            sonuc = revise_leave_request(
+                actor=request.user, request=talep, leave_type=tur,
+                start_date=_tarih(veri.get("start_date"), "start_date"),
+                end_date=_tarih(veri.get("end_date"), "end_date"),
+                start_time=_saat(veri.get("start_time"), "start_time") if veri.get("start_time") else None,
+                end_time=_saat(veri.get("end_time"), "end_time") if veri.get("end_time") else None,
+                reason=str(veri.get("reason") or "").strip(),
+                is_half_day=bool(veri.get("is_half_day", False)),
+                requested_days=_sayi(veri.get("requested_days")),
+            )
+        except (LeaveError, LeaveAuthorizationError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": _talep_ozeti(sonuc, request.user)}, status=status.HTTP_201_CREATED)
 
 
 class EmployeeEntitlementView(TestUiView):

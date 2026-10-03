@@ -3,6 +3,59 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [Çalışma] — 2026-10-02 — Platform şirket ayrıntıları ve yönetimi
+
+**EKLENEN**
+
+- Platform şirket detayında alan seçmeli erişim talebi, gerekçe ve 1–60 dakika
+  süre; iki farklı platform kullanıcısının kararıyla geçici `AccessGrant` üretimi.
+- Talep, onay ve grant kayıtları için `platform.0011` migration'ı kullanıcı
+  onayıyla canlı veritabanına uygulandı.
+- Aktif görüntüleme grant'i yalnızca sahibine, grant'te seçilen kanonik şirket
+  alanlarını gösterir; kullanım platform audit kaydına yazılır.
+- SUPERADMIN şirket bilgilerini onaysız düzenler; audit görünümünde aktör ve
+  değişen alanlar gösterilir. Kaydetme sonunda e-posta gönderimi isteğe bağlıdır.
+- Şirket oluşturma/düzenleme ekranında plan, hizmet başlangıç/bitiş tarihleri,
+  kullanıcı/depolama/çalışan limitleri ve şirket başına profil alanı seçimi vardır.
+- Şirket profiline özel alan ekleme/silme, alan türü, seçenek listesi ve zorunluluk
+  ayarı hem şirket oluşturma hem ayrıntı ekranına eklendi; alan kodu bilgi adından
+  üretilir ve teknik kod girişi gerekmez.
+- Şirket ekle/liste ve planlar/plan düzenleme üst sekmeleri eklendi. Plan katalogu
+  `platform.0013` migration'ıyla kalıcı hâle getirildi; planlar satırdan düzenlenir,
+  kullanılmayanlar kaldırılır ve plan seçimi limitleri doldurur.
+- Şirket listesinde SUPERADMIN için doğrudan düzenleme bağlantısı ve kaydetme
+  sonucuna odaklanan görünür geri bildirim eklendi.
+- Kullanıcı limiti ekranda şirket içinde giriş yapabilen hesap sayısı olarak açıklanır.
+- Ana şirket listesinden kullanım bitişi ve çalışan kısayolu kaldırıldı; şirket
+  ayrıntısına tarihler, çalışan sayacı/açma düğmesi ve işlem kaydı eklendi.
+
+**DOĞRULANAN**
+
+- Platform erişim talepleri/kararları ve panel: 16 test geçti.
+- `platform.0012` ve bağımlı `tenancy.0011` canlı veritabanına uygulandı.
+- `platform.0013_company_plans` canlı veritabanına uygulandı.
+- Platform paneli/erişim ve kiracı başlangıç-bitiş testleri: 50 geçti.
+- `ruff`, `manage.py check` ve `git diff --check` başarılı.
+
+**KALAN**
+
+- E-posta gönderimi SMTP hatasında kaydı geri almaz; panelde gönderim durumu ve
+  audit olayı görünür. Şirket değişikliği audit kaydı değerleri değil alan adlarını
+  saklar.
+
+## [0.40.0] — 2026-09-27 — Vardiya tanımında yönetici yetkisi onarımı
+
+**DEĞİŞEN**
+
+- Eski varsayılan yönetici rollerinin vardiya izinleri istek sırasında
+  tamamlanırken rol kapsamı da beklenen değere (`dept_manager` için `UNIT`,
+  diğer yönetici rolleri için `TENANT`) getirilir. Böylece hatalı kapsam yüzünden
+  izin çözümleyicisinin yöneticiyi kapsam dışı bırakması önlenir.
+
+**DOĞRULANAN**
+
+- `tests/test_shift_permissions.py`: 1 test geçti.
+
 ## [0.39.0] — 2026-09-14 — P1-B: Employee lifecycle services
 
 **Kapsam:** P1-A'da kurulan lifecycle/history altyapısının gerçek servisler ve güvenli

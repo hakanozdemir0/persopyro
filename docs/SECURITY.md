@@ -179,7 +179,7 @@ Aşağıdaki koşulların **tümü** sağlanmadan erişim yoktur:
 | Koşul | Değer |
 |---|---|
 | Varsayılan | **Erişim yok** (fail-closed) |
-| Onay kaydı | Geçerli `AccessGrant`; kiracı içinde tek onay, platformda **çift onay** (talep sahibi onaylayamaz) |
+| Onay kaydı | Çalışan/iş verisine platform erişimi için geçerli `AccessGrant`; platformda **çift onay** (talep sahibi onaylayamaz). SUPERADMIN şirket profili/limit düzenlemesi ayrı kontrollü uçta doğrudan yapılır ve platform audit'e yazılır |
 | Gerekçe | Zorunlu ve anlamlı (boş, tek kelime veya şablon metin reddedilir) |
 | Süre | Varsayılan 60 dakika; dolduğunda **otomatik kapanır**; uzatma yeni onay gerektirir |
 | Kapsam | Tek kiracı, talep edilen kaynak türleri ve alanlar |
@@ -480,7 +480,9 @@ erişim.
   **düşülmez**; **izin devralma yok**; fail-closed. Platform izinleri **hiçbir
   kiracı/PII kodu içermez** (çözümleyici `platform.*` süzgeci uygular) →
   **SUPERADMIN olmak kiracı kişisel verisine doğrudan erişim vermez**; kiracı
-  verisi yalnızca erişim talebi + çift onay + süreli kayıt ile açılır (OD1/OD3/OD4).
+  çalışan/iş verisi yalnızca erişim talebi + çift onay + süreli kayıt ile açılır
+  (OD1/OD3/OD4). Şirket profil/abonelik/limit yönetimi, SUPERADMIN'ın tenant
+  bağlamındaki doğrudan güncelleme uç noktasıdır ve ayrıca audit edilir.
   Pasif/silinmiş platform kullanıcısının **token'ı da çalışmaz**
   (`authenticate_platform_token`).
 - **İlk SUPERADMIN bootstrap (M33):** `manage.py create_platform_superadmin` —

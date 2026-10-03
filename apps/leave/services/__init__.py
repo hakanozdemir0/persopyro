@@ -55,6 +55,7 @@ from apps.leave.services.requests import (
     create_leave_request,
     decide_approval_step,
     mark_leave_taken,
+    revise_leave_request,
     submit_leave_request,
 )
 from apps.leave.services.types import (
@@ -96,6 +97,7 @@ __all__ = [
     "get_or_create_balance",
     "is_assigned_to_step",
     "mark_leave_taken",
+    "revise_leave_request",
     "period_year_for",
     "service_months",
     "set_leave_entitlement",

@@ -109,6 +109,22 @@ def _cakisan_talep_var(employee: Employee, work_date, start_time, end_time) -> b
     )
 
 
+def _onayli_izin_var(employee: Employee, work_date) -> bool:
+    """Aynı gün gönderilmiş/onaylı izin varsa fazla mesaiyi kapatır."""
+    # Yerel import, izin servislerinin fazla mesai servislerini kullandığı
+    # onay akışında modül döngüsü oluşmasını engeller.
+    from apps.leave.models import LeaveRequest, LeaveRequestStatus
+
+    return LeaveRequest.objects.filter(
+        tenant_id=employee.tenant_id,
+        employee_id=employee.pk,
+        deleted_at__isnull=True,
+        status__in=(LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED),
+        start_date__lte=work_date,
+        end_date__gte=work_date,
+    ).exists()
+
+
 def _adimlari_olustur(talep: OvertimeRequest) -> list[ApprovalStep]:
     """
     Onay adımlarını kurar: **birincil yönetici → İK** (OD39).
@@ -231,6 +247,10 @@ def create_overtime_request(
         raise OvertimeValidationError(
             "Bu tarih ve saat aralığı için açık/onaylı bir fazla mesai kaydı zaten var."
         )
+    if _onayli_izin_var(employee, work_date):
+        raise OvertimeStateError(
+            "Bu gün için bekleyen veya onaylanmış izin bulunduğundan fazla mesai bildirilemez."
+        )
 
     with transaction.atomic():
         talep = OvertimeRequest.objects.create(
@@ -324,6 +344,10 @@ def decide_overtime_request(
 
 def _nihai_onay(talep: OvertimeRequest, *, actor) -> OvertimeRequest:
     """Nihai onayda kural değerlerini immutable snapshot alanlarına alır."""
+    if _onayli_izin_var(talep.employee, talep.work_date):
+        raise OvertimeStateError(
+            "Bu gün için bekleyen veya onaylanmış izin bulunduğundan fazla mesai onaylanamaz."
+        )
     kural = talep.overtime_rule or resolve_overtime_rule(
         tenant_id=talep.tenant_id,
         work_date=talep.work_date,

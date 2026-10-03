@@ -1,0 +1,147 @@
+{% extends "testui/base.html" %}
+{% block title %}Profil — Persopyro{% endblock %}
+{% block header_extra %}<a class="button" href="{% url 'test-ui-app' %}">Panele dön</a>{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Hesap ayarları</p><h1>Profilim</h1>
+    <p>Kişisel bilgilerinizi düzenleyin, gerekiyorsa onaya gönderin ve parolanızı değiştirin.</p></div>
+</section>
+<section class="card" aria-labelledby="account-title">
+  <div class="section-head"><h2 id="account-title">Hesap bilgileri</h2><span id="profile-account-email" class="muted"></span></div>
+  <div class="grid"><div><strong>Ad soyad</strong><div id="profile-account-name">—</div></div>
+    <div><strong>Giriş e-postası</strong><div id="profile-account-login">—</div></div></div>
+</section>
+<section class="card" aria-labelledby="direct-title">
+  <div class="section-head"><h2 id="direct-title">Doğrudan düzenlenebilir bilgiler</h2></div>
+  <p class="card-intro">Bu alanlardaki değişiklikler kaydedildiğinde hemen uygulanır.</p>
+  <form id="profile-direct-form" class="form-grid"><div id="profile-direct-fields" class="grid grid-2 field-span"></div>
+    <div class="form-actions"><button class="primary" type="submit">Bilgilerimi kaydet</button></div></form>
+</section>
+<section class="card" aria-labelledby="approval-title">
+  <div class="section-head"><h2 id="approval-title">Onay gerektiren bilgiler</h2></div>
+  <p class="card-intro">Değişiklik talep olarak gönderilir. Onaylanana kadar mevcut bilgileriniz kullanılmaya devam eder.</p>
+  <form id="profile-approval-form" class="form-grid"><div id="profile-approval-fields" class="grid grid-2 field-span"></div>
+    <div class="form-actions"><button class="primary" type="submit">Değişikliği onaya gönder</button></div></form>
+</section>
+<section class="card" aria-labelledby="password-title">
+  <div class="section-head"><h2 id="password-title">Parola değiştir</h2></div>
+  <form id="profile-password-form" class="form-grid">
+    <div class="field"><label for="current-password">Mevcut parola</label><input id="current-password" type="password" autocomplete="current-password" required></div>
+    <div class="field"><label for="new-password">Yeni parola</label><input id="new-password" type="password" autocomplete="new-password" required></div>
+    <div class="field"><label for="new-password-confirm">Yeni parola (tekrar)</label><input id="new-password-confirm" type="password" autocomplete="new-password" required></div>
+    <div class="form-actions"><button class="primary" type="submit">Parolayı değiştir</button></div>
+  </form>
+</section>
+<section class="card" aria-labelledby="requests-title">
+  <div class="section-head"><h2 id="requests-title">Profil değişiklik taleplerim</h2></div>
+  <div id="profile-requests" class="muted">Yükleniyor…</div>
+</section>
+<section class="card" id="profile-review-card" hidden aria-labelledby="review-title">
+  <div class="section-head"><h2 id="review-title">Onay bekleyen profil değişiklikleri</h2></div>
+  <div id="profile-review-requests"></div>
+</section>
+{% endblock %}
+{% block script %}
+<script>
+(() => {
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  let profile = null;
+  const directBox = document.getElementById("profile-direct-fields");
+  const approvalBox = document.getElementById("profile-approval-fields");
+  function fieldMarkup(field, mode) {
+    const code = field.code;
+    const id = `profile-${mode}-${code}`;
+    let input;
+    if (field.field_type === "select") {
+      input = `<select id="${esc(id)}" data-profile-code="${esc(code)}" data-profile-mode="${mode}"><option value="">Seçin</option>${(field.options || []).map((v) => `<option value="${esc(v)}"${v === field.value ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
+    } else {
+      const type = field.field_type === "date" ? "date" : field.field_type === "number" ? "number" : "text";
+      input = `<input id="${esc(id)}" type="${type}" value="${esc(field.value)}" data-profile-code="${esc(code)}" data-profile-mode="${mode}"${field.is_required ? " required" : ""}>`;
+    }
+    return `<div class="field"><label for="${esc(id)}">${esc(field.label)}</label>${input}${field.helper_text ? `<small class="muted">${esc(field.helper_text)}</small>` : ""}</div>`;
+  }
+  function collect(mode) {
+    const changes = {};
+    const custom = {};
+    document.querySelectorAll(`[data-profile-mode="${mode}"]`).forEach((input) => {
+      const code = input.dataset.profileCode;
+      const value = input.value;
+      const original = code.startsWith("custom_")
+        ? (profile.custom_fields || {})[code] || ""
+        : profile.values[code] || "";
+      if (value === String(original ?? "")) return;
+      if (code.startsWith("custom_")) custom[code] = value;
+      else changes[code] = value;
+    });
+    if (mode === "direct") {
+      const phone = document.getElementById("profile-account-phone");
+      if (phone && phone.value !== (profile.account.phone || "")) changes.phone = phone.value;
+    }
+    if (Object.keys(custom).length) changes.custom_fields = custom;
+    return changes;
+  }
+  function renderRequests(items) {
+    const target = document.getElementById("profile-requests");
+    target.innerHTML = items.length ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Tarih</th><th>Alanlar</th><th>Durum</th><th>Karar notu</th></tr></thead><tbody>${items.map((r) => `<tr><td>${new Date(r.created_at).toLocaleString("tr-TR")}</td><td>${(r.field_codes || []).map(esc).join(", ")}</td><td>${esc(r.status_label)}</td><td>${esc(r.review_note || "—")}</td></tr>`).join("")}</tbody></table></div>` : "Henüz profil değişikliği talebiniz yok.";
+  }
+  async function loadProfile() {
+    const {data} = await PERSOPYRO_UI.cagir("/test-ui/api/profile");
+    profile = data;
+    document.getElementById("profile-account-name").textContent = data.account.name || "—";
+    document.getElementById("profile-account-email").textContent = data.account.email;
+    document.getElementById("profile-account-login").textContent = data.account.email;
+    const phoneInput = `<div class="field"><label for="profile-account-phone">Telefon</label><input id="profile-account-phone" type="tel" maxlength="30" value="${esc(data.account.phone || "")}"></div>`;
+    directBox.innerHTML = phoneInput + data.fields.filter((f) => f.edit_mode === "direct").map((f) => fieldMarkup(f, "direct")).join("");
+    approvalBox.innerHTML = data.fields.filter((f) => f.edit_mode === "approval").map((f) => fieldMarkup(f, "approval")).join("");
+    if (!data.has_employee) {
+      directBox.innerHTML = `<p class="muted">Hesabınıza çalışan profili bağlı değil.</p>`;
+      approvalBox.innerHTML = `<p class="muted">Çalışan profili kaydı bulunamadı.</p>`;
+    }
+    renderRequests(data.requests || []);
+  }
+  async function saveProfile(mode) {
+    const changes = collect(mode);
+    if (!Object.keys(changes).length) { PERSOPYRO_UI.mesaj("error", "Kaydedilecek bir değişiklik yok."); return; }
+    try {
+      await PERSOPYRO_UI.cagir("/test-ui/api/profile", {method:"POST", body:{mode, changes}});
+      PERSOPYRO_UI.mesaj("ok", mode === "direct" ? "Profil bilgileriniz kaydedildi." : "Değişiklik talebiniz onaya gönderildi.");
+      await loadProfile();
+    } catch (error) { PERSOPYRO_UI.mesaj("error", error.message); }
+  }
+  document.getElementById("profile-direct-form").addEventListener("submit", (event) => { event.preventDefault(); saveProfile("direct"); });
+  document.getElementById("profile-approval-form").addEventListener("submit", (event) => { event.preventDefault(); saveProfile("approval"); });
+  document.getElementById("profile-password-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = {current_password:document.getElementById("current-password").value,new_password:document.getElementById("new-password").value,new_password_confirm:document.getElementById("new-password-confirm").value};
+    try { await PERSOPYRO_UI.cagir("/test-ui/api/profile/password/change", {method:"POST",body}); form.reset(); PERSOPYRO_UI.mesaj("ok", "Parolanız değiştirildi. Diğer oturumlar ve API tokenları geçersiz oldu."); }
+    catch (error) { PERSOPYRO_UI.mesaj("error", error.message); }
+  });
+  async function loadReviewRequests(me) {
+    const permissions = me.data.permissions || [];
+    if (!permissions.includes("employee.update") || !permissions.includes("employee.sensitive.read")) return;
+    const card = document.getElementById("profile-review-card");
+    try {
+      const {data} = await PERSOPYRO_UI.cagir("/test-ui/api/profile/change-requests");
+      card.hidden = false;
+      const target = document.getElementById("profile-review-requests");
+      target.innerHTML = data.length ? data.map((r) => {
+        const fields = Object.entries(r.changes || {}).flatMap(([key, value]) => key === "custom_fields"
+          ? Object.entries(value || {}).map(([customCode, customValue]) => [customCode, customValue])
+          : [[key, value]]);
+        return `<article class="card"><h3>${esc(r.requester)} · ${esc(r.employee_no)}</h3><p>${(r.field_codes || []).map(esc).join(", ")}</p><dl>${fields.map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl><label for="profile-review-note-${esc(r.id)}">Karar notu (ret için gerekçe)</label><input id="profile-review-note-${esc(r.id)}" maxlength="500"><div class="action-bar"><button data-profile-decision="approve" data-request-id="${esc(r.id)}">Onayla</button><button class="danger" data-profile-decision="reject" data-request-id="${esc(r.id)}">Reddet</button></div></article>`;
+      }).join("") : "Onay bekleyen profil değişikliği yok.";
+      target.querySelectorAll("[data-profile-decision]").forEach((button) => button.addEventListener("click", async () => {
+        const note = document.getElementById(`profile-review-note-${button.dataset.requestId}`).value.trim();
+        try { await PERSOPYRO_UI.cagir(`/test-ui/api/profile/change-requests/${button.dataset.requestId}/decide`, {method:"POST",body:{decision:button.dataset.profileDecision,note}}); PERSOPYRO_UI.mesaj("ok", "Profil değişikliği talebi karara bağlandı."); await loadReviewRequests(me); }
+        catch (error) { PERSOPYRO_UI.mesaj("error", error.message); }
+      }));
+    } catch (error) { card.hidden = true; }
+  }
+  (async () => {
+    try { await loadProfile(); const me = await PERSOPYRO_UI.cagir("/test-ui/api/me"); await loadReviewRequests(me); }
+    catch (error) { PERSOPYRO_UI.mesaj("error", error.message); }
+  })();
+})();
+</script>
+{% endblock %}

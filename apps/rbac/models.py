@@ -40,11 +40,11 @@ class RoleScopeType(models.TextChoices):
     Kapsam **izin üretmez**, izni daraltır; asıl karar `izin ∧ kapsam`dır.
     """
 
-    TENANT = "TENANT", "Kiracı geneli"
-    UNIT = "UNIT", "Birim + alt ağaç"
-    UNIT_DIRECT = "UNIT_DIRECT", "Yalnızca birim (alt ağaç hariç)"
-    ASSIGNED = "ASSIGNED", "Yalnızca atanmış kayıtlar"
-    SELF = "SELF", "Yalnızca kendi kaydı"
+    TENANT = "TENANT", "Şirket genelinde"
+    UNIT = "UNIT", "Atandığı departman ve alt departmanları"
+    UNIT_DIRECT = "UNIT_DIRECT", "Yalnızca atandığı departman"
+    ASSIGNED = "ASSIGNED", "Kendisine açık kayıtlar"
+    SELF = "SELF", "Yalnızca kendi hesabı ve çalışan kaydı"
 
 
 #: `hr.roles` için geçerli kapalı küme (DB `CHECK` ile hizalıdır).

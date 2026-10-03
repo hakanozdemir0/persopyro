@@ -55,6 +55,38 @@ KOBİ'lerden büyük ölçekli şirketlere kadar geniş bir müşteri kitlesinin
 tek bir bulut platformundan, kendi verileri diğer şirketlerden tamamen izole
 biçimde yönetebilmesini sağlamak.
 
+## Platform şirket profili — plan, kararlar açık
+
+Platform panelinde şirket profili oluşturma ve düzenleme akışı vardır. SUPERADMIN
+şirket bilgilerini ikinci bir platform onayı olmadan doğrudan düzenleyebilir;
+değişen alanlar platform işlem kaydında görünür. Kaydın sonunda isterse şirket
+e-posta adresine genel bir bilgilendirme e-postası gönderebilir. E-postada eski/yeni
+kişisel veri değerleri bulunmaz. Şirket başına hangi ek profil alanlarının
+kullanılacağı oluşturma ve düzenleme ekranında elle seçilir.
+
+Şirket profili planındaki ek gereksinimler:
+
+- Şirketin hizmet başlangıç/bitiş tarihleri ve planı yönetilir. Başlangıç tarihi
+  gelmemiş veya bitiş tarihi geçmiş şirket oturum açamaz.
+- Kullanıcı hesabı, depolama, aktif çalışan ve toplam çalışan kaydı limitleri
+  birbirinden ayrıdır; `0` sınırsız anlamına gelir. Şirket ayrıntılarında mevcut
+  çalışan sayıları ve ilk 100 çalışan kaydı görünür.
+- Vergi/iletişim gibi şirket profil alanları yalnız SUPERADMIN şirket ayrıntısında
+  görünür ve doğrudan düzenlenir; değişiklik alanları işlem kaydına yazılır.
+- Parola sıfırlama bağlantısı gönderme ve parola değiştirme kesin gereksinimdir.
+  Çalışan profilindeki parola değiştirme ekranı mevcut parolayı, yeni parolayı
+  ve yeni parolanın tekrarını ister. Parola sıfırlama bağlantısı da desteklenir.
+- Şirket çalışanlarının kendilerine ait profil ekranı olacaktır. Çalışan bu
+  ekrandan kişisel bilgilerini görebilmeli ve düzenleyebilmelidir. Alanın
+  politikasına göre değişiklik doğrudan kaydedilir veya onaya gönderilir;
+  bu davranış alan bazında tanımlanır. Onay gereken değişiklikler mevcut değeri
+  değiştirmeden talep olarak saklanır ve onay/red sonucu çalışana bildirilir.
+- Windows hesabıyla giriş entegrasyonu yalnızca olası gelecek seçeneğidir;
+  gereksinim ve kimlik sağlayıcı kararı verilmemiştir.
+
+Çalışanların kişisel profil değişikliği için doğrudan kayıt/onay politikası ve
+çalışan bildirimleri bu şirket yönetimi akışından ayrıdır.
+
 ## Kapsam
 
 Bu bölüm, projenin ne olduğunu ve ne olmadığını ayırır. Yeni özellik eklenmeden önce

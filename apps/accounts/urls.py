@@ -8,6 +8,7 @@ from apps.accounts.views import (
     TokenLoginView,
     TokenLogoutView,
     TokenRevokeAllView,
+    PasswordResetConfirmView,
 )
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
     path("token", TokenLoginView.as_view(), name="auth-token"),
     path("token/logout", TokenLogoutView.as_view(), name="auth-token-logout"),
     path("token/revoke-all", TokenRevokeAllView.as_view(), name="auth-token-revoke-all"),
+    path("password/reset/confirm", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
 ]

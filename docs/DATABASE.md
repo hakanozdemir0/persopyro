@@ -103,7 +103,7 @@ olduğu için etki boş dizinle sınırlıdır).
 - **TENANT ISOLATION:** Kendi `id`'si üzerinden — politika: `id = hr.current_tenant_id()`
 - **PERSONAL DATA LEVEL:** K1 (kurumsal iletişim: `email`, `phone`, `address`, `tax_number`)
 - **RLS:** ✅ etkin + FORCE · **AUDIT REQUIREMENT:** yüksek (oluşturma/durum/limit değişikliği)
-- **Kolonlar (18):** `id, name, legal_name, tax_number, email, phone, country, city, address, status, max_users, max_storage_mb, settings(jsonb), created_at, updated_at, deleted_at, slug, domain`
+- **Kolonlar (21):** `id, name, legal_name, tax_number, email, phone, country, city, address, status, max_users, max_storage_mb, max_active_employees, max_employee_records, valid_from, valid_until, settings(jsonb), created_at, updated_at, deleted_at, slug, domain`
 
 ### `users`
 - **PURPOSE:** Kiracı kullanıcısı; kimlik doğrulama + organizasyon üyeliği.
@@ -457,12 +457,12 @@ Yeni veritabanı rolü:
 
 | Rol | SUPERUSER | BYPASSRLS | Yetkiler |
 |---|---|---|---|
-| `persopyro_platform` | ❌ | ❌ | `platform` şemasında tam DML (tablo bazlı **allowlist**: `users`, `roles`, `role_permissions`, `user_roles`, `tokens`, `tenant_registry`) ✅; `hr` şemasında **yalnızca izin kataloğu okuma** (`USAGE` + `SELECT ON hr.permissions`, **yazma yok**) ✅. Kiracı tablolarına (`hr.tenants`, `hr.users`, `hr.audit_logs`, ...) **bu pakette yetki verilmez** — RLS'e tabi kiracı erişimi **erişim-onay katmanıyla** (M17–M19, OD1/OD4) ve denetim kaydıyla açılır; **şema varlığı erişim yetkisi değildir**. `auth_*`/`django_admin_log` dahil hiçbir Django teknik tablosunda yetkisi yoktur ✅ |
+| `persopyro_platform` | ❌ | ❌ | `platform` şemasında tam DML (tablo bazlı **allowlist**: `users`, `roles`, `role_permissions`, `user_roles`, `tokens`, `tenant_registry`, `company_plans`) ✅; `hr` şemasında **yalnızca izin kataloğu okuma** (`USAGE` + `SELECT ON hr.permissions`, **yazma yok**) ✅. Kiracı tablolarına (`hr.tenants`, `hr.users`, `hr.audit_logs`, ...) **bu pakette yetki verilmez** — RLS'e tabi kiracı erişimi **erişim-onay katmanıyla** (M17–M19, OD1/OD4) ve denetim kaydıyla açılır; **şema varlığı erişim yetkisi değildir**. `auth_*`/`django_admin_log` dahil hiçbir Django teknik tablosunda yetkisi yoktur ✅ |
 
 `persopyro_app` **`platform` şemasını göremez** (USAGE yok) → kiracı isteğinden
 platform verisine yol yoktur. (Test: T17.)
 
-## B.2 Platform tabloları ✅ (M1–M5 uygulandı: `users`, `roles`, `role_permissions`, `user_roles`, `tokens`, `tenant_registry`)
+## B.2 Platform tabloları ✅ (M1–M5 uygulandı: `users`, `roles`, `role_permissions`, `user_roles`, `tokens`, `tenant_registry`; `company_plans` `platform.0013`)
 
 Kart biçiminde; hepsi `platform` şemasında, RLS **yok** (kiracı verisi taşımaz),
 erişim yalnızca `persopyro_platform` rolüyle.
@@ -519,14 +519,22 @@ erişim yalnızca `persopyro_platform` rolüyle.
 ### `platform.tenant_registry`
 - **PURPOSE:** Platformun kiracı **referans indeksi** (OD20 — kapalı). `hr.tenants` verisinin ikinci tam kopyası **değildir**; yalnızca platform operasyonları için gereken alanları taşır.
 - **PRIMARY KEY:** `tenant_id` · **UNIQUE:** `slug`, `domain` · **FK:** `tenant_id → hr.tenants.id` (CASCADE)
-- **Authoritative alan sahipliği:** `slug`, `domain`, `status`, `max_users`, `max_storage_mb`, `created_at`, `deleted_at` → **`hr.tenants`** (yansı); `plan_code`, `billing_ref`, `internal_note` → **bu tablo** (tek sahibi platform). `name/legal_name/tax_number/email/phone/address/country/city/settings` buraya **kopyalanmaz**.
+- **Authoritative alan sahipliği:** `slug`, `domain`, `status`, `max_users`, `max_storage_mb`, `max_active_employees`, `max_employee_records`, `valid_from`, `valid_until`, `created_at`, `deleted_at` → **`hr.tenants`** (yansı); `plan_code`, `profile_fields`, `billing_ref`, `internal_note` → **bu tablo** (tek sahibi platform). `name/legal_name/tax_number/email/phone/address/country/city/settings` buraya **kopyalanmaz**.
 - **Senkronizasyon:** **tek yönlü** `hr.tenants` → bu tablo, `SECURITY DEFINER` tetikleyiciyle (aynı işlem içinde). Yansı yazımı başarısız olursa kaynak yazımı **geri alınır** (fail-closed, sapma yok). Ters yön yoktur: platform, kiracı alanlarını registry üzerinden değiştirmez.
 - **TENANT ISOLATION:** kapsam dışı (kiracı iş verisi yok) · **RLS:** yok
-- **PERSONAL DATA LEVEL:** K1 (yalnızca kurumsal slug/domain/durum)
+- **PERSONAL DATA LEVEL:** K1 metadata; `profile_fields` sadece şirket başına seçilen alan kodlarını taşır, şirket profil değerleri burada kopyalanmaz.
 - **AUDIT:** durum/limit değişikliği (kaynak `hr.tenants` üzerinden)
+- `profile_fields` yalnız şirket başına seçili alan kodlarını saklar; şirket profil
+  değerleri burada kopyalanmaz. SUPERADMIN kanonik `hr.tenants` kaydını kiracı
+  bağlamında günceller; trigger tarih/limit alanlarını registry'ye yansıtır.
 - **Tutarlılık:** registry ↔ `hr.tenants` sapması için düzenli kontrol + test (M21, H2)
 
-### `platform.access_requests` / `platform.access_grants` 🔜 (M18–M19 — bu turda **uygulanmadı**)
+### `platform.company_plans`
+- **PURPOSE:** Şirket oluşturma ve düzenlemede kullanılabilen plan adları ve varsayılan limitler.
+- **Yetki:** `persopyro_platform` için tablo allowlist'inde tam DML; `persopyro_app` ve `PUBLIC` için erişim yoktur.
+- **AUDIT:** Plan ekleme/düzenleme platform audit olayına plan koduyla yazılır.
+
+### `platform.access_requests` / `platform.access_grants` (M18–M19 — `platform.0011` ile uygulandı)
 - **PURPOSE:** Platform kaynaklı kişisel veri erişim talebi ve süreli izni (OD1/OD4).
 - **`access_requests`:** `id, requested_by (platform_user_id), target_tenant_id, resource_type, resource_ids uuid[], field_list text[], purpose text NOT NULL, status (pending/approved/rejected/expired/cancelled), approvals jsonb, created_at, decided_at, expires_after_minutes`
   - **Kısıt:** `purpose` için **asgari uzunluk + anlamlılık** kontrolü (`PURPOSE_QUALITY`) — uygulama katmanı + `CHECK (length(btrim(purpose)) >= 20)`.
@@ -534,6 +542,10 @@ erişim yalnızca `persopyro_platform` rolüyle.
   - **Koşul:** `GRANT_VALID` = `revoked_at IS NULL AND now() < expires_at`.
 - **TENANT ISOLATION:** kapsam dışı ama **tek kiracıya hedefli** (`target_tenant_id` zorunlu)
 - **RLS:** yok (platform şeması) · **AUDIT:** **çok yüksek** — talep, onay, red, başlangıç, bitiş (OD4)
+
+> Bu erişim akışı kişisel veri erişim talepleri içindir. SUPERADMIN şirket profili,
+> planı, tarihleri ve limitleri şirket ayrıntı ekranından doğrudan günceller; ikinci
+> bir onay gerekmez. Profil değişiklikleri platform audit kaydına alan adlarıyla yazılır.
 
 ### `platform.audit_logs`
 - **PURPOSE:** Platform akışının denetim kaydı (kiracı akışından ayrı — K22).

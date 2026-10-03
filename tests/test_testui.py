@@ -40,7 +40,7 @@ from apps.leave.services import (
     decide_approval_step,
     next_accrual_date,
 )
-from apps.organization.models import Employee
+from apps.organization.models import Employee, EmployeePersonalData, FormFieldDefinition
 from apps.organization.services import create_position
 from apps.rbac.models import Permission, Role, RolePermission, UserRole
 from apps.rbac.services import (
@@ -711,7 +711,7 @@ def test_ui_calisan_unvani_ve_rolu_gorunur(client, tenant_a, user_a) -> None:  #
     assert liste["MUH-2"]["position"] == "Muhasebe Uzmanı"
     # Kullanıcısı olmayan çalışanda rol listesi boş; yöneticide Türkçe rol adı var.
     assert liste["MUH-2"]["roles"] == []
-    assert [r["name"] for r in liste["FIN-M1"]["roles"]] == ["Departman Yöneticisi"]
+    assert [r["name"] for r in liste["FIN-M1"]["roles"]] == ["Departman Sorumlusu"]
     assert [r["code"] for r in liste["FIN-M1"]["roles"]] == ["dept_manager"]
     assert liste["FIN-M1"]["roles"][0]["scope_text"] == "Finans + alt birimleri"
 
@@ -732,7 +732,7 @@ def test_ui_yetkili_kullanici_rol_atayabilir(client, tenant_a, user_a) -> None: 
         {"role_id": ik_rolu["id"], "reason": "İK sorumluluğu"},
     )
     assert yanit.status_code == 201
-    assert yanit.json()["data"]["name"] == "İK Yöneticisi"
+    assert yanit.json()["data"]["name"] == "İnsan Kaynakları Yöneticisi"
 
     detay = client.get(f"/test-ui/api/employees/{lot['personel'].pk}").json()["data"]
     assert "hr_manager" in [r["code"] for r in detay["roles"]]
@@ -1375,7 +1375,7 @@ def test_ui_rol_yetkileri_okunur(client, tenant_a, user_a) -> None:  # noqa: ANN
     )
     veri = client.get(f"/test-ui/api/roles/{rol_id}/permissions").json()["data"]
     assert veri["role"]["code"] == "dept_manager"
-    assert veri["role"]["scope_type_label"] == "Seçili birim + alt birimleri"
+    assert veri["role"]["scope_type_label"] == "Atandığı departman ve alt departmanları"
     assert veri["can_edit"] is True
     modul_adlari = [m["module_label"] for m in veri["modules"]]
     assert "İzin" in modul_adlari and "Organizasyon (departman/unvan)" in modul_adlari
@@ -2511,6 +2511,124 @@ def test_ui_kullanicisiz_calisan_lookups_ve_listeyi_kirmaz(client, tenant_a, use
     # 2) Çalışan listesi ve panel de çalışmaya devam eder.
     assert client.get("/test-ui/api/employees").status_code == 200
     assert client.get("/test-ui/api/dashboard").status_code == 200
+
+
+def test_profile_page_and_password_change(client, tenant_a, user_a) -> None:
+    assert _giris(client, tenant_a, user_a.email, PAROLA_A).status_code == 200
+
+    page = client.get("/test-ui/profile/")
+    assert page.status_code == 200
+    assert "Mevcut parola" in page.content.decode()
+
+    response = _post(client, "/test-ui/api/profile/password/change", {
+        "current_password": PAROLA_A,
+        "new_password": "Yeni-Guclu-Parola-543!",
+        "new_password_confirm": "Yeni-Guclu-Parola-543!",
+    })
+    assert response.status_code == 200, response.content
+    user_a.refresh_from_db()
+    assert user_a.check_password("Yeni-Guclu-Parola-543!")
+    assert client.get("/test-ui/api/profile").status_code == 200
+
+
+def test_profile_password_change_requires_current_password(client, tenant_a, user_a) -> None:
+    assert _giris(client, tenant_a, user_a.email, PAROLA_A).status_code == 200
+    response = _post(client, "/test-ui/api/profile/password/change", {
+        "current_password": "yanlis-parola",
+        "new_password": "Yeni-Guclu-Parola-543!",
+        "new_password_confirm": "Yeni-Guclu-Parola-543!",
+    })
+    assert response.status_code == 400
+    user_a.refresh_from_db()
+    assert user_a.check_password(PAROLA_A)
+
+
+def test_manager_sends_single_use_password_reset_link(client, tenant_a, user_a, settings) -> None:
+    from urllib.parse import parse_qs, urlparse  # noqa: PLC0415
+    from django.core import mail  # noqa: PLC0415
+
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    lot = kadro(tenant_a, user_a)
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    response = _post(
+        client,
+        f"/test-ui/api/employees/{lot['personel'].pk}/password/reset",
+        {},
+    )
+    assert response.status_code == 200, response.content
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].to == [lot["personel_user"].email]
+    reset_url = next(line for line in mail.outbox[0].body.splitlines() if "password-reset/" in line)
+    params = parse_qs(urlparse(reset_url).query)
+    reset_response = _post(client, "/api/v1/auth/password/reset/confirm", {
+        "uid": params["uid"][0], "token": params["token"][0], "tenant": params["tenant"][0],
+        "new_password": "Reset-Guclu-Parola-543!",
+        "new_password_confirm": "Reset-Guclu-Parola-543!",
+    })
+    assert reset_response.status_code == 200, reset_response.content
+    lot["personel_user"].refresh_from_db()
+    assert lot["personel_user"].check_password("Reset-Guclu-Parola-543!")
+    second_use = _post(client, "/api/v1/auth/password/reset/confirm", {
+        "uid": params["uid"][0], "token": params["token"][0], "tenant": params["tenant"][0],
+        "new_password": "Another-Strong-Password-54!",
+        "new_password_confirm": "Another-Strong-Password-54!",
+    })
+    assert second_use.status_code == 400
+
+
+def test_employee_profile_direct_save_and_approval_flow(client, tenant_a, user_a) -> None:
+    from apps.organization.employee_form_catalog import EMPLOYEE_FORM_FIELDS  # noqa: PLC0415
+
+    lot = kadro(tenant_a, user_a)
+    with tenant_context(tenant_a.id):
+        for code in ("first_name", "personal_phone"):
+            spec = next(field for field in EMPLOYEE_FORM_FIELDS if field.code == code)
+            FormFieldDefinition.objects.create(
+                tenant=tenant_a, form_code="employee_onboarding", field_code=code,
+                section_code=spec.section_code, section_label=spec.section_label,
+                lock_level=spec.lock_level, data_class=spec.data_class,
+                is_visible=spec.default_visible, is_required=spec.default_required,
+            )
+        EmployeePersonalData.objects.create(
+            employee=lot["personel"], tenant=tenant_a,
+            first_name="Personel", last_name="Kullanıcı",
+        )
+    assert _giris(client, tenant_a, lot["personel_user"].email, PAROLA_LEAVE).status_code == 200
+    profile = client.get("/test-ui/api/profile")
+    assert profile.status_code == 200
+    assert {field["code"]: field["edit_mode"] for field in profile.json()["data"]["fields"]} == {
+        "first_name": "approval", "personal_phone": "direct",
+    }
+
+    direct = _post(client, "/test-ui/api/profile", {
+        "mode": "direct", "changes": {"personal_phone": "+90 555 111 22 33"},
+    })
+    assert direct.status_code == 200, direct.content
+    with tenant_context(tenant_a.id):
+        personal = EmployeePersonalData.objects.get(employee=lot["personel"])
+        assert personal.personal_phone == "+90 555 111 22 33"
+
+    request_response = _post(client, "/test-ui/api/profile", {
+        "mode": "approval", "changes": {"first_name": "Selin"},
+    })
+    assert request_response.status_code == 201, request_response.content
+    with tenant_context(tenant_a.id):
+        personal.refresh_from_db()
+        assert personal.first_name == "Personel"
+
+    client.logout()
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+    decision = _post(
+        client,
+        f"/test-ui/api/profile/change-requests/{request_response.json()['data']['id']}/decide",
+        {"decision": "approve", "note": "Ad değişikliği doğrulandı."},
+    )
+    assert decision.status_code == 200, decision.content
+    with tenant_context(tenant_a.id):
+        personal.refresh_from_db()
+        lot["personel_user"].refresh_from_db()
+        assert personal.first_name == "Selin"
+        assert lot["personel_user"].first_name == "Selin"
 
 
 def test_ui_kullanicisiz_calisan_detayi_bos_listelerle_doner(client, tenant_a, user_a) -> None:

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 #: `hr.roles.scope_type` (OD5 §4.4 kapalı kümesi) → kullanıcı dostu Türkçe metin.
 KAPSAM_TIPI_ETIKETLERI = {
-    "TENANT": "Tüm kiracı (organizasyon kapsamı yok)",
-    "UNIT": "Seçili birim + alt birimleri",
-    "UNIT_DIRECT": "Yalnızca seçili birim",
-    "SELF": "Yalnızca kendi kaydı",
+    "TENANT": "Şirket genelinde",
+    "UNIT": "Atandığı departman ve alt departmanları",
+    "UNIT_DIRECT": "Yalnızca atandığı departman",
+    "SELF": "Yalnızca kendi hesabı ve çalışan kaydı",
     "SYS": "Platform (kiracı arayüzünde yönetilemez)",
 }
 
@@ -34,14 +34,14 @@ def kapsam_metni(*, scope_type: str | None, birim_adi: str | None) -> str:
     Atama kapsamını tek satırda anlatır.
 
     Örnek: `UNIT` + "Finans" → "Finans + alt birimleri".
-    Kapsam verilmemişse tipin genel anlamı döner (ör. TENANT → "Tüm kiracı").
+    Kapsam verilmemişse tipin genel anlamı döner (ör. TENANT → "Şirket genelinde").
     """
     tip = str(scope_type or "").upper()
     if birim_adi:
         if tip == "UNIT":
-            return f"{birim_adi} + alt birimleri"
+            return f"{birim_adi} departmanı + alt departmanları"
         if tip == "UNIT_DIRECT":
-            return f"Yalnızca {birim_adi} (alt birimler hariç)"
+            return f"Yalnızca {birim_adi} departmanı"
         return f"{birim_adi} ({kapsam_tipi_etiketi(tip)})"
     return kapsam_tipi_etiketi(tip)
 
@@ -85,7 +85,7 @@ MODUL_ACIKLAMALARI = {
     "org": "Departman ağacı, unvan tanımları ve birim yönetimi.",
     "employee": "Çalışan kaydı ekleme/görme; hassas veri (K2/K3) erişimi.",
     "leave": "İzin türü/politika, talep, onay ve bakiye işlemleri.",
-    "shift": "Vardiya tanımları ve planlama (M15 ile gelecek).",
+    "shift": "Vardiya şablonları ve gün/hafta bazlı planlama.",
     "attendance": "Devam/puantaj kayıtları (M15 ile gelecek).",
     "document": "Evrak yükleme, görme ve gizli evrak erişimi (M16 ile gelecek).",
     "audit": "Denetim kaydını görüntüleme.",
@@ -130,6 +130,7 @@ IZIN_ACIKLAMALARI = {
     "employee.read": "Çalışan kayıtlarını ve çalışan listesini görüntülemeye izin verir.",
     "employee.create": "Yeni çalışan kaydı oluşturmaya izin verir.",
     "employee.update": "Çalışan bilgilerinin güncellenmesine izin verir.",
+    "employee.photo.upload": "Çalışan profil fotoğrafı ekleme, değiştirme ve kaldırma işlemlerine izin verir.",
     "employee.delete": "Çalışanı arşivlemeye izin verir; fiziksel silme yapmaz.",
     "employee.sensitive.read": "Yetkili kişisel/hassas çalışan verilerini maskesiz görmeye izin verir.",
     "employee.sensitive.write": "Çalışanın kişisel ve hassas verilerini değiştirmeye izin verir.",

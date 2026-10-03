@@ -1,0 +1,197 @@
+{% extends "platform/base.html" %}
+
+{% block title %}Şirket ayrıntıları · PersoPyro{% endblock %}
+{% block header_actions %}
+  <span class="user-email">{{ email }}</span>
+  <a class="button ghost" href="{% url 'platform-dashboard' %}">← Şirket listesi</a>
+{% endblock %}
+
+
+
+{% block content %}
+  <nav class="panel-tabs" aria-label="Şirket yönetimi">
+    <a href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>
+    <a class="selected" href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
+    <a href="{% url 'platform-plans' %}">Planlar ve plan düzenleme</a>
+  </nav>
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">Şirket yönetimi</p>
+      <h1>{{ company.name }}</h1>
+      <p>{{ company.slug }} · {{ company.get_status_display }}</p>
+    </div>
+  </section>
+
+  {% if saved %}<section class="card" role="status"><p>{% if changed %}Şirket değişiklikleri kaydedildi.{% else %}Kaydedilecek yeni bir değişiklik yoktu.{% endif %}</p>
+    {% if notification_status == "sent" %}<p>Şirket e-postasına bildirim gönderildi.</p>
+    {% elif notification_status == "failed" %}<p>E-posta gönderilemedi; şirket bilgileri kaydedildi.</p>{% endif %}
+  </section>{% endif %}
+
+  <section class="card" aria-labelledby="summary-title">
+    <div class="section-head"><h2 id="summary-title">Şirket özeti</h2><span class="badge">{{ company.get_status_display }}</span></div>
+    <h3 class="subsection-title">Şirket bilgileri</h3>
+    <dl class="detail-grid">
+      <div><dt>Şirket adı</dt><dd>{{ company.name }}</dd></div>
+      <div><dt>Şirket kodu</dt><dd>{{ tenant.slug }}</dd></div>
+      <div><dt>Alan adı</dt><dd>{{ tenant.domain|default:"—" }}</dd></div>
+      <div><dt>Plan</dt><dd>{{ plan_label|default:"—" }}</dd></div>
+      <div><dt>Kullanım başlangıcı</dt><dd>{{ tenant.valid_from|date:"d.m.Y"|default:"—" }}</dd></div>
+      <div><dt>Kullanım bitişi</dt><dd>{{ tenant.valid_until|date:"d.m.Y"|default:"—" }}</dd></div>
+    </dl>
+    <h3 class="subsection-title">Şirket bilgi formu</h3>
+    <dl class="detail-grid">
+      {% if can_manage %}{% for item in profile_inputs %}<div><dt>{{ item.label }}</dt><dd>{{ item.value|default:"—" }}</dd></div>{% endfor %}{% endif %}
+      {% if can_manage %}{% for field in custom_fields %}<div><dt>{{ field.label }}</dt><dd>{{ field.value|default:"—" }}</dd></div>{% endfor %}{% endif %}
+    </dl>
+    <h3 class="subsection-title">Kullanım ve çalışan limitleri</h3>
+    <dl class="detail-grid">
+      <div><dt>Şirket kullanıcı hesabı limiti</dt><dd>{{ tenant.max_users|default:"Sınırsız" }} <span class="muted">(giriş yapabilen hesap sayısı)</span></dd></div>
+      <div><dt>Depolama limiti</dt><dd>{{ tenant.max_storage_mb }} MB</dd></div>
+      <div><dt>Kullanılan dosya alanı</dt><dd>{{ tenant.storage_used_mb }} MB</dd></div>
+      <div><dt>Çalışan başına dosya kotası</dt><dd>{{ tenant.employee_file_max_mb }} MB</dd></div>
+      <div><dt>İzin verilen evrak biçimleri</dt><dd>{{ tenant.employee_file_extensions|join:", "|default:"Dosya yükleme kapalı" }}</dd></div>
+      <div><dt>Aktif çalışan</dt><dd>{{ active_employee_count }} / {{ tenant.max_active_employees|default:"Sınırsız" }}</dd></div>
+      <div><dt>Çalışan kayıtları</dt><dd>{{ employee_count }} / {{ tenant.max_employee_records|default:"Sınırsız" }}</dd></div>
+    </dl>
+  </section>
+
+  {% if not can_manage %}<section class="card"><p class="card-intro">Şirket bilgilerini düzenleme SUPERADMIN hesabına açıktır.</p></section>{% endif %}
+  {% if can_manage %}
+  <section class="card" id="company-edit" aria-labelledby="edit-title">
+    <div class="section-head"><h2 id="edit-title">Şirket bilgilerini düzenle</h2><span class="badge">Doğrudan kaydedilir · işlem kaydı tutulur</span></div>
+    <form method="post" action="{% url 'platform-tenant-profile-update' tenant.id %}" class="form-grid">
+      {% csrf_token %}
+      <section class="company-form-section field-span">
+      <h3>Temel ayarlar ve limitler</h3>
+      <div class="company-form-grid">
+      <div class="field"><label for="company-name">Şirket adı</label><input id="company-name" name="name" maxlength="200" value="{{ company.name }}" required></div>
+      <div class="field"><label for="company-status">Durum</label><select id="company-status" name="status">{% for value, label in status_choices %}<option value="{{ value }}" {% if company.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="company-plan">Plan</label><select id="company-plan" name="plan_code">{% for plan in plan_specs %}<option value="{{ plan.0 }}" data-users="{{ plan.2 }}" data-storage="{{ plan.3 }}" data-active="{{ plan.4 }}" data-records="{{ plan.5 }}" {% if tenant.plan_code == plan.0 %}selected{% endif %}>{{ plan.1 }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="valid-from">Kullanım başlangıcı</label><input id="valid-from" type="date" name="valid_from" value="{{ tenant.valid_from|date:'Y-m-d' }}"></div>
+      <div class="field"><label for="valid-until">Kullanım bitişi</label><input id="valid-until" type="date" name="valid_until" value="{{ tenant.valid_until|date:'Y-m-d' }}"></div>
+      <div class="field"><label for="max-users">Şirket kullanıcı hesabı limiti (giriş yapabilen hesap sayısı; 0 = sınırsız)</label><input id="max-users" type="number" name="max_users" min="0" value="{{ tenant.max_users }}" required></div>
+      <div class="field"><label for="max-storage">Depolama limiti (MB; 0 = sınırsız)</label><input id="max-storage" type="number" name="max_storage_mb" min="0" step="0.01" value="{{ tenant.max_storage_mb }}" required></div>
+      <div class="field"><label for="employee-file-max">Çalışan başına toplam dosya kotası (MB)</label><input id="employee-file-max" type="number" name="employee_storage_max_mb" min="0.1" max="50" step="0.1" value="{{ tenant.employee_file_max_mb }}" required><small>Fotoğraf ve evrak dosyalarının toplamına uygulanır (en fazla 50 MB).</small></div>
+      <fieldset class="field field-span"><legend>Çalışan evraklarında izin verilen biçimler</legend><div class="company-form-grid">
+        <input type="hidden" name="employee_file_extensions_present" value="1">
+        {% for value, label in file_extension_choices %}<label class="check-field"><input type="checkbox" name="employee_file_extensions" value="{{ value }}" {% if value in tenant.employee_file_extensions %}checked{% endif %}> {{ label }}</label>{% endfor %}
+      </div><small>Hiçbir biçim seçilmezse çalışan evrakı yükleme kapatılır.</small></fieldset>
+      <div class="field"><label for="max-active-employees">Aktif çalışan limiti (0 = sınırsız)</label><input id="max-active-employees" type="number" name="max_active_employees" min="0" value="{{ tenant.max_active_employees }}" required></div>
+      <div class="field"><label for="max-employee-records">Toplam çalışan kayıt limiti (0 = sınırsız)</label><input id="max-employee-records" type="number" name="max_employee_records" min="0" value="{{ tenant.max_employee_records }}" required></div>
+      </div>
+      </section>
+
+      <section class="company-form-section field-span">
+      <h3>Sabit şirket bilgileri</h3>
+      <div class="company-form-grid">
+      {% for item in profile_inputs %}
+      <div class="company-profile-row">
+        <label for="profile-{{ item.field }}">{{ item.label }}</label>
+        <input id="profile-{{ item.field }}" name="{{ item.field }}" value="{{ item.value|default:'' }}" maxlength="500" placeholder="{{ item.label }}" {% if item.field == "email" %}type="email"{% endif %}>
+      </div>
+      {% endfor %}
+      </div>
+      </section>
+      <section class="company-form-section field-span">
+      <h3>Ek şirket bilgileri</h3>
+      <p class="card-intro">Şirkete özel alanları ve değerlerini ekleyin.</p>
+      <input type="hidden" name="custom_fields_json" id="custom-fields-json" value="{{ custom_fields_json|escape }}">
+      <div id="custom-fields-editor">
+        {% for field in custom_fields %}<div class="custom-company-field" data-custom-row>
+          <input data-code type="hidden" value="{{ field.code }}"><label>Bilgi adı<input data-label value="{{ field.label }}" required></label>
+          <label>Tür<select data-type><option value="text" {% if field.type == 'text' %}selected{% endif %}>Metin</option><option value="email" {% if field.type == 'email' %}selected{% endif %}>E-posta</option><option value="number" {% if field.type == 'number' %}selected{% endif %}>Sayı</option><option value="date" {% if field.type == 'date' %}selected{% endif %}>Tarih</option><option value="select" {% if field.type == 'select' %}selected{% endif %}>Seçim</option></select></label>
+          <label>Seçenekler<textarea data-options rows="2">{{ field.options|join:"\n" }}</textarea></label>
+          <label>Bilgi<input data-value name="custom_value_{{ field.code }}" value="{{ field.value }}" type="{{ field.type }}"></label><button type="button" data-remove-custom>Alanı sil</button>
+        </div>{% endfor %}
+      </div>
+      <div><button type="button" id="add-custom-field">+ Alan ekle</button></div>
+      </section>
+      <section class="company-form-section field-span">
+      <label class="check-field"><input type="checkbox" name="notify_company"> Kaydettikten sonra şirket e-posta adresine bildirim gönder</label>
+      <div class="form-actions"><button class="primary" type="submit">Değişiklikleri kaydet</button></div>
+      </section>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="card" aria-labelledby="employees-title">
+    <div class="section-head"><h2 id="employees-title">Çalışanlar</h2><a class="button" href="{% url 'platform-tenant-people' tenant.id %}">Çalışan kayıtlarını aç</a></div>
+    <p class="card-intro">{{ active_employee_count }} aktif çalışan · {{ employee_count }} toplam kayıt</p>
+  </section>
+
+  <section class="card" aria-labelledby="audit-title">
+    <div class="section-head"><h2 id="audit-title">Şirket işlem kaydı</h2><span class="muted">Son 50 kayıt</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Tarih</th><th>Kullanıcı</th><th>İşlem</th><th>Değişen alanlar</th></tr></thead><tbody>
+      {% for event in events %}<tr><td>{{ event.created_at|date:"d.m.Y H:i" }}</td><td>{{ event.actor }}</td><td>{{ event.action }}</td><td>{{ event.fields|join:", "|default:"—" }}</td></tr>
+      {% empty %}<tr><td colspan="4" class="empty-state">Henüz şirket profili değişikliği yok.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(() => {
+  const plan = document.getElementById('company-plan');
+  if (plan) plan.addEventListener('change', () => {
+    const option = plan.selectedOptions[0];
+    document.getElementById('max-users').value = option.dataset.users;
+    document.getElementById('max-storage').value = option.dataset.storage;
+    document.getElementById('max-active-employees').value = option.dataset.active;
+    document.getElementById('max-employee-records').value = option.dataset.records;
+  });
+  const box = document.getElementById('custom-fields-editor');
+  if (!box) return;
+  const form = box.closest('form');
+  const hidden = document.getElementById('custom-fields-json');
+  function sync() {
+    const defs = [];
+    const usedCodes = new Set();
+    box.querySelectorAll('[data-custom-row]').forEach((row) => {
+      const label = row.querySelector('[data-label]').value.trim();
+      const codeInput = row.querySelector('[data-code]');
+      let code = codeInput.value.trim().toLowerCase();
+      if (!code && label) {
+        const slug = label.toLowerCase().replace(/ı/g, 'i').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'alan';
+        code = `custom_${slug}`;
+      }
+      if (code && usedCodes.has(code)) {
+        let suffix = 2;
+        while (usedCodes.has(`${code}_${suffix}`)) suffix += 1;
+        code = `${code}_${suffix}`;
+      }
+      if (code) usedCodes.add(code);
+      codeInput.value = code;
+      const type = row.querySelector('[data-type]').value;
+      const required = false;
+      const options = row.querySelector('[data-options]').value.split('\n').map((item) => item.trim()).filter(Boolean);
+      let input = row.querySelector('[data-value]');
+      if (type === 'select' && input.tagName !== 'SELECT') {
+        const replacement = document.createElement('select'); replacement.dataset.value = '';
+        replacement.value = input.value; input.replaceWith(replacement); input = replacement;
+      } else if (type !== 'select' && input.tagName === 'SELECT') {
+        const replacement = document.createElement('input'); replacement.dataset.value = '';
+        replacement.value = input.value; input.replaceWith(replacement); input = replacement;
+      }
+      input.name = `custom_value_${code}`;
+      if (type === 'select') {
+        const value = input.value;
+        input.replaceChildren(new Option('Seçiniz', ''));
+        row.querySelector('[data-options]').value.split('\n').map((item) => item.trim()).filter(Boolean).forEach((option) => input.add(new Option(option, option)));
+        input.value = value;
+      } else {
+        input.type = type === 'email' ? 'email' : type === 'number' ? 'number' : type === 'date' ? 'date' : 'text';
+      }
+      input.required = false;
+      defs.push({code, label, type, required, options});
+    });
+    hidden.value = JSON.stringify(defs);
+  }
+  document.getElementById('add-custom-field').addEventListener('click', () => {
+    const row = document.createElement('div'); row.className = 'custom-company-field'; row.dataset.customRow = '';
+    row.innerHTML = '<input data-code type="hidden"><label>Bilgi adı<input data-label placeholder="Örn. Şirket bölgesi" required></label><label>Bilgi türü<select data-type><option value="text">Metin</option><option value="email">E-posta</option><option value="number">Sayı</option><option value="date">Tarih</option><option value="select">Seçim listesi</option></select></label><label>Seçenekler<textarea data-options rows="2" placeholder="Seçim listesi için her satıra bir seçenek"></textarea></label><label>Şirket bilgisi<input data-value></label><button type="button" data-remove-custom>Alanı kaldır</button>';
+    box.appendChild(row); sync();
+  });
+  box.addEventListener('click', (event) => { if (event.target.matches('[data-remove-custom]')) { event.target.closest('[data-custom-row]').remove(); sync(); } });
+  box.addEventListener('input', sync); box.addEventListener('change', sync); form.addEventListener('submit', sync); sync();
+})();
+</script>
+{% endblock %}

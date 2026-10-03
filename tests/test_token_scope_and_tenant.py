@@ -17,7 +17,7 @@ doğrudan INSERT ile üretilir (`ApiToken.objects.create`) — gerçek hayatta d
 alan üretimden sonra değişmez.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from django.utils import timezone
@@ -329,6 +329,22 @@ def test_askida_kiracida_yeni_oturum_girisi_reddedilir(api_client, tenant_a, use
     )
     assert yanit.status_code == 403
     assert yanit.json()["error"]["code"] == "tenant_unavailable"
+
+
+def test_suresi_dolan_kiraciya_erisim_reddedilir(tenant_a) -> None:
+    """Sona ermiş şirket kullanım süresi tenant erişimini kapatır."""
+    from apps.tenancy.access import tenant_access_allowed
+
+    kiracı_guncelle(tenant_a, valid_until=date.today() - timedelta(days=1))
+    assert tenant_access_allowed(tenant_a.id) is False
+
+
+def test_kullanim_baslangici_gelmemis_kiraciya_erisim_reddedilir(tenant_a) -> None:
+    from apps.tenancy.access import tenant_access_allowed
+
+    with tenant_context(tenant_a.id):
+        Tenant.objects.filter(pk=tenant_a.pk).update(valid_from=date.today() + timedelta(days=1))
+    assert tenant_access_allowed(tenant_a.id) is False
 
 
 def test_iptal_edilmis_kiracida_yeni_token_girisi_reddedilir(

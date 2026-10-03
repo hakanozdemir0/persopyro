@@ -20,11 +20,12 @@ Kurallar (docs/AUTHORIZATION.md OD22, docs/DATABASE.md B.2 `platform.tokens`):
 """
 
 import hashlib
+import json
 import secrets
 import uuid
 from datetime import timedelta
 
-from django.db import connection, transaction
+from django.db import connections, transaction
 from django.utils import timezone
 
 from apps.platform.constants import (
@@ -106,7 +107,7 @@ def hash_token(plaintext: str) -> str:
 # --- veri erişimi (ham SQL; şema-nitelemeli) --------------------------------
 
 
-@transaction.atomic
+@transaction.atomic(using="platform")
 def issue_platform_token(  # noqa: PLR0913
     *,
     platform_user_id,  # noqa: ANN001
@@ -129,7 +130,7 @@ def issue_platform_token(  # noqa: PLR0913
     duz_metin = secrets.token_urlsafe(TOKEN_BYTE_ENTROPY)
     su_bir = timezone.now()
 
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute(
             """
             INSERT INTO platform.tokens (
@@ -157,7 +158,7 @@ def issue_platform_token(  # noqa: PLR0913
 
 def platform_token_by_plaintext(plaintext: str):  # noqa: ANN201
     """Düz metin token'ın satırını döner (yoksa `None`). Yalnızca özet karşılaştırılır."""
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute(
             """
             SELECT id, platform_user_id, token_kind, purpose, scope, token_hash,
@@ -193,7 +194,7 @@ def revoke_platform_token(token_id, reason: str) -> bool:  # noqa: ANN001
     """
     if reason not in PLATFORM_TOKEN_REVOKE_REASONS:
         raise PlatformTokenRuleError(f"Bilinmeyen iptal nedeni: {reason}")
-    with connection.cursor() as cur:
+    with connections["platform"].cursor() as cur:
         cur.execute(
             """
             UPDATE platform.tokens
@@ -204,3 +205,27 @@ def revoke_platform_token(token_id, reason: str) -> bool:  # noqa: ANN001
             [reason, str(token_id)],
         )
         return cur.fetchone() is not None
+
+
+def record_platform_event(
+    *,
+    action: str,
+    actor_user_id=None,  # noqa: ANN001
+    tenant_id=None,  # noqa: ANN001
+    details: dict | None = None,
+    ip_address: str = "",
+) -> None:
+    """Platform işlem kaydını append-only denetim defterine yazar."""
+    with connections["platform"].cursor() as cur:
+        cur.execute(
+            """INSERT INTO platform.audit_events
+                   (actor_user_id, tenant_id, action, details, ip_address)
+                 VALUES (%s, %s, %s, %s::jsonb, %s)""",
+            [
+                str(actor_user_id) if actor_user_id else None,
+                str(tenant_id) if tenant_id else None,
+                action,
+                json.dumps(details or {}, ensure_ascii=False),
+                ip_address[:45],
+            ],
+        )

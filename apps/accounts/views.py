@@ -22,8 +22,16 @@ Güvenlik notları:
     (`apps.accounts.services.issue_api_token`).
 """
 
-from django.contrib.auth import authenticate, login, logout
+from django.conf import settings
+from django.contrib.auth import authenticate, get_user_model, login, logout
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError
+from django.core.mail import send_mail
+from django.urls import reverse
+from django.utils.encoding import force_bytes, force_str
 from django.utils.decorators import method_decorator
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.views.decorators.csrf import csrf_protect
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -43,8 +51,70 @@ from apps.accounts.services import issue_api_token, revoke_token, revoke_tokens
 from apps.audit.models import AuditAction
 from apps.audit.services import log_action
 from apps.tenancy.access import tenant_access_allowed
-from apps.tenancy.context import tenant_context
 from apps.tenancy.middleware import clear_session_tenant, resolve_tenant_id, set_session_tenant
+from apps.tenancy.context import tenant_context
+
+
+def send_password_reset_link(request, user) -> None:  # noqa: ANN001
+    """Send a tenant-scoped, time-limited reset link without changing the password."""
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    url = request.build_absolute_uri(reverse("test-ui-password-reset"))
+    url = f"{url}?uid={uid}&token={token}&tenant={user.tenant.slug}"
+    send_mail(
+        "Persopyro parola sıfırlama",
+        f"Merhaba,\n\nParolanızı yenilemek için bu bağlantıyı açın:\n{url}\n\n"
+        "Bağlantı bir kez kullanılabilir ve süresi dolduğunda geçersiz olur. "
+        "Bu isteği siz yapmadıysanız bu e-postayı yok sayabilirsiniz.",
+        settings.DEFAULT_FROM_EMAIL,
+        [user.email],
+        fail_silently=False,
+    )
+
+
+class PasswordResetConfirmView(APIView):
+    """Email token doğrulandıktan sonra yeni parolayı ayarlar."""
+
+    permission_classes = [AllowAny]
+
+    @method_decorator(csrf_protect)
+    def post(self, request):  # noqa: ANN001
+        tenant_slug = str(request.data.get("tenant") or "").strip()
+        uid = str(request.data.get("uid") or "")
+        token = str(request.data.get("token") or "")
+        password = str(request.data.get("new_password") or "")
+        confirmation = str(request.data.get("new_password_confirm") or "")
+        tenant_id = resolve_tenant_id(tenant_slug)
+        invalid = Response(
+            {"error": {"code": "invalid_or_expired_reset_link", "message": "Sıfırlama bağlantısı geçersiz veya süresi dolmuş."}},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+        if tenant_id is None or not uid or not token or not password or password != confirmation:
+            return invalid
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+        except (TypeError, ValueError, OverflowError):
+            return invalid
+        with tenant_context(tenant_id):
+            user = get_user_model().objects.filter(pk=user_id, tenant_id=tenant_id).first()
+            if user is None or not default_token_generator.check_token(user, token):
+                return invalid
+            try:
+                validate_password(password, user=user)
+            except ValidationError as error:
+                return Response(
+                    {"error": {"code": "invalid_password", "message": "Parola kuralları: " + " ".join(error.messages)}},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user.set_password(password)
+            user.auth_version += 1
+            user.save(update_fields=["password", "password_changed_at", "auth_version", "updated_at"])
+            log_action(
+                tenant_id=tenant_id, action="user.password.reset", user=user,
+                table_name="users", record_id=user.pk,
+                changes={"password_reset": True},
+            )
+        return Response({"data": {"updated": True}})
 
 GECERSIZ = {
     "error": {

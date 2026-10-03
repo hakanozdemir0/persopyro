@@ -59,6 +59,7 @@ from apps.rbac.services.scope import (
     object_in_org_scope,
     resolve_department_scope,
 )
+from apps.tenancy.models import Tenant
 
 
 class OrganizationError(RuntimeError):
@@ -386,6 +387,52 @@ def create_position(*, actor, tenant, code: str, name: str, level: str = "") -> 
     return pozisyon
 
 
+@transaction.atomic
+def update_position(*, actor, position: Position, code: str, name: str, level: str = "") -> Position:  # noqa: ANN001
+    """Unvan kodu/adı/seviyesini aynı kiracıda denetimli günceller."""
+    _aktoru_dogrula(actor, "org.position.manage")
+    _ayni_kiracili_mi(actor, position, "Unvan güncelleme")
+    code, name, level = code.strip(), name.strip(), level.strip()
+    if not code or len(code) > 50 or not name or len(name) > 190 or len(level) > 40:
+        raise OrganizationError("Unvan kodu (50), adı (190) ve seviye (40) geçerli olmalıdır.")
+    changes = {}
+    for field, value in (("code", code), ("name", name), ("level", level)):
+        old = getattr(position, field)
+        if old != value:
+            changes[field] = {"before": old, "after": value}
+            setattr(position, field, value)
+    if changes:
+        position.save(update_fields=[*changes, "updated_at"])
+        log_action(
+            tenant_id=position.tenant_id,
+            action="org.position.update",
+            user=actor,
+            table_name="positions",
+            record_id=position.pk,
+            changes={"fields": changes},
+        )
+    return position
+
+
+@transaction.atomic
+def soft_delete_position(*, actor, position: Position) -> Position:  # noqa: ANN001
+    """Unvanı arşivler; çalışanların geçmişteki unvan bağlantısı korunur."""
+    _aktoru_dogrula(actor, "org.position.manage")
+    _ayni_kiracili_mi(actor, position, "Unvan silme")
+    if position.deleted_at is None:
+        position.deleted_at = timezone.now()
+        position.save(update_fields=["deleted_at", "updated_at"])
+        log_action(
+            tenant_id=position.tenant_id,
+            action="org.position.delete",
+            user=actor,
+            table_name="positions",
+            record_id=position.pk,
+            changes={"code": position.code, "name": position.name},
+        )
+    return position
+
+
 # --- Çalışan servisleri -----------------------------------------------------
 
 #: Çalışan numarası biçimi (sicil numarası): `EMP-000001`.
@@ -429,6 +476,27 @@ def next_employee_no(tenant) -> str:  # noqa: ANN001
     )
 
 
+def validate_employee_capacity(tenant_id, *, adds_active: bool = False) -> Tenant:
+    """Kiracının çalışan kotalarını kilit altında doğrular.
+
+    Tenant satırı kilitlendiğinden aynı kiracı için eşzamanlı eklemeler kotayı
+    birlikte aşamaz. Sıfır limit sınırsız anlamına gelir.
+    """
+    tenant = Tenant.objects.select_for_update().get(pk=tenant_id)
+    employees = Employee.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True)
+    if tenant.max_employee_records and employees.count() >= tenant.max_employee_records:
+        raise OrganizationError(
+            f"Çalışan kayıt limitine ulaşıldı ({tenant.max_employee_records})."
+        )
+    if adds_active and tenant.max_active_employees:
+        active_count = employees.filter(status__in=("active", "suspended")).count()
+        if active_count >= tenant.max_active_employees:
+            raise OrganizationError(
+                f"Aktif çalışan limitine ulaşıldı ({tenant.max_active_employees})."
+            )
+    return tenant
+
+
 @transaction.atomic
 def create_employee(  # noqa: PLR0913
     *,
@@ -449,6 +517,9 @@ def create_employee(  # noqa: PLR0913
     aktörün kapsamında olmalıdır.
     """
     _aktoru_dogrula(actor, "employee.create")
+    tenant = validate_employee_capacity(
+        tenant.pk, adds_active=status in ("active", "suspended")
+    )
     _ayni_kiracili_mi(actor, department, "Çalışan oluşturma")
     _kapsam_dogrula(actor, department_id=department.pk, islem="Çalışan oluşturma")
     if position is not None:

@@ -23,12 +23,13 @@ from pathlib import Path
 
 import pytest
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import connections, transaction
 
 from apps.platform import permissions as platform_yetki
 from apps.platform.constants import (
     PLATFORM_ROLE_CODES,
     PLATFORM_ROLE_PERMISSIONS,
+    PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS,
 )
 from apps.rbac.permission_catalog import (
     ALL_PERMISSION_CODES,
@@ -36,9 +37,31 @@ from apps.rbac.permission_catalog import (
     PLATFORM_PERMISSION_CODES,
 )
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(databases=["default", "platform"])
+connection = connections["platform"]
 
 IZIN_SABLONU = re.compile(r"^[a-z][a-z0-9_.]*[a-z0-9]$")
+
+
+def test_platform_db_baglantisi_ayri_rol_kullanir() -> None:
+    platform_db = settings.DATABASES["platform"]
+    default_db = settings.DATABASES["default"]
+    assert platform_db["USER"] == settings.PLATFORM_DB_CONNECTION_USER
+    assert platform_db["NAME"] == default_db["NAME"]
+    assert platform_db["HOST"] == default_db["HOST"]
+    assert platform_db["TEST"]["MIRROR"] == "default"
+    assert "search_path=platform,hr,public" in platform_db["OPTIONS"]["options"]
+
+
+def test_platform_rol_kurulum_betigi_veritabanina_baglanma_izni_verir() -> None:
+    sql = (Path(settings.BASE_DIR) / "scripts" / "03_platform_roles.sql").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r"GRANT\s+CONNECT\s+ON\s+DATABASE\s+persopyro\s+TO\s+[^;]*persopyro_platform",
+        sql,
+        re.IGNORECASE,
+    )
 
 
 # --- yardımcılar ------------------------------------------------------------
@@ -176,15 +199,15 @@ def test_platform_rol_izin_seed_idempotent() -> None:
         "apps.platform.migrations.0005_od3_platform_rolleri_ve_izinleri"
     )
     with connection.cursor() as cur:
-        cur.execute("SELECT count(*) FROM platform.role_permissions")
+        cur.execute("SELECT count(*) FROM platform.role_permissions WHERE deleted_at IS NULL")
         once = cur.fetchone()[0]
         migration._rolleri_ve_baglari_kur(cur)
         migration._rolleri_ve_baglari_kur(cur)
-        cur.execute("SELECT count(*) FROM platform.role_permissions")
+        cur.execute("SELECT count(*) FROM platform.role_permissions WHERE deleted_at IS NULL")
         sonra = cur.fetchone()[0]
 
     beklenen = sum(len(izinler) for izinler in PLATFORM_ROLE_PERMISSIONS.values())
-    assert once == sonra == beklenen
+    assert once == sonra == beklenen + len(PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS)
 
 
 def test_platform_rolleri_kapali_kume_ve_seed() -> None:
@@ -192,7 +215,7 @@ def test_platform_rolleri_kapali_kume_ve_seed() -> None:
         cur.execute("SELECT code FROM platform.roles ORDER BY code")
         kodlar = [satir[0] for satir in cur.fetchall()]
     assert kodlar == sorted(PLATFORM_ROLE_CODES)
-    assert sum(len(i) for i in PLATFORM_ROLE_PERMISSIONS.values()) == 10  # 6 + 4 açık bağ
+    assert sum(len(i) for i in PLATFORM_ROLE_PERMISSIONS.values()) == 10  # M31: 6 + 4
 
 
 # --- 2-3) rol izin setleri ---------------------------------------------------
@@ -200,8 +223,17 @@ def test_platform_rolleri_kapali_kume_ve_seed() -> None:
 
 def test_superadmin_izin_seti_beklenen() -> None:
     beklenen = set(PLATFORM_ROLE_PERMISSIONS["superadmin"])
+    beklenen |= set(PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS)
     assert _rolun_izinleri("superadmin") == beklenen
-    assert beklenen == set(PLATFORM_PERMISSION_CODES)  # katalogdaki tüm platform izinleri
+    assert beklenen <= set(PLATFORM_PERMISSION_CODES)
+    assert "platform.tenant.pii.read" not in beklenen
+
+
+def test_platform_roles_have_no_unapproved_tenant_pii_access() -> None:
+    pii_izni = "platform.tenant.pii.read"
+    assert pii_izni in PLATFORM_PERMISSION_CODES
+    assert pii_izni not in _rolun_izinleri("superadmin")
+    assert pii_izni not in PLATFORM_ROLE_PERMISSIONS["platform_admin"]
 
 
 def test_platform_admin_izin_seti_beklenen() -> None:
@@ -210,7 +242,10 @@ def test_platform_admin_izin_seti_beklenen() -> None:
     # Kritik ayrım: platform ayarları ve rol atama YOK (yükseltme yolu kapalı).
     assert "platform.role.assign" not in beklenen
     assert "platform.settings.manage" not in beklenen
-    assert beklenen < set(PLATFORM_ROLE_PERMISSIONS["superadmin"])  # alt küme
+    assert beklenen < (
+        set(PLATFORM_ROLE_PERMISSIONS["superadmin"])
+        | set(PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS)
+    )
 
 
 # --- 4) inheritance yok ------------------------------------------------------
@@ -241,7 +276,8 @@ def test_rol_inheritance_yok() -> None:
             "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid"
             " JOIN pg_namespace n ON n.oid = c.relnamespace"
             " WHERE n.nspname = 'platform' AND NOT t.tgisinternal"
-            " AND t.tgname NOT IN ('trg_platform_tokens_guard')"
+            " AND t.tgname NOT IN ('trg_platform_tokens_guard',"
+            " 'trg_platform_audit_events_immutable')"
         )
         assert cur.fetchone()[0] == 0, "platform şemasında beklenmeyen tetikleyici"
 
@@ -281,7 +317,7 @@ def test_kullanici_kendine_yetki_yukseltemez() -> None:
 
     assert platform_yetki.effective_permissions(sa) == set(
         PLATFORM_ROLE_PERMISSIONS["superadmin"]
-    )
+    ) | set(PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS)
 
     with pytest.raises(platform_yetki.PlatformAuthorizationError, match="self-elevation"):
         platform_yetki.assign_role(actor_id=sa, target_user_id=sa, role_code="superadmin")
@@ -554,6 +590,7 @@ def test_platform_rolu_db_allowlist_beklenen() -> None:
         "user_roles",
         "tokens",
         "tenant_registry",
+        "company_plans",
     )
     with connection.cursor() as cur:
         for tablo in platform_tablolari:
@@ -600,12 +637,14 @@ def test_sifirdan_kurulum_ayni_sonucu_uretir() -> None:
         assert cur.fetchone()[0] == 0, "migration gerçek platform kullanıcısı seed etmemeli"
         cur.execute(
             "SELECT r.code, count(*) FROM platform.role_permissions rp"
-            " JOIN platform.roles r ON r.id = rp.role_id GROUP BY r.code ORDER BY r.code"
+            " JOIN platform.roles r ON r.id = rp.role_id"
+            " WHERE rp.deleted_at IS NULL GROUP BY r.code ORDER BY r.code"
         )
         sayimlar = dict(cur.fetchall())
     assert sayimlar == {
         "platform_admin": len(PLATFORM_ROLE_PERMISSIONS["platform_admin"]),
-        "superadmin": len(PLATFORM_ROLE_PERMISSIONS["superadmin"]),
+        "superadmin": len(PLATFORM_ROLE_PERMISSIONS["superadmin"])
+        + len(PLATFORM_SUPERADMIN_EXTRA_PERMISSIONS),
     }
 
     # İzin kodları biçim kuralına uyar ve joker içermez.

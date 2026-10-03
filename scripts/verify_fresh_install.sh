@@ -266,7 +266,7 @@ fi
 if [ "$(sql_deger "$FRESH_DB" "SELECT to_regnamespace('platform') IS NOT NULL")" = "t" ]; then
     bekle "app rolü platform şema USAGE" \
         "$(sql_deger "$FRESH_DB" "SELECT has_schema_privilege('$APP_ROLE','platform','USAGE')")" "f"
-    for t in users roles role_permissions user_roles tokens tenant_registry; do
+    for t in users roles role_permissions user_roles tokens tenant_registry company_plans; do
         if [ "$(tablo_var "$FRESH_DB" "platform.$t")" = "$VAR" ]; then
             for y in SELECT INSERT UPDATE DELETE; do
                 bekle "app rolü platform.$t $y" \
@@ -294,7 +294,7 @@ if [ "$(sql_deger "$FRESH_DB" "SELECT count(*) FROM pg_roles WHERE rolname='$PLA
         "$(sql_deger "$FRESH_DB" "SELECT has_schema_privilege('$PLATFORM_ROLE','platform','USAGE')")" "t"
     bekle "platform rolü RLS'i atlayamaz (hr.tenants)" \
         "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','hr.tenants','SELECT')")" "f"
-    for t in users roles role_permissions user_roles tokens tenant_registry; do
+    for t in users roles role_permissions user_roles tokens tenant_registry company_plans; do
         if [ "$(tablo_var "$FRESH_DB" "platform.$t")" = "$VAR" ]; then
             bekle "platform rolü platform.$t SELECT" \
                 "$(sql_deger "$FRESH_DB" "SELECT has_table_privilege('$PLATFORM_ROLE','platform.$t','SELECT')")" "t"

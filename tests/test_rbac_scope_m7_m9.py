@@ -297,6 +297,7 @@ def test_m8_varsayilan_roller_dogru_kapsam_tipiyle_olusur(tenant_a) -> None:
         "tenant_officer": RoleScopeType.TENANT,
         "hr_manager": RoleScopeType.TENANT,
         "dept_manager": RoleScopeType.UNIT,
+        "shift_manager": RoleScopeType.UNIT,
         "employee": RoleScopeType.SELF,
     }
     assert {kod: rol.scope_type for kod, rol in roller.items()} == beklenen
@@ -624,6 +625,7 @@ def test_fresh_install_hedef_rol_seti_ve_kapsamlari(tenant_a) -> None:
             "tenant_officer",
             "hr_manager",
             "dept_manager",
+            "shift_manager",
             "employee",
         }
         assert not Role.objects.filter(code="manager").exists()

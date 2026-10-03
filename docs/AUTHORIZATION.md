@@ -153,11 +153,11 @@ kiracı izolasyonu **gevşetilerek** yapılmaz. Karar (OD1 ve OD3 kapalı):
    geçer.** Bu katman kiracı istek hattından tamamen ayrıdır ve **ayrı bir
    veritabanı rolüyle** (`persopyro_platform`) bağlanır. Bu rol de süper kullanıcı
    değildir ve RLS'i atlayamaz.
-4. **Kiracı bağlamını yalnızca bu katman kurabilir:** geçerli, süreli bir erişim
-   onayı (`AccessGrant`) doğrulandıktan sonra, **tek bir işlem** için kiracı
-   bağlamı hedef kiracıya ayarlanır. RLS devrede kaldığı için sorgu yine yalnızca
-   o kiracının satırlarını görür — değişen şey politika değil, **bağlamı kimin
-   kurabildiğidir**.
+4. **Kiracı bağlamını yalnızca kontrollü servis kurabilir:** çalışan/iş verisine
+   platform erişiminde geçerli süreli `AccessGrant` gerekir. Şirket profilini,
+   planını ve limitlerini yöneten SUPERADMIN uç noktası ise yalnız `tenant_context`
+   içinde `hr.tenants` kaynağını günceller; RLS değişmez, işlem platform audit'e
+   yazılır.
 5. **Varsayılan erişim yoktur (fail-closed).** Onay yoksa, süre dolmuşsa veya
    kapsam dışıysa platform kullanıcısı kiracı verisini **göremez**. Kişisel veri
    için varsayılan **maskeli** görünümdür; maskesiz erişim bölüm 7.3'e tabidir.
@@ -165,8 +165,9 @@ kiracı izolasyonu **gevşetilerek** yapılmaz. Karar (OD1 ve OD3 kapalı):
    **otomatik kapanır**. Uzatma yeni bir onay gerektirir.
 7. **Kayıt:** talebin açılması, onay/red, erişim başlangıcı ve **erişim bitişi**
    ayrı ayrı denetim kaydına yazılır (gerekçe dahil).
-8. **Kiracı görünürlüğü:** kiracı, kendi verisine yapılan platform erişimini kendi
-   denetim akışında görür (bölüm 10.3).
+8. **Şirket profili yönetimi:** şirket güncellemesi için tenant onayı veya ikinci
+   platform onayı aranmaz. SUPERADMIN isterse kaydetme sonunda şirket e-postasına
+   genel bilgilendirme gönderir; detay ve audit kaydı değişen alan adlarını gösterir.
 
 **Verinin yeri.** Platformun kendi verisi (platform kullanıcıları ve rolleri,
 kiracı kayıt defteri/limitleri, erişim talepleri ve onayları, platform denetim
@@ -503,9 +504,10 @@ Kurallar:
   hiçbir kayıt yetki vermez**; fail-closed. `platform_admin` **kendini superadmin
   yapamaz**, sahip olmadığı izni dağıtamaz; hiçbir kullanıcı kendi rolünü
   atayamaz/değiştiremez.
-- **SUPERADMIN ≠ kişisel veri:** platform izinleri **hiçbir** kiracı/PII kodu
-  içermez; kiracı verisi yalnızca erişim talebi/onayı (OD1/OD4, M17–M19) ile açılır.
-  Bootstrapped ilk superadmin de (M33) bu kuralın dışında değildir.
+- **SUPERADMIN şirket profili yetkisi:** yalnız `platform.settings.manage` ile
+  şirket profil alanı, plan, hizmet tarihi ve limitleri görüntülenir/düzenlenir.
+  Bu işlem çalışan kişisel kayıtlarına erişim vermez. Çalışan PII kuralları ve
+  `AccessGrant` şartları değişmez.
 
 #### B. Kullanıcı, rol ve izin yönetimi
 
@@ -709,30 +711,34 @@ Maskeleme örnekleri: `Ayşe Yılmaz` → `A*** Y***`, `ayse@ornek.com` →
 2. Onay      Kiracı içi taleplerde: ŞİRKET YÖNETİCİSİ veya onay yetkilisi
              (izin: dataaccess.request.approve) — temel onay mekanizması
              Platform taleplerinde: ÇİFT ONAY — birbirinden farklı iki platform
-             kullanıcısı (DUAL_APPROVAL); talep sahibi onaylayamaz (SEPARATE_ACTOR)
+             kullanıcısı (DUAL_APPROVAL); talep sahibi onaylayamaz (SEPARATE_ACTOR);
+             şirket yetkilisinin ayrıca onayı aranmaz (OD18)
 3. Kullanım  Onay, süreli bir ERİŞİM İZNİ üretir (AccessGrant):
              kapsam = belirtilen kayıtlar + belirtilen alanlar + bitiş zamanı
              kullanımda aranan koşullar: PURPOSE_GIVEN + GRANT_VALID (+ MFA_OK)
 4. Kayıt     Denetim kaydı: talep, onay, RED, erişim başlangıcı ve erişim bitişi
              ayrı ayrı yazılır (kim, kimin verisi, hangi alanlar, hangi amaç,
-             hangi onay kaydı, ne zaman)
+             hangi onay kaydı, ne zaman); erişim tamamlanınca şirkete bildirim
 5. Bitiş     Süre dolunca erişim OTOMATİK kapanır (koşul geçersizleşir);
              iptal edilebilir; uzatma yeni onay gerektirir
 ```
 
 Kurallar:
 
-- **Varsayılan erişim yok (OD1 — kapalı):** onay yoksa, süre dolmuşsa veya kapsam
-  dışıysa erişim yoktur (fail-closed). Bu kural **SUPERADMIN için de aynıdır**.
+- **Varsayılan erişim yok (OD1 — kapalı):** çalışan/iş verisinde onay yoksa, süre
+  dolmuşsa veya kapsam dışıysa erişim yoktur (fail-closed). Bu kural SUPERADMIN
+  için de aynıdır. Şirket profil/limit yönetimi ayrı bir doğrudan yetkidir.
 - **Amaç bağlama ve gerekçe niteliği (OD4 — kapalı):** gerekçe zorunludur; boş,
   tek kelime veya şablon/kopya metin kabul edilmez ve gerekçe kayda geçer.
 - **En az ifşa:** yalnızca talep edilen alanlar açılır (tüm profil değil).
-- **Onay mercii (OD4 — kapalı):** kiracı içinde şirket yöneticisi / yetkilendirdiği
-  onay yetkilisi; platform tarafında **iki farklı onaylayıcı** (çift onay). Talep
-  sahibi hiçbir durumda kendi talebini onaylayamaz.
+- **Onay mercii (OD4/OD18 — kapalı):** kiracı içi taleplerde şirket yöneticisi /
+  yetkilendirdiği onay yetkilisi; platform erişiminde **iki farklı platform
+  onaylayıcı** (çift onay), talep sahibi hariç. Şirket yetkilisinin platform
+  erişimi için ayrıca onayı aranmaz.
 - **Beş olay kayıtta:** talep, onay, red, erişim başlangıcı, erişim bitişi.
-- **Görünürlük:** kiracı yöneticisi, kendi çalışanlarının verisine yapılan platform
-  erişimini görür (talep, gerekçe, zaman).
+- **Görünürlük (OD15):** şirket profili değişiklik alanları platform audit
+  kaydında görünür; SUPERADMIN isterse kaydetme sonunda şirket e-postasına genel
+  bildirim gönderir. Bildirim eski/yeni değerleri içermez.
 - **İstisnasız kayıt:** kişisel veriye erişimin kaydedilmediği bir yol bırakılmaz.
 - **Veri sahibi hakları:** çalışan kendi verisine erişimini, düzeltmeyi ve
   (saklama süresi dolduğunda) silinmesini talep edebilir (`dsr.*`).
@@ -962,8 +968,8 @@ Kod yazılmadan önce tamamlanacak iş kalemleri (öncelik sırasıyla):
 | 1 | `User.public_id` alanı + üretim + benzersizlik ✅/🔜 | Şema + tüm listeler | Bölüm 8; OD2 biçim kararı bekliyor |
 | 2 | **Ayrı `platform_users` modeli + ayrı giriş yolu** | Yeni tablo + kimlik doğrulama yolu | Bölüm 3.4; OD3 **kapalı** |
 | 3 | **Ayrı platform şeması + `persopyro_platform` veritabanı rolü** (kiracı RLS politikaları DEĞİŞMEZ, `BYPASSRLS` yok) | Şema + yetkiler | Bölüm 3.4; OD1/OD3 **kapalı** |
-| 4 | **`AccessRequest` / `AccessGrant`: onay akışı (tek onay / çift onay), gerekçe nitelik denetimi, süre sonunda otomatik kapanma** | Yeni tablolar + servis | Bölüm 7.3; OD1/OD4 **kapalı** |
-| 5 | **Platform denetim akışı (ayrı akış) + kiracı görünürlüğü kaydı** | Yeni tablo + servis | Bölüm 3.4/10; OD15 (görünürlük kapsamı) açık |
+| 4 | **`AccessRequest` / `AccessGrant`: platform çift onayı, gerekçe nitelik denetimi, süre sonunda otomatik kapanma** | Yeni tablolar + servis | Bölüm 7.3; OD1/OD4/OD18 **kapalı** |
+| 5 | **Platform denetim akışı + kiracıya erişim/değişiklik bildirimi** | Yeni tablolar + servis | Bölüm 3.4/10; OD15 **kapalı**, uygulama bekliyor |
 | 6 | İzin kataloğu genişletmesi + yeni migration | Veri migration'ı | Bölüm 5.2 (uygulanmış migration değiştirilmez) |
 | 7 | Rol kodu eşlemesi: `manager` → `dept_manager`, `tenant_officer` eklenmesi | Veri migration'ı | Bölüm 4.2; **✅ UYGULANDI (M7 — `rbac/0005`, 2026-09-11):** yerinde adlandırma (kimlik/atama korunur), izin setleri §6.2 DY (14) ve ŞYT (19); conflict/soft-delete fail-closed |
 | 8 | `user_roles.scope_org_unit_id` (kapsam) + `roles.scope_type` | Şema + guard | **✅ UYGULANDI (M8+M9 kısmi — `rbac/0006`+`0007`, 2026-09-11):** `scope_type` NOT NULL + kapalı küme `CHECK`; `scope_org_unit_id` kolonu + `NULLS NOT DISTINCT` benzersizlik + guard tetikleyicisi; **ertelenen:** `departments(id)` FK'si ve alt ağaç çözümlemesi (M10). M10 öncesi `UNIT`/`UNIT_DIRECT` atamaları izin üretmez (fail-closed) |
@@ -985,7 +991,7 @@ migration'ların değişmezliği.
 Aşağıdaki noktalar belirsiz veya çelişkilidir; **kod yazılmadan önce karar
 verilmelidir**. Her biri için seçenekler ve öneri verilmiştir.
 
-**Durum (2026-09-13):** **OD1–OD7, OD9, OD16, OD19–OD31, OD35–OD38, OD41–OD43, OD58–OD64 KAPATILDI**; **OD8, OD10, OD12–OD15, OD17, OD18 AÇIK** (P1 LATER); **OD11 OBSOLETE**.
+**Durum (2026-10-01):** **OD1–OD7, OD9, OD15, OD16, OD18–OD31, OD35–OD38, OD41–OD43, OD58–OD64 KAPATILDI**; **OD8, OD10, OD12–OD14, OD17 AÇIK** (P1 LATER); **OD11 OBSOLETE**.
 Kararlar aşağıda kayıtlı ve ilgili bölümlere (3.4, 5.4, 6.2, 6.3, 7.3, 8.2, 10.1, 13)
 işlenmiştir. Kapalı kararlar listede kalır ama **artık karar beklemez**.
 Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/DATABASE.md`.
@@ -997,8 +1003,8 @@ Diğer OD'ler açıktır. Veritabanı karşılığı ve migration planı: `docs/
 > **P5a V1 turunda (2026-09-13)** **OD62–OD64** açılıp kapatılmıştır (fazla mesai onay modeli,
 > karşılık tipinin boş kalması, gece yarısı sınırı); bkz. §16.8.
 > **Hâlâ öneri olanlar:** OD32–OD34, OD39–OD40, OD44–OD57 (ilgili faz başlarken kapatılır).
-> **Durum (2026-09-13):** OD6, OD7, OD9, OD16, OD29, OD30, OD31, OD35–OD38, OD41–OD43,
-> OD58–OD61 **KAPALI**; OD8, OD10, OD12, OD13, OD14, OD15, OD17, OD18 **AÇIK (LATER —
+> **Durum (2026-10-01):** OD6, OD7, OD9, OD15, OD16, OD18, OD29, OD30, OD31, OD35–OD38, OD41–OD43,
+> OD58–OD61 **KAPALI**; OD8, OD10, OD12, OD13, OD14, OD17 **AÇIK (LATER —
 > P1'i bloklamaz)**; OD11 **OBSOLETE** (fiilen çözülmüş). Ayrıntılı sınıflandırma: §16.1.
 >
 > **Doküman tutarsızlığı (kayıt için):** **OD10 (MFA)** hâlâ AÇIK görünmektedir ancak
@@ -1101,7 +1107,8 @@ servis/model guard'ları ve testleri vardır.
 - **İşlendiği yerler:** bölüm 5.4, bölüm 6.2/I, bölüm 7.3, bölüm 10.1,
   `docs/SECURITY.md` bölüm 6.
 - **Doğurduğu açık nokta:** tek platform yöneticisi bulunması durumunda çift onayın
-  nasıl uygulanacağı → **OD17**; kiracının onay sürecindeki rolü → **OD18**.
+  nasıl uygulanacağı → **OD17**; kiracının işlem sonrası bilgilendirilmesi → **OD18**
+  (kullanıcı kararıyla kapatıldı).
 - **Seçenekler (kayıt için):** (A) Yalnızca ŞİRKET YÖNETİCİSİ (veri sorumlusu kiracıdır).
   (B) Yalnızca SUPERADMIN. (C) Kişinin kendisi (veri sahibi onayı). (D) Kiracı
   yöneticisi + platform çift kontrolü (kullanım amacına göre).
@@ -1422,12 +1429,17 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
   yetkiye bağlı) ve birim üzerinden yapılır. Kişisel veriyle arama yalnızca
   gerekçeli ve kayıtlı modda açılır; dönen sonuç yalnızca eşleşme sayısıdır.
 
-### OD15 — Kiracı, platform erişimini görsün mü
+### OD15 — Kiracı, platform erişimini görsün mü — **GÜNCELLENDİ** (2026-10-02, kullanıcı kararı)
 
-- **Öneri:** Evet. Kiracı yöneticisi, kendi verisine yapılan platform
-  erişimlerinin kaydını görür ve itiraz edebilir. Gerekçe: şeffaflık, güven,
-  KVKK hesap verebilirliği.
-- **Etki:** Platform erişim kaydının kiracı denetim ekranında görünmesi.
+- **Şirket yönetimi kararı:** SUPERADMIN şirket profilini, planı, kullanım
+  tarihlerini ve limitleri tek başına düzenler; ikinci platform onayı yoktur.
+  Değişen alanlar platform audit kaydında görünür. Kaydetme ekranında SUPERADMIN
+  isterse şirket e-posta adresine genel bildirim gönderir; varsayılan olarak mail
+  gönderilmez ve eski/yeni değerler e-postaya konmaz.
+- **Çalışan kişisel verisi:** bu şirket yönetimi izni çalışanların K2/K3 kişisel
+  verilerine erişim kararını değiştirmez; OD18 kapsamındaki kurallar geçerlidir.
+- **Etki:** platform şirket profili güncelleme uç noktası, audit ve isteğe bağlı
+  şirket e-postası.
 
 ### OD16 — Özel rol sınırı ve katalog evrimi — **KAPALI** ✅ (2026-09-13, P1 blocker)
 
@@ -1478,18 +1490,16 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
   raporu, `docs/SECURITY.md` G6. **Uygulamayı kısmen etkiler** (fail-closed
   varsayılan uygulanabilir; break-glass tasarımı bu karara bağlı).
 
-### OD18 — Platform kişisel veri erişiminde kiracının rolü 🆕
+### OD18 — Platform çalışan kişisel verisine erişimde kiracının rolü — **KAPALI** ✅ (2026-10-01, kullanıcı kararı)
 
-- **Neden açık:** OD4 platform tarafında çift onayı zorunlu kıldı; ancak
-  **kiracının** (veri sorumlusunun) bu erişimde **onayı mı**, yoksa yalnızca
-  **bilgilendirilmesi mi** gerektiği belirtilmedi. OD15 (kiracı platform erişimini
-  görsün mü) ile birlikte değerlendirilmelidir.
-- **Seçenekler:** (A) Kiracı yalnızca bilgilendirilir (görür, itiraz edebilir).
-  (B) Kiracı onayı da zorunludur (talep + iki platform onayı + kiracı onayı).
-  (C) Kiracı onayı yalnızca K3 (özel nitelikli veri) ve toplu erişimde zorunludur.
-- **Öneri:** (C). Gerekçe: KVKK'da veri sorumlusu kiracıdır; en hassas veri ve
-  toplu erişimde onay alınmalı, rutin destek işleri tıkanmamalıdır.
-- **Etki:** Onay akışı adım sayısı, bildirimler, kiracı denetim ekranı (OD15).
+- **KARAR:** Platform erişiminde şirket yetkilisinin ayrıca onayı aranmaz.
+  Talep sahibi olmayan iki farklı platform kullanıcısının onayı zorunludur; şirket
+  yöneticisi erişim tamamlandıktan sonra OD15 uyarınca bilgilendirilir ve itiraz
+  edebilir. Bu kural K3 ve toplu erişim için de aynıdır; onaysız/break-glass
+  istisna bu kararla açılmamıştır (OD17 ayrıca açık kalır).
+- **Gerekçe:** platform taleplerinde çift kontrol zorunlu, şirket yetkilisine
+  şeffaflık ve itiraz hakkı verilir; ek onay adımı eklenmez.
+- **Etki:** AccessRequest/AccessGrant onay akışı ve OD15 bildirimleri.
 
 ### OD19 — Django admin / `auth_*` paralel yetki yolu — **KAPALI** ✅ (2026-09-11) — **UYGULANDI** ✅ (M22–M22d)
 
@@ -1565,8 +1575,8 @@ Kalan: M21 tutarlılık testi + tutarsızlık düzeltme akışı.
 - **Senkronizasyon yönü:** **tek yönlü:** `hr.tenants` → `platform.tenant_registry`,
   `SECURITY DEFINER` tetikleyiciyle (mevcut `tenant_directory` ile aynı kanıtlanmış
   desen). Ters yön **yoktur**: platform, kiracı alanlarını registry üzerinden değiştirmez;
-  değiştirmesi gerekirse platform servisi, geçerli erişim onayıyla **`hr.tenants`'ı
-  kiracı bağlamında** yazar (tek yazar) → tetikleyici yansıyı günceller.
+  platform servisi SUPERADMIN yetkisi sonrası **`hr.tenants`'ı kiracı bağlamında**
+  yazar (tek yazar) → tetikleyici yansıyı günceller.
 - **Başarısızlık davranışı:** tetikleyici **aynı işlem içinde** çalışır; yansı yazımı
   başarısız olursa `hr.tenants` yazımı da geri alınır → **sapma oluşmaz (fail-closed)**.
   Tetikleyici asla "sessizce yut" yapmaz.
@@ -2303,9 +2313,9 @@ Kapatılmayan öneriler (§16.5) **öneri** olarak kalır ve ilgili faz başlark
 | OD12 | Kişiye özel izin istisnası | LATER | P1 override kullanmıyor; mekanizma zaten var |
 | OD13 | Denetim görünürlüğü/saklama/zincirleme | LATER | P1 audit **yazar** (mevcut `log_action`); saklama süresi OD6 kararında 10 yıl olarak sabitlendi; zincirleme P8/P9 |
 | OD14 | Genel kimlik ile arama | LATER | P1 araması `employee_no` + ad üzerinden; PII ile arama eklenmiyor (karara aykırı değil) |
-| OD15 | Kiracı platform erişimini görsün mü | LATER | Platform erişim kaydı P9 |
+| OD15 | Kiracı platform erişimini görsün mü | **KAPALI** | Uygulama içi + e-posta ile işlem sonrası bildirim; erişim kaydını görme/itiraz |
 | OD17 | Platform çift onayı / break-glass | LATER | Platform modülü P9; P1'i bloklamaz |
-| OD18 | Platform PII erişiminde kiracının rolü | LATER | Platform modülü P9 |
+| OD18 | Platform PII erişiminde kiracının rolü | **KAPALI** | İki platform onayı; şirket yetkilisine sonradan bildirim, ayrıca onay yok |
 | OD11 | Kişi hem platform hem kiracı rolü taşıyabilir mi | **OBSOLETE** | Fiilen çözülmüş: platform kullanıcıları ayrı `platform` şemasında ve **Django modeli yok** (OD3 kapalı); kiracı rolleri `hr.user_roles` üzerinden yürür — iki rol uzayı yapısal olarak ayrık |
 
 **Sonuç:** P1'i bloke eden **4** karar (OD6, OD7, OD9, OD16) kapatıldı; ayrıca P1 kapsamına

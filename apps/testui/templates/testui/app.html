@@ -8,6 +8,7 @@
   <button data-tab="employees" data-menu="employees">Çalışanlar</button>
   <button data-tab="leave" data-menu="leave">İzin Talebi</button>
   <button data-tab="overtime" data-menu="overtime">Fazla Mesai</button>
+  <button data-tab="shifts" data-menu="shifts">Vardiya</button>
   <button data-tab="approvals" data-menu="approvals">Onaylar</button>
   <button data-tab="raw" data-gerekli="ui.roles.view">Yetki Yönetimi</button>
 </div>
@@ -20,11 +21,12 @@
 <section id="tab-employees" class="tab" hidden></section>
 <section id="tab-leave" class="tab" hidden></section>
 <section id="tab-overtime" class="tab" hidden></section>
+<section id="tab-shifts" class="tab" hidden></section>
 <section id="tab-approvals" class="tab" hidden></section>
 <section id="tab-raw" class="tab" hidden></section>
 
 <div id="modal" class="modal-backdrop" hidden>
-  <div class="modal card">
+  <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
     <h2 id="modal-title"></h2>
     <div id="modal-body"></div>
     <div class="modal-actions">
@@ -56,6 +58,21 @@ tıklanınca kapanır.
     .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
   const bos = (d) => JSON.stringify(d, null, 2);
   const yok = '<span class="muted">—</span>';
+  // Başlangıç/bitiş kullanan formlarda bitiş tarihi başlangıçtan önce seçilemez.
+  function tarihAraligiBagla(baslangicId, bitisId) {
+    const baslangic = document.getElementById(baslangicId);
+    const bitis = document.getElementById(bitisId);
+    if (!baslangic || !bitis) return;
+    const guncelle = () => {
+      bitis.min = baslangic.value || "";
+      if (baslangic.value && bitis.value && bitis.value < baslangic.value) bitis.value = "";
+    };
+    if (baslangic.dataset.dateRangeBound !== bitisId) {
+      baslangic.addEventListener("change", guncelle);
+      baslangic.dataset.dateRangeBound = bitisId;
+    }
+    guncelle();
+  }
   let ME = null;      // /api/me
   // Sekmeler, lookup isteği gecikse veya eski migration nedeniyle geçici hata
   // verse bile null erişimiyle tamamen kilitlenmemeli.
@@ -78,6 +95,15 @@ tıklanınca kapanır.
          Kalan: <strong>${esc(y.available_days)}</strong></span>`
     : `<span class="muted">${esc(y.mesaj || "Henüz yıllık izin hakedişi oluşturulmamış.")}</span>`;
 
+  function modalOdakla() {
+    const kapak = document.getElementById("modal");
+    if (!kapak) return;
+    const hedef = kapak.querySelector(
+      '#modal-body input:not([disabled]), #modal-body textarea:not([disabled]), #modal-body select:not([disabled]), #modal-cancel:not([hidden]), #modal-ok:not([hidden])'
+    ) || kapak.querySelector(".modal");
+    if (hedef) hedef.focus();
+  }
+
   function onayModali(baslik, govdeHtml, onayMetni = "Onayla") {
     return new Promise((cozumle) => {
       const kapak = document.getElementById("modal");
@@ -87,6 +113,7 @@ tıklanınca kapanır.
       const iptalBtn = document.getElementById("modal-cancel");
       okBtn.textContent = onayMetni;
       kapak.hidden = false;
+      modalOdakla();
       const temizle = () => {
         kapak.hidden = true;
         okBtn.onclick = null;
@@ -108,6 +135,7 @@ tıklanınca kapanır.
     okBtn.textContent = "Kapat";
     iptalBtn.hidden = true;
     kapak.hidden = false;
+    modalOdakla();
     // Kapanışın İKİ yolu da düğme durumunu geri alır (Escape → #modal-cancel).
     const temizle = () => {
       kapak.hidden = true;
@@ -146,6 +174,7 @@ tıklanınca kapanır.
       iptalBtn.textContent = "Vazgeç";
       iptalBtn.hidden = false;
       kapak.hidden = false;
+      modalOdakla();
       const hataKutu = document.getElementById("gerekce-hata");
       const temizle = () => {
         kapak.hidden = true;
@@ -367,11 +396,11 @@ tıklanınca kapanır.
         <div class="grid">
           <div><h3>Kullanıcı</h3>${esc(k.user.name || k.user.email)}<br>
             <span class="muted">${esc(k.user.email)}</span></div>
-          <div><h3>Kiracı</h3>${esc(k.tenant.name)}</div>
+          <div><h3>Şirket</h3>${esc(k.tenant.name)}</div>
           <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") || yok}
-            <div class="muted small">${k.roles.map((r) => esc(r.code)).join(", ")}</div></div>
+            <div class="muted small">${k.roles.map((r) => esc(r.name || r.code)).join(", ")}</div></div>
           <div><h3>Organizasyon kapsamı</h3>
-            ${k.scope.tenant_wide ? "Tüm kiracı" : (k.scope.unit_count ? k.scope.unit_count + " birim + alt birimleri" : "Yalnızca kendi kaydı")}
+            ${k.scope.tenant_wide ? "Şirket genelinde" : (k.scope.unit_count ? k.scope.unit_count + " departman + alt departmanları" : "Yalnızca kendi hesabı ve çalışan kaydı")}
           </div>
         </div>
       </div>`;
@@ -600,6 +629,7 @@ tıklanınca kapanır.
     ).find((o) => o.textContent.startsWith(t.leave_type))?.value || document.getElementById("lr-type").value;
     document.getElementById("lr-start").value = t.start_date;
     document.getElementById("lr-end").value = t.end_date;
+    tarihAraligiBagla("lr-start", "lr-end");
     document.getElementById("lr-time-start").value = t.start_time ? t.start_time.slice(0, 5) : "";
     document.getElementById("lr-time-end").value = t.end_time ? t.end_time.slice(0, 5) : "";
     document.getElementById("lr-reason").value = t.reason || "";
@@ -674,7 +704,7 @@ tıklanınca kapanır.
           <div class="section-head"><h2>Organizasyon ağacı</h2>
             <span class="sag rozet">${data.length} birim</span></div>
           <p class="muted small">Ağaç <strong>adjacency list</strong> üzerinden gelir (OD24).
-            Yetki kararı servis katmanında, döngü/derinlik/kiracı garantileri veritabanında verilir.
+            Yetki kararı sunucuda, şirket içi veri bütünlüğü kuralları veritabanında korunur.
             Birime tıklayın: sağda detayı ve işlemleri açılır.</p>
           <div class="tree"><ul>${dal(null) || `<li class="muted">Kayıtlı birim yok.</li>`}</ul></div>
         </div>
@@ -693,7 +723,7 @@ tıklanınca kapanır.
               <div><label>Üst birim</label><select id="dep-parent">${lookupSecenekler(data, "")}</select></div>
             </div>
             <div class="form-alt"><button class="primary" id="dep-create">Oluştur</button>
-              <span class="muted small">Kod kiracı içinde benzersizdir; kök birim için üst birim boş bırakılır.</span></div>
+              <span class="muted small">Kod şirket içinde benzersizdir; en üst departman için üst departman boş bırakılır.</span></div>
           </div>` : ""}
         </div>
       </div>`;
@@ -711,16 +741,21 @@ tıklanınca kapanır.
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
 
-    document.querySelectorAll(".birim-sec").forEach((a) =>
-      a.addEventListener("click", (olay) => {
+    document.querySelectorAll(".birim-sec").forEach((a) => {
+      const sec = (olay) => {
         olay.preventDefault();
-        departmanSec(a.dataset.birim, meta.can_manage);
-      }));
+        departmanSec(a.dataset.birim, meta.can_manage, employees);
+      };
+      a.addEventListener("click", sec);
+      a.addEventListener("keydown", (olay) => {
+        if (olay.key === "Enter" || olay.key === " ") sec(olay);
+      });
+    });
   }
 
   // Seçili birim detayı (sağ kolon): özet bilgi + işlemler. Kart her seçimde
   // yeniden basıldığı için düğme dinleyicileri burada bağlanır.
-  function departmanSec(birimId, canManage) {
+  function departmanSec(birimId, canManage, employees = []) {
     const birim = TREE.find((d) => d.id === birimId);
     const hedef = document.getElementById("dep-detay");
     if (!birim || !hedef) return;
@@ -807,8 +842,8 @@ tıklanınca kapanır.
       </select>
       <label>Gerekçe (opsiyonel)</label>
       <input id="move-gerekce" placeholder="Örn. yeniden yapılanma">
-      <p class="muted small">Kendi biriminiz ve alt birimleri listede yer almaz; güvenlik
-        bununla sınırlı değildir — sunucu döngü/derinlik/kiracı garantilerini uygular.</p>`;
+      <p class="muted small">Kendi departmanınız ve alt departmanları listede yer almaz; güvenlik
+        bununla sınırlı değildir — sunucu şirket içi veri bütünlüğünü uygular.</p>`;
     const onay = await onayModali("Birimi taşı", govde, "Taşı");
     if (!onay) return;
     const hedefId = document.getElementById("move-hedef").value || null;
@@ -852,7 +887,7 @@ tıklanınca kapanır.
   }
 
   // --- Çalışanlar ----------------------------------------------------------
-  async function yukleCalisanlar(arama = "", altSekme = "liste") {
+  async function yukleCalisanlar(arama = "", altSekme = "liste", tumDurumlar = false) {
     // Çalışanlar sekmesi, ilk lookups isteği tamamlanmadan açılırsa da güvenli
     // çalışmalı; aksi halde LOOKUPS.meta erişimi null hatası üretir.
     if (!LOOKUPS_HAZIR) await yukleLookups();
@@ -863,7 +898,10 @@ tıklanınca kapanır.
       altSekme = uiMenu.employees_new ? "yeni"
         : (uiMenu.employees_form ? "form" : (uiMenu.employees_exit ? "cikis" : "askida"));
     }
-    const url = arama ? `/test-ui/api/employees?q=${encodeURIComponent(arama)}` : "/test-ui/api/employees";
+    const params = new URLSearchParams();
+    if (arama) params.set("q", arama);
+    if (tumDurumlar) params.set("include_departed", "1");
+    const url = `/test-ui/api/employees${params.toString() ? "?" + params.toString() : ""}`;
     const { data, meta } = await PERSOPYRO_UI.cagir(url);
     let cikisData = [];
     if (cikisSekmesiGorunur) {
@@ -904,7 +942,7 @@ tıklanınca kapanır.
         <div class="filtre-bar">
           <div style="flex:1 1 300px"><label>Ara / filtrele (ad, e-posta, no, birim, unvan, rol)</label>
             <input id="calisan-filtre" placeholder="Örn. Muhasebe veya EMP-000004"></div>
-          <div><button type="button" id="calisan-filtre-temizle">Filtreyi temizle</button></div>
+          <div class="action-bar sol"><button type="button" id="calisan-filtre-temizle">Filtreyi temizle</button><button type="button" id="calisan-tum-durumlar">${tumDurumlar ? "Aktif çalışanları göster" : "Tüm durumları göster"}</button></div>
           <div class="muted small" id="calisan-filtre-sonuc"></div>
         </div>
       </div>
@@ -917,6 +955,7 @@ tıklanınca kapanır.
               c.department, c.position, (c.roles || []).map((r) => r.name).join(" ")]
               .filter(Boolean).join(" ").toLowerCase())}">
             <td><div class="hucre-iki">
+              ${c.photo_url ? `<img src="${esc(c.photo_url)}" alt="" width="36" height="36" style="width:36px;height:36px;object-fit:cover;border-radius:50%;float:left;margin-right:8px">` : ""}
               <span>${esc(c.user_name || c.user_email) || "<span class='muted'>kullanıcı bağlı değil</span>"}${c.kendi_kaydim ? " <span class='muted small'>· kendi kaydınız</span>" : ""}</span>
               <span class="alt">${esc(c.user_email || "")}</span></div></td>
             <td>${esc(c.employee_no)}${izinNoktasi(c.izin_durumu)}</td>
@@ -940,7 +979,8 @@ tıklanınca kapanır.
       <section id="calisan-alt-form" class="alt-bolum" hidden>
         <div class="card"><div class="section-head"><h2>Yeni çalışan kişisel bilgi alanları</h2></div>
           <p class="muted small">Cinsiyet, SGK no veya ihtiyacınız olan başka alanları burada tanımlayın.
-            Seçim alanlarında seçenekleri satır satır yazın.</p>
+            Seçim alanlarında seçenekleri satır satır yazın. Yeni alanlar varsayılan olarak gizlidir;
+            gizli işaretini kaldırdığınız alanlar departman dizininde görünür.</p>
           <div class="grid-2">
             <div class="card ic"><h4>Yeni alan ekle</h4><div class="form-grid">
               <div><label>Alan adı *</label><input id="form-field-label" placeholder="Örn. Cinsiyet"></div>
@@ -948,10 +988,10 @@ tıklanınca kapanır.
               <div><label>Genişlik *</label><select id="form-field-width"><option value="1">1 — dar</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5 — tam genişlik</option></select></div>
               <div class="tam"><label>Seçenekler <span class="muted small">(seçim listesi için, satır satır)</span></label><textarea id="form-field-options" rows="4" placeholder="Erkek\nKadın\nBelirtmek istemiyorum"></textarea></div>
               <div class="form-secim-kutusu"><label><input type="checkbox" id="form-field-required"> Zorunlu alan</label></div>
-              <div class="form-secim-kutusu"><label><input type="checkbox" id="form-field-public"> Departmanlarda açık bilgi</label></div>
+              <div class="form-secim-kutusu"><label><input type="checkbox" id="form-field-hidden" checked> Gizli bilgi (departmanlarda gösterme)</label></div>
             </div><button class="primary" id="form-field-create">Alanı ekle</button></div>
             <div class="card ic"><h4>Özel alanlar (aktif / pasif)</h4>
-            ${formAlanlari.map((f) => `<div class="form-field-row" data-form-field-row="${esc(f.id)}"><div><strong>${esc(f.label)}</strong> <span class="pill">${esc(f.field_type)}</span> <span class="pill ${f.active ? 'ok' : 'muted'}">${f.active ? 'Aktif' : 'Pasif'}</span>${f.is_public ? ' <span class="pill ok">Departmanlarda açık</span>' : ''}${f.is_required ? ' <span class="muted small">zorunlu</span>' : ''}</div><div class="form-alt"><button type="button" class="kucuk" data-form-field-edit="${esc(f.id)}">Düzenle</button>${f.can_toggle ? `<button type="button" class="kucuk" data-form-field-toggle="${esc(f.id)}" data-form-field-active="${f.active ? '1' : '0'}">${f.active ? 'Pasifleştir' : 'Aktifleştir'}</button>` : '<span class="muted small">Sistem alanı</span>'}${f.is_custom ? `<button type="button" class="kucuk danger" data-form-field-delete="${esc(f.id)}">Sil</button>` : ''}</div></div>`).join("") || '<div class="bos">Henüz form alanı yok.</div>'}
+            ${formAlanlari.map((f) => `<div class="form-field-row" data-form-field-row="${esc(f.id)}"><div><strong>${esc(f.label)}</strong> <span class="pill">${esc(f.field_type)}</span> <span class="pill ${f.active ? 'ok' : 'muted'}">${f.active ? 'Aktif' : 'Pasif'}</span>${f.is_public ? ' <span class="pill ok">Departmanlarda açık</span>' : ' <span class="pill muted">Gizli</span>'}${f.is_required ? ' <span class="muted small">zorunlu</span>' : ''}</div><div class="form-alt"><button type="button" class="kucuk" data-form-field-edit="${esc(f.id)}">Düzenle</button>${f.can_toggle ? `<button type="button" class="kucuk" data-form-field-toggle="${esc(f.id)}" data-form-field-active="${f.active ? '1' : '0'}">${f.active ? 'Pasifleştir' : 'Aktifleştir'}</button>` : '<span class="muted small">Sistem alanı</span>'}${f.is_custom ? `<button type="button" class="kucuk danger" data-form-field-delete="${esc(f.id)}">Sil</button>` : ''}</div></div>`).join("") || '<div class="bos">Henüz form alanı yok.</div>'}
             </div>
           </div>
         </div>
@@ -968,6 +1008,10 @@ tıklanınca kapanır.
             <div><label>Unvan adı</label><input id="pos-name" placeholder="Muhasebe Uzmanı"></div>
           </div>
           <div class="form-alt"><button id="pos-create">Unvan ekle</button></div>
+          <div class="position-list-wrap">
+            <h3>Mevcut unvanlar</h3>
+            <div id="position-list">${(lookupData.positions || []).map((p) => `<div class="position-row" data-position-row="${esc(p.id)}"><div><strong>${esc(p.name)}</strong><div class="muted small">${esc(p.code)}${p.level ? ` · ${esc(p.level)}` : ""}</div></div><div class="form-alt"><button type="button" class="kucuk" data-position-edit="${esc(p.id)}">Düzenle</button><button type="button" class="kucuk danger" data-position-delete="${esc(p.id)}">Sil</button></div></div>`).join("") || '<div class="bos">Henüz unvan eklenmemiş.</div>'}</div>
+          </div>
         </div>` : ""}
         <div class="card">
           <div class="section-head"><h2>Kayıt kuralları</h2></div>
@@ -1054,6 +1098,15 @@ tıklanınca kapanır.
           }).join('')}</div>` : ''}
         <p class="muted small">Kan grubu <strong>K3 (özel nitelikli: sağlık)</strong> verisidir;
           veritabanında <strong>Fernet ile şifreli</strong> saklanır ve yalnız yetkili roller görür.</p>` : ""}
+        <div class="card ic">
+          <h4>Fotoğraf ve evrak <span class="muted small">(isteğe bağlı)</span></h4>
+          <div class="form-grid">
+            ${lookupMeta.can_upload_photo ? `<div><label>Çalışan fotoğrafı</label><input id="emp-photo" type="file" accept="image/jpeg,image/png,image/webp">
+              <span class="muted small">JPG, PNG veya WebP · en fazla 3 MB</span></div>` : ""}
+            ${lookupMeta.can_upload_documents ? `<div><label>Çalışan evrakları</label><input id="emp-documents" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.doc,.docx,.rtf,.xls,.xlsx,.csv,.txt,.odt,.ods,.ppt,.pptx,.odp">
+              <span class="muted small">PDF, görsel, Word, Excel, PowerPoint, OpenDocument veya metin · dosya başına 10 MB, toplam 25 MB</span></div>` : '<p class="muted small">Evrak yüklemek için Yetki Yönetimi bölümünden “Belge yükleme” izni verilmelidir.</p>'}
+          </div>
+        </div>
         <div class="form-alt"><button class="primary" id="emp-create">Çalışanı oluştur</button>
           <span class="muted small">Numara kaydedince üretilir ve listede görünür.</span></div>
       </div>` : ""}
@@ -1131,7 +1184,7 @@ tıklanınca kapanır.
           label: document.getElementById("form-field-label").value.trim(), field_type: tip,
           options: secenekler, layout_width: Number(document.getElementById("form-field-width").value),
           is_required: document.getElementById("form-field-required").checked,
-          is_public: document.getElementById("form-field-public").checked,
+          is_public: !document.getElementById("form-field-hidden").checked,
         }});
         PERSOPYRO_UI.mesaj("ok", "Özel kişisel bilgi alanı eklendi.");
         await formAlanlariniYukle();
@@ -1168,11 +1221,11 @@ tıklanınca kapanır.
         <div><label>Genişlik</label><select id="edit-form-width"><option value="1" ${alan.layout_width === 1 ? "selected" : ""}>1 — dar</option><option value="2" ${alan.layout_width === 2 ? "selected" : ""}>2</option><option value="3" ${alan.layout_width === 3 ? "selected" : ""}>3</option><option value="4" ${alan.layout_width === 4 ? "selected" : ""}>4</option><option value="5" ${alan.layout_width === 5 ? "selected" : ""}>5 — tam genişlik</option></select></div>
         ${alan.field_type === "select" ? `<div class="tam"><label>Seçenekler (satır satır)</label><textarea id="edit-form-options" rows="4">${esc(secenekler)}</textarea></div>` : ""}
         <div class="form-secim-kutusu"><label><input type="checkbox" id="edit-form-required" ${alan.is_required ? "checked" : ""}> Zorunlu</label></div>
-        <div class="form-secim-kutusu"><label><input type="checkbox" id="edit-form-public" ${alan.is_public ? "checked" : ""}> Departmanlarda açık bilgi</label></div>
+        <div class="form-secim-kutusu"><label><input type="checkbox" id="edit-form-hidden" ${alan.is_public ? "" : "checked"}> Gizli bilgi (departmanlarda gösterme)</label></div>
       </div>`, "Kaydet");
       if (!onay) return;
       try {
-        const govde = { label: document.getElementById("edit-form-label").value.trim(), helper_text: document.getElementById("edit-form-helper").value.trim(), layout_width: Number(document.getElementById("edit-form-width").value), is_required: document.getElementById("edit-form-required").checked, is_public: document.getElementById("edit-form-public").checked };
+        const govde = { label: document.getElementById("edit-form-label").value.trim(), helper_text: document.getElementById("edit-form-helper").value.trim(), layout_width: Number(document.getElementById("edit-form-width").value), is_required: document.getElementById("edit-form-required").checked, is_public: !document.getElementById("edit-form-hidden").checked };
         const secenekEl = document.getElementById("edit-form-options");
         if (secenekEl) govde.options = secenekEl.value.split("\n").map((x) => x.trim()).filter(Boolean);
         await PERSOPYRO_UI.cagir(`/test-ui/api/employee-form-fields/${alan.id}/update`, { method: "POST", body: govde });
@@ -1232,7 +1285,20 @@ tıklanınca kapanır.
           });
         }
         const { data: yeniCalisan } = await PERSOPYRO_UI.cagir("/test-ui/api/employees", { method: "POST", body: govde });
-        PERSOPYRO_UI.mesaj("ok", `Çalışan oluşturuldu — verilen numara: ${yeniCalisan.employee_no}`);
+        let dosyaUyarisi = "";
+        try {
+          const photo = document.getElementById("emp-photo")?.files?.[0];
+          if (photo) {
+            const form = new FormData(); form.append("file", photo);
+            await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${yeniCalisan.id}/photo`, { method: "POST", body: form });
+          }
+          const files = [...(document.getElementById("emp-documents")?.files || [])];
+          if (files.length) {
+            const form = new FormData(); files.forEach((file) => form.append("files", file));
+            await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${yeniCalisan.id}/documents`, { method: "POST", body: form });
+          }
+        } catch (dosyaHatasi) { dosyaUyarisi = ` Çalışan kaydı oluşturuldu, ancak fotoğraf/evrak yüklenemedi: ${dosyaHatasi.message}`; }
+        PERSOPYRO_UI.mesaj(dosyaUyarisi ? "error" : "ok", `Çalışan oluşturuldu — verilen numara: ${yeniCalisan.employee_no}.${dosyaUyarisi}`);
         await Promise.all([yukleCalisanlar(), yukleLookups()]);
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
@@ -1256,10 +1322,12 @@ tıklanınca kapanır.
       };
       filtre.addEventListener("input", () => {
         window.clearTimeout(zamanlayici);
-        zamanlayici = window.setTimeout(() => yukleCalisanlar(filtre.value.trim()), 250);
+        zamanlayici = window.setTimeout(() => yukleCalisanlar(filtre.value.trim(), "liste", tumDurumlar), 250);
       });
       const temizle = document.getElementById("calisan-filtre-temizle");
-      if (temizle) temizle.addEventListener("click", () => { filtre.value = ""; yukleCalisanlar(); });
+      if (temizle) temizle.addEventListener("click", () => { filtre.value = ""; yukleCalisanlar("", "liste", tumDurumlar); });
+      const tumDurumlarDugme = document.getElementById("calisan-tum-durumlar");
+      if (tumDurumlarDugme) tumDurumlarDugme.addEventListener("click", () => yukleCalisanlar(filtre.value.trim(), "liste", !tumDurumlar));
       uygula();
     }
 
@@ -1288,10 +1356,54 @@ tıklanınca kapanır.
           },
         });
         PERSOPYRO_UI.mesaj("ok", `Unvan eklendi: ${yeniUnvan.name}`);
+        LOOKUPS_HAZIR = false;
         await yukleLookups();
-        await yukleCalisanlar();
+        await yukleCalisanlar("", "yeni");
         const secim = document.getElementById("emp-pos");
         if (secim) secim.value = yeniUnvan.id;  // yeni unvan seçili gelsin
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    const unvanListesi = document.getElementById("position-list");
+    if (unvanListesi) unvanListesi.addEventListener("click", async (event) => {
+      const duzenle = event.target.closest("[data-position-edit]");
+      const sil = event.target.closest("[data-position-delete]");
+      const kaydet = event.target.closest("[data-position-save]");
+      const vazgec = event.target.closest("[data-position-cancel]");
+      if (!duzenle && !sil && !kaydet && !vazgec) return;
+      const id = (duzenle || sil || kaydet || vazgec).dataset.positionEdit
+        || (duzenle || sil || kaydet || vazgec).dataset.positionDelete
+        || (duzenle || sil || kaydet || vazgec).dataset.positionSave
+        || (duzenle || sil || kaydet || vazgec).dataset.positionCancel;
+      const position = (LOOKUPS?.data?.positions || []).find((item) => item.id === id);
+      if (!position) return;
+      try {
+        if (duzenle) {
+          const row = duzenle.closest("[data-position-row]");
+          row.innerHTML = `<div class="position-edit-grid"><label>Kod<input data-position-code value="${esc(position.code)}"></label><label>Unvan adı<input data-position-name value="${esc(position.name)}"></label><label>Seviye<input data-position-level value="${esc(position.level || "")}"></label></div><div class="form-alt"><button type="button" class="kucuk primary" data-position-save="${esc(id)}">Kaydet</button><button type="button" class="kucuk" data-position-cancel="${esc(id)}">Vazgeç</button></div>`;
+          return;
+        } else if (vazgec) {
+          LOOKUPS_HAZIR = false;
+          await yukleLookups();
+          await yukleCalisanlar("", "yeni");
+          return;
+        } else if (kaydet) {
+          const row = kaydet.closest("[data-position-row]");
+          await PERSOPYRO_UI.cagir(`/test-ui/api/positions/${id}`, {
+            method: "PUT", body: {
+              code: row.querySelector("[data-position-code]").value.trim(),
+              name: row.querySelector("[data-position-name]").value.trim(),
+              level: row.querySelector("[data-position-level]").value.trim(),
+            },
+          });
+          PERSOPYRO_UI.mesaj("ok", "Unvan güncellendi.");
+        } else {
+          if (!window.confirm(`“${position.name}” unvanı silinsin mi? Çalışan kayıtlarındaki mevcut unvan bilgisi korunur.`)) return;
+          await PERSOPYRO_UI.cagir(`/test-ui/api/positions/${id}`, {method: "DELETE"});
+          PERSOPYRO_UI.mesaj("ok", "Unvan silindi.");
+        }
+        LOOKUPS_HAZIR = false;
+        await yukleLookups();
+        await yukleCalisanlar("", "yeni");
       } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
   }
@@ -1384,7 +1496,7 @@ tıklanınca kapanır.
       const atanabilirListe = c.assignable_roles || [];
       const rolSatirlari = c.roles.length
         ? c.roles.map((r) => `<tr>
-            <td>${esc(r.name)} <span class="teknik">${esc(r.code)}</span></td>
+            <td>${esc(r.name)}</td>
             <td>${esc(r.scope_type_label || r.scope_text)}</td>
             <td>${esc(r.scope_org_unit_name || "—")}</td>
             <td>${tarih(r.granted_at)}</td>
@@ -1409,7 +1521,7 @@ tıklanınca kapanır.
       yetkiBolumu = `
         <h3>Rol ve Yetkiler <span class="muted small">(yetki rolleri — unvandan ayrıdır)</span></h3>
         <p class="muted small">Unvan <strong>işi</strong> tanımlar (ör. <em>Finans Uzmanı</em>);
-          buradaki roller <strong>yetkiyi</strong> belirler (ör. <em>Departman Yöneticisi</em>).
+          buradaki roller <strong>yetkiyi</strong> belirler (ör. <em>Departman Sorumlusu</em>).
           İkisi farklı kavramlardır ve birbirini otomatik etkilemez.</p>
         ${c.is_self ? `<p class="muted">Kendi rol atamalarınızı değiştiremezsiniz (self-elevation yasağı).</p>` : ""}
         <div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Rol</th><th>Kapsam</th>
@@ -1424,7 +1536,7 @@ tıklanınca kapanır.
             <div><label>Gerekçe</label><input id="rol-gerekce" placeholder="Örn. Finans müdürlüğü"></div>
           </div>
           <div class="form-alt"><button class="primary" id="rol-ata">Rolü ata</button>
-            <span class="muted small">Kapsam zorunluluğu sunucuda dayatılır; kiracı geneli (TENANT)
+            <span class="muted small">Kapsam zorunluluğu sunucuda denetlenir; şirket genelinde (TENANT)
               rollerde birim kapsamı istenmez. Platform rolleri burada yönetilmez.</span></div>` : `<p class="muted">Bu çalışana bağlı kullanıcı hesabı yok.</p>`}
         ${kaldirilanlar}
         ${istisnalar}`;
@@ -1432,6 +1544,15 @@ tıklanınca kapanır.
 
     document.getElementById("employee-detail").innerHTML = `
       <div class="detail-box">
+        ${c.photo_url ? `<img src="${esc(c.photo_url)}" alt="Çalışan fotoğrafı" width="72" height="72" style="width:72px;height:72px;object-fit:cover;border-radius:50%">` : ""}
+        <h3>Fotoğraf ve evraklar</h3>
+        ${c.can_upload_photo ? `<div class="form-alt"><input id="employee-photo-file" type="file" accept="image/jpeg,image/png,image/webp">
+          <button type="button" class="kucuk" id="employee-photo-upload">Fotoğrafı yükle</button></div>
+          <p class="muted small">Fotoğraf JPG, PNG veya WebP ve en fazla 3 MB olabilir.</p>` : ""}
+        ${c.photo_url && c.can_upload_photo ? `<button type="button" class="danger kucuk" id="employee-photo-delete">Fotoğrafı kaldır</button>` : ""}
+        ${c.can_upload_documents ? `<div class="form-alt"><input id="employee-document-files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.doc,.docx,.rtf,.xls,.xlsx,.csv,.txt,.odt,.ods,.ppt,.pptx,.odp">
+          <button type="button" class="kucuk" id="employee-document-upload">Evrak ekle</button></div>` : '<p class="muted small">Evrak eklemek için Yetki Yönetimi bölümünden “Belge yükleme” izni verilmelidir.</p>'}
+        <div id="employee-documents-list" class="muted small">Evraklar yükleniyor…</div>
         <h3>İş Bilgileri</h3>
         <div class="tablo-kaydir"><table class="kv"><tbody>
           <tr><th>Çalışan no</th><td><strong>${esc(c.employee_no)}</strong></td></tr>
@@ -1442,7 +1563,7 @@ tıklanınca kapanır.
           <tr><th>İşe giriş</th><td>${c.hire_date ? tarih(c.hire_date) : yok}</td></tr>
           <tr><th>Durum</th><td>${esc(c.status_label || c.status)}</td></tr>
         </tbody></table></div>
-        ${c.can_reset_password ? `<div class="form-alt"><button class="kucuk" data-password-reset="${esc(calisanId)}">Parola üret ve sıfırla</button><span class="muted small">Yeni parola yalnızca bir kez gösterilir.</span></div>` : ""}
+        ${c.can_reset_password ? `<div class="form-alt"><button class="kucuk" data-password-reset="${esc(calisanId)}">Parola sıfırlama bağlantısı gönder</button><span class="muted small">Bağlantı çalışanın kurumsal e-posta adresine gönderilir.</span></div>` : ""}
         ${c.user_email ? `<h3>Giriş hesabı</h3><div class="form-alt"><span>${esc(c.user_email)}</span>
           ${c.can_update_email ? `<button class="kucuk" data-email-update="${esc(calisanId)}">E-posta adresini güncelle</button>` : ""}</div>` : ""}
         ${lifecycleBolumu(c)}
@@ -1452,6 +1573,47 @@ tıklanınca kapanır.
         <h3>Yaşananlar <span class="muted small">(tıklayınca yüklenir)</span></h3>
         <div id="yasananlar-alan"><button class="kucuk" data-yasananlar="${esc(calisanId)}">Yaşananları yükle</button></div>
       </div>`;
+
+    const evrakAlani = document.getElementById("employee-documents-list");
+    try {
+      const evraklar = (await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/documents`)).data || [];
+      evrakAlani.innerHTML = evraklar.length
+        ? `<ul>${evraklar.map((d) => `<li><a href="${esc(d.url)}">${esc(d.title)}</a> <span class="muted">${esc(d.filename)}</span> ${c.can_delete_documents ? `<button type="button" class="danger kucuk" data-employee-document-delete="${esc(d.id)}">Kaldır</button>` : ""}</li>`).join("")}</ul>`
+        : "Henüz evrak eklenmemiş.";
+    } catch (hata) { evrakAlani.textContent = hata.message; }
+    document.getElementById("employee-photo-upload")?.addEventListener("click", async () => {
+      const file = document.getElementById("employee-photo-file").files[0];
+      if (!file) return PERSOPYRO_UI.mesaj("error", "Önce fotoğraf seçin.");
+      const form = new FormData(); form.append("file", file);
+      try { await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/photo`, { method: "POST", body: form }); if (ME.data.employee?.id === calisanId) document.getElementById("header-avatar").src = `/test-ui/api/employees/${calisanId}/photo`; PERSOPYRO_UI.mesaj("ok", "Çalışan fotoğrafı güncellendi."); await calisanDetay(calisanId); }
+      catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    document.getElementById("employee-photo-delete")?.addEventListener("click", async () => {
+      const onay = await onayModali("Fotoğrafı kaldır", "Çalışanın profil fotoğrafı kaldırılacak. Devam edilsin mi?", "Kaldır");
+      if (!onay) return;
+      try {
+        await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/photo`, { method: "DELETE" });
+        if (ME.data.employee?.id === calisanId) document.getElementById("header-avatar").src = "https://sekalaw.com/wp-content/uploads/2024/09/no-pp.jpg";
+        PERSOPYRO_UI.mesaj("ok", "Çalışan fotoğrafı kaldırıldı."); await calisanDetay(calisanId);
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    document.getElementById("employee-document-upload")?.addEventListener("click", async () => {
+      const files = [...document.getElementById("employee-document-files").files];
+      if (!files.length) return PERSOPYRO_UI.mesaj("error", "Önce evrak seçin.");
+      const form = new FormData(); files.forEach((file) => form.append("files", file));
+      try { await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/documents`, { method: "POST", body: form }); PERSOPYRO_UI.mesaj("ok", "Evraklar eklendi."); await calisanDetay(calisanId); }
+      catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    evrakAlani.querySelectorAll("[data-employee-document-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const onay = await onayModali("Evrakı kaldır", "Bu evrak çalışanın kayıtlarından kaldırılacak. Devam edilsin mi?", "Kaldır");
+        if (!onay) return;
+        try {
+          await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/documents/${button.dataset.employeeDocumentDelete}/delete`, { method: "POST", body: {} });
+          PERSOPYRO_UI.mesaj("ok", "Evrak kaldırıldı."); await calisanDetay(calisanId);
+        } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+      });
+    });
 
     document.querySelectorAll("[data-revoke]").forEach((d) =>
       d.addEventListener("click", () => rolKaldir(d.dataset.revoke, calisanId)));
@@ -1641,6 +1803,7 @@ tıklanınca kapanır.
       const hataKutu = document.getElementById("lc-cikis-hata");
       okBtn.textContent = "İşten Çıkışı Onayla";
       kapak.hidden = false;
+      modalOdakla();
       const temizle = () => {
         kapak.hidden = true;
         okBtn.onclick = null;
@@ -1725,25 +1888,12 @@ tıklanınca kapanır.
     } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
 
-  function parolaUret() {
-    const alfabe = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-    const ozel = "!@#$%*?-_";
-    const dizi = new Uint32Array(14);
-    crypto.getRandomValues(dizi);
-    let parola = "";
-    for (let i = 0; i < dizi.length; i += 1) parola += alfabe[dizi[i] % alfabe.length];
-    const pos = dizi[0] % parola.length;
-    return parola.slice(0, pos) + ozel[dizi[1] % ozel.length] + parola.slice(pos);
-  }
-
   async function parolaSifirla(calisanId) {
-    const varsayilan = parolaUret();
-    const onay = await onayModali("Çalışan parolasını sıfırla", `<p>Yeni parola oluşturuldu. Kaydetmeden önce çalışana güvenli şekilde iletin.</p><label>Yeni parola</label><input id="reset-parola" value="${esc(varsayilan)}"><p class="muted small">Parola tekrar gösterilmeyecek.</p>`, "Parolayı kaydet");
+    const onay = await onayModali("Parola sıfırlama bağlantısı gönder", "<p>Çalışanın hesabına tek kullanımlık parola yenileme bağlantısı e-posta ile gönderilecek.</p>", "Bağlantıyı gönder");
     if (!onay) return;
-    const parola = (document.getElementById("reset-parola")?.value || "").trim();
     try {
-      await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/password/reset`, { method: "POST", body: { password: parola } });
-      PERSOPYRO_UI.mesaj("ok", "Parola sıfırlandı. Yeni parolayı çalışana iletin.");
+      await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/password/reset`, { method: "POST", body: {} });
+      PERSOPYRO_UI.mesaj("ok", "Parola sıfırlama bağlantısı çalışana e-posta ile gönderildi.");
     } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
 
@@ -1912,7 +2062,7 @@ tıklanınca kapanır.
             <span class="sag muted small">gün sayısı sunucuda hesaplanır</span></div>
           <p class="muted">Gün sayısı <strong>sunucuda</strong> hesaplanır (takvim günü);
             istemci değeri gönderilmez. Durum adları backend kapalı kümesindendir.</p>
-          <div class="form-grid">
+          <div class="form-grid leave-request-form">
             <div><label>Çalışan</label><select id="lr-emp">${[
               ...[...new Map(EMPLOYEES.map((c) => [c.id, c])).values()].map((c) => `<option value="${esc(c.id)}">${esc(c.id === (ME.data.employee || {}).id ? "kendim" : c.employee_no)} · ${esc(c.department)}</option>`),
             ].join("")}</select></div>
@@ -1943,6 +2093,7 @@ tıklanınca kapanır.
           <span class="sag muted small">tanımlar + yeni tür</span></div>
         <div id="lr-types"></div>
       </div>`;
+    tarihAraligiBagla("lr-start", "lr-end");
     document.getElementById("lr-create").addEventListener("click", async () => {
       const employee = document.getElementById("lr-emp");
       const leaveType = document.getElementById("lr-type");
@@ -1965,16 +2116,17 @@ tıklanınca kapanır.
       );
       if (!onay) return;
       try {
-        // Düzenleme: eski talep iptal edilir, yeni talep onaya sunulur.
+        // Düzenleme: eski talep ve yeni onay akışı tek sunucu işlemiyle yönetilir.
         if (duzenlenenTalep) {
-          await PERSOPYRO_UI.cagir(`/test-ui/api/leave-requests/${duzenlenenTalep.id}/cancel`,
-            { method: "POST", body: { reason: "Düzenleme: talep yenilendi" } });
+          await PERSOPYRO_UI.cagir(`/test-ui/api/leave-requests/${duzenlenenTalep.id}/revise`,
+            { method: "POST", body: govde });
+        } else {
+          const { data: t } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests", {
+            method: "POST", body: govde });
+          document.getElementById("lr-out").innerHTML = `
+            <p class="ipucu">Sunucunun hesapladığı gün:
+               <strong>${esc(t.days_requested)}</strong> · durum: ${durumPill(t.status, t.status_label)}</p>`;
         }
-        const { data: t } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-requests", {
-          method: "POST", body: govde });
-        document.getElementById("lr-out").innerHTML = `
-          <p class="ipucu">Sunucunun hesapladığı gün:
-             <strong>${esc(t.days_requested)}</strong> · durum: ${durumPill(t.status, t.status_label)}</p>`;
         PERSOPYRO_UI.mesaj("ok", duzenlenenTalep
           ? "Düzenleme kaydedildi: eski talep iptal edildi, yeni talep onaya sunuldu."
           : "Talep oluşturuldu ve onaya sunuldu.");
@@ -2060,7 +2212,7 @@ tıklanınca kapanır.
           <td>${t.requires_approval ? "Evet" : "Hayır"}</td>
           <td>${esc(t.status_label)}${t.is_system ? " <span class='badge teknik'>sistem</span>" : ""}</td>
           <td class="aksiyon">${meta.can_manage
-            ? `${t.aktif && t.is_time_based ? `<button class="kucuk" data-tur-saat="${esc(t.id)}" data-tur-dakika="${esc(t.workday_minutes)}">Saat ayarı</button>` : ""}
+            ? `${t.aktif && (t.is_time_based || t.code === "time_off") ? `<button class="kucuk" data-tur-saat="${esc(t.id)}" data-tur-dakika="${esc(t.workday_minutes || 480)}">Saat ayarı</button>` : ""}
                ${t.aktif ? `<button class="danger kucuk" data-tur-kapat="${esc(t.id)}">Devre dışı bırak</button>` : `<button class="kucuk" data-tur-ac="${esc(t.id)}">Aktifleştir</button>`}` : ""}</td>
         </tr>`).join("")}
       </tbody></table></div>
@@ -2460,6 +2612,7 @@ tıklanınca kapanır.
     const gonder = document.getElementById("fm-gonder");
     if (gonder) gonder.addEventListener("click", fmGonder);
     const kuralOlustur = document.getElementById("fm-kural-olustur");
+    tarihAraligiBagla("fm-kural-baslangic", "fm-kural-bitis");
     if (kuralOlustur) kuralOlustur.addEventListener("click", fmKuralOlustur);
     document.querySelectorAll("[data-fm-rule-edit]").forEach((b) => b.addEventListener("click", () => fmKuralDuzenle(b.dataset.fmRuleEdit)));
     document.querySelectorAll("[data-fm-rule-delete]").forEach((b) => b.addEventListener("click", () => fmKuralSil(b.dataset.fmRuleDelete)));
@@ -2509,6 +2662,7 @@ tıklanınca kapanır.
       "fm-kural-max": k.max_minutes ?? "", "fm-kural-katsayi": k.multiplier, "fm-kural-karsilik": k.compensation_type,
       "fm-kural-baslangic": k.effective_from, "fm-kural-bitis": k.effective_until || ""};
     Object.entries(alanlar).forEach(([id2, value]) => { const el = document.getElementById(id2); if (el) el.value = value; });
+    tarihAraligiBagla("fm-kural-baslangic", "fm-kural-bitis");
     const btn = document.getElementById("fm-kural-olustur");
     if (btn) btn.textContent = "Kuralı güncelle";
     document.getElementById("fm-kural-kod")?.focus();
@@ -2607,6 +2761,211 @@ tıklanınca kapanır.
     } catch (hata) {
       PERSOPYRO_UI.mesaj("error", hata.message);
     }
+  }
+
+  // --- Vardiya -------------------------------------------------------------
+  async function yukleVardiya(altSekme = "control") {
+    const panel = document.getElementById("tab-shifts");
+    const yanit = await PERSOPYRO_UI.cagir("/test-ui/api/shifts");
+    const vardiyalar = yanit.data || [];
+    const meta = yanit.meta || {};
+    const shiftMenu = (ME && ME.data && ME.data.menu) || {};
+    if (!shiftMenu.shift_definitions && altSekme === "tanımlar") altSekme = "control";
+    let vardiyaCalisanlari = EMPLOYEES || [];
+    if (meta.can_assign) {
+      try { vardiyaCalisanlari = (await PERSOPYRO_UI.cagir("/test-ui/api/employees?for_shift=1")).data || []; } catch (hata) { /* form boş kalır */ }
+    }
+    const bugun = new Date().toISOString().slice(0, 10);
+    const employees = vardiyaCalisanlari.filter((x) => x.status !== "terminated" && x.status !== "archived");
+    const saatAlanlari = (v = {}) => `
+      <label>Vardiya adı</label><input id="shift-name" value="${esc(v.name || "")}" placeholder="Sabah vardiyası">
+      <label>Kod</label><input id="shift-code" value="${esc(v.code || "")}" placeholder="sabah_0800">
+      <div class="grid-2"><div><label>Başlangıç</label><input id="shift-start" type="time" value="${esc(v.start_time || "08:00")}"></div>
+      <div><label>Bitiş</label><input id="shift-end" type="time" value="${esc(v.end_time || "17:00")}"></div></div>
+      <label><input id="shift-midnight" type="checkbox"${v.crosses_midnight ? " checked" : ""}> Gece yarısını aşar</label>
+      <label>Mola (dakika)</label><input id="shift-break" type="number" min="0" max="1440" value="${esc(v.break_minutes ?? 60)}">
+      <label>Çalışma modeli</label><select id="shift-model">${(meta.work_models || []).map((x) => `<option value="${esc(x.value)}"${x.value === (v.work_model || "office") ? " selected" : ""}>${esc(x.label)}</option>`).join("")}</select>
+      <label>Açıklama</label><textarea id="shift-description" rows="2">${esc(v.description || "")}</textarea>`;
+    panel.innerHTML = `
+      <div class="alt-sekmeler">
+        <button type="button" data-shift-alt="control" class="${altSekme === "control" ? "active" : ""}">Vardiya Kontrolü</button>
+        <button type="button" data-shift-alt="plan" class="${altSekme === "plan" ? "active" : ""}">Atama Planı</button>
+        ${shiftMenu.shift_definitions ? `<button type="button" data-shift-alt="tanımlar" class="${altSekme === "tanımlar" ? "active" : ""}">Vardiya Tanımları</button>` : ""}
+      </div>
+      ${altSekme === "tanımlar" ? `
+      <div class="card"><div class="section-head"><h1>Vardiya tanımları</h1><span class="sag muted small">Hazır vardiya şablonları</span></div>
+        <p class="muted">Örneğin <strong>08:00–17:00</strong> ve <strong>09:00–18:00</strong> vardiyalarını bir kez tanımlayın; sonra çalışanlara gün veya hafta bazında atayın.</p>
+        ${meta.can_manage ? `<div class="card ic"><h3>Yeni vardiya tanımla</h3><div class="form-grid">${saatAlanlari()}</div><div class="form-alt"><button class="primary" id="shift-create">Vardiyayı kaydet</button></div></div>` : ""}
+      </div>
+      <div class="card"><div class="section-head"><h2>Tanımlı vardiyalar</h2><span class="sag rozet">${vardiyalar.length}</span></div>
+        ${vardiyalar.length ? vardiyalar.map((v) => `<div class="form-field-row"><div><strong>${esc(v.name)}</strong> <span class="badge teknik">${esc(v.code)}</span><br><span class="muted small">${esc(v.start_time)}–${esc(v.end_time)} · mola ${esc(v.break_minutes)} dk · ${esc(v.work_model_label)} · ${esc(v.assignment_count)} atama</span>${v.description ? `<br><span class="muted small">${esc(v.description)}</span>` : ""}</div>
+          ${meta.can_manage ? `<div class="form-alt"><button type="button" class="kucuk" data-shift-edit="${esc(v.id)}">Düzenle</button><button type="button" class="kucuk danger" data-shift-delete="${esc(v.id)}">Sil</button></div>` : ""}</div>`).join("") : `<div class="bos">Henüz vardiya tanımı yok.</div>`}
+      </div>` : altSekme === "plan" ? `
+      <div class="card"><div class="section-head"><h1>Vardiya atama / plan</h1><span class="sag muted small">Gün veya hafta bazlı</span></div>
+        ${meta.can_assign ? `<p class="muted">Bir vardiya seçip tek bir güne veya seçtiğiniz haftanın günlerine atayın. Mevcut planı değiştirmek için değiştirme seçeneğini kullanın.</p>
+        <div><label>Çalışan ara ve seç</label><input id="shift-employee-search" placeholder="Ad, çalışan no veya birim ara"><div id="shift-employee-picker" class="calisan-secici">${employees.map((e) => `<label class="calisan-secici-satir" data-arama="${esc(`${e.user_name || e.user_email || e.employee_no} ${e.employee_no} ${e.department || ""}`.toLocaleLowerCase("tr-TR"))}"><input type="checkbox" class="shift-employee-option" value="${esc(e.id)}"><span><strong>${esc(e.user_name || e.user_email || e.employee_no)}</strong><small>${esc(e.employee_no)} · ${esc(e.department || "Birim yok")}</small></span></label>`).join("") || `<span class="muted small">Kapsamınızda seçilebilir çalışan yok.</span>`}</div><span id="shift-employee-search-count" class="muted small">${employees.length} çalışan · seçilen: 0</span></div>
+        <div><label>Vardiya</label><select id="shift-assignment-shift">${vardiyalar.map((v) => `<option value="${esc(v.id)}">${esc(v.name)} · ${esc(v.start_time)}–${esc(v.end_time)}</option>`).join("")}</select>
+          <label>Plan türü</label><select id="shift-plan-mode"><option value="daily">Tek gün</option><option value="weekly">Haftalık / tekrarlı</option></select>
+          <div id="shift-daily-fields"><label>Tarih</label><input id="shift-date" type="date" value="${bugun}"></div>
+          <div id="shift-weekly-fields" hidden><label>Başlangıç</label><input id="shift-week-start" type="date" value="${bugun}"><label>Bitiş</label><input id="shift-week-end" type="date" value="${bugun}"><label>Haftanın günleri</label><div class="form-secim-kutusu">${[["0","Pzt"],["1","Sal"],["2","Çar"],["3","Per"],["4","Cum"],["5","Cmt"],["6","Paz"]].map(([k, l]) => `<label><input type="checkbox" class="shift-weekday" value="${k}"${Number(k) < 5 ? " checked" : ""}> ${l}</label>`).join(" ")}</div></div>
+          <label><input id="shift-replace" type="checkbox"> Mevcut planı değiştir</label><label>Not</label><textarea id="shift-note" rows="2" placeholder="İsteğe bağlı açıklama"></textarea></div></div>
+        <div class="form-alt"><button class="primary" id="shift-assign">Vardiyayı ata</button></div>` : `<p class="muted">Vardiya atamak için <code>shift.assign</code> yetkisi gerekir.</p>`}
+      </div>
+      <div class="card"><div class="section-head"><h2>Görüntüleme kapsamımdaki atamalar</h2></div>
+        <p class="muted small">Yalnızca kendi vardiyalarınız ve aktif birincil bağlı çalışanlarınızın atamaları gösterilir.</p>
+        <div id="shift-assignments-table"><p class="muted">Yükleniyor…</p></div>
+      </div>` : `
+      <div class="card"><div class="section-head"><h1>Vardiya kontrolü</h1><span class="sag muted small">Vardiya · izin · serbest zaman · fazla mesai</span></div>
+        <p class="muted">Onaylanmış izin, serbest zaman ve fazla mesai kayıtları vardiya planıyla aynı listede gösterilir.</p>
+        <div class="filtre-bar"><div style="flex:1 1 320px"><label>Çalışan ara ve seç</label><input id="shift-control-search" placeholder="Ad, çalışan no veya birim ara"><div id="shift-control-picker" class="calisan-secici"></div><span id="shift-control-search-count" class="muted small">Çalışan seçilmedi</span></div><div><label>Hafta seç</label><input id="shift-control-week" type="date"></div><div class="muted small">Pazartesi–Pazar açık gün kolonlarıyla gösterilir.</div></div>
+        <div id="shift-control-table"><p class="muted">Yükleniyor…</p></div>
+      </div>`}
+    </div>`;
+    tarihAraligiBagla("shift-week-start", "shift-week-end");
+    panel.querySelectorAll("[data-shift-alt]").forEach((b) => b.addEventListener("click", () => yukleVardiya(b.dataset.shiftAlt)));
+    const create = document.getElementById("shift-create");
+    if (create) create.addEventListener("click", async () => {
+      try {
+        await PERSOPYRO_UI.cagir("/test-ui/api/shifts", { method: "POST", body: shiftFormBody() });
+        PERSOPYRO_UI.mesaj("ok", "Vardiya tanımı oluşturuldu."); await yukleVardiya("tanımlar");
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    panel.querySelectorAll("[data-shift-edit]").forEach((b) => b.addEventListener("click", () => vardiyaDuzenle(b.dataset.shiftEdit, vardiyalar)));
+    panel.querySelectorAll("[data-shift-delete]").forEach((b) => b.addEventListener("click", () => vardiyaSil(b.dataset.shiftDelete)));
+    const mode = document.getElementById("shift-plan-mode");
+    if (mode) mode.addEventListener("change", () => {
+      document.getElementById("shift-daily-fields").hidden = mode.value !== "daily";
+      document.getElementById("shift-weekly-fields").hidden = mode.value !== "weekly";
+    });
+    const shiftEmployeeSearch = document.getElementById("shift-employee-search");
+    const shiftPicker = document.getElementById("shift-employee-picker");
+    const shiftEmployeeIds = () => [...document.querySelectorAll(".shift-employee-option:checked")].map((x) => x.value);
+    if (shiftEmployeeSearch && shiftPicker) {
+      shiftEmployeeSearch.addEventListener("input", () => {
+        const q = shiftEmployeeSearch.value.trim().toLocaleLowerCase("tr-TR");
+        let count = 0;
+        [...shiftPicker.querySelectorAll(".calisan-secici-satir")].forEach((row) => {
+          const uygun = !q || row.dataset.arama.includes(q);
+          row.hidden = !uygun;
+          if (uygun) count += 1;
+        });
+        const sonuc = document.getElementById("shift-employee-search-count");
+        if (sonuc) sonuc.textContent = `${count} çalışan bulundu · seçilen: ${shiftEmployeeIds().length}`;
+      });
+      shiftPicker.addEventListener("change", () => { const sonuc = document.getElementById("shift-employee-search-count"); if (sonuc) sonuc.textContent = `${[...shiftPicker.querySelectorAll(".calisan-secici-satir:not([hidden])")].length} çalışan bulundu · seçilen: ${shiftEmployeeIds().length}`; });
+    }
+    const assign = document.getElementById("shift-assign");
+    if (assign) assign.addEventListener("click", async () => {
+      const secili = shiftEmployeeIds();
+      const weekly = mode.value === "weekly";
+      const body = { employee_ids: secili, shift_id: document.getElementById("shift-assignment-shift").value, mode: mode.value, replace_existing: document.getElementById("shift-replace").checked, note: document.getElementById("shift-note").value.trim() };
+      if (weekly) { body.start_date = document.getElementById("shift-week-start").value; body.end_date = document.getElementById("shift-week-end").value; body.weekdays = [...document.querySelectorAll(".shift-weekday:checked")].map((x) => Number(x.value)); }
+      else body.dates = [document.getElementById("shift-date").value];
+      try { const sonuc = await PERSOPYRO_UI.cagir("/test-ui/api/shift-assignments", { method: "POST", body }); PERSOPYRO_UI.mesaj("ok", `${sonuc.data.count} günlük vardiya ataması yapıldı.`); await yukleVardiya("plan"); } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
+    if (altSekme === "plan") {
+      const bas = new Date(); const son = new Date(); son.setDate(son.getDate() + 30);
+      const fmt = (d) => d.toISOString().slice(0, 10);
+      const plan = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-assignments?from=${fmt(bas)}&to=${fmt(son)}`);
+      const rows = plan.data || [];
+      const sayfaBoyutuId = "shift-assignment-page-size";
+      let sayfa = 1;
+      let sayfaBoyutu = 5;
+      const tablo = document.getElementById("shift-assignments-table");
+      const renderAssignments = () => {
+        const sayfaSayisi = Math.max(1, Math.ceil(rows.length / sayfaBoyutu));
+        sayfa = Math.min(sayfa, sayfaSayisi);
+        if (!rows.length) { tablo.innerHTML = `<div class="bos">Görüntüleme kapsamınızda yaklaşan vardiya ataması yok.</div>`; return; }
+        const gorunenler = rows.slice((sayfa - 1) * sayfaBoyutu, sayfa * sayfaBoyutu);
+        const islemTarihi = (value) => value ? new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Istanbul" }).format(new Date(value)) : "—";
+        tablo.innerHTML = `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>İşlem tarihi</th><th>İşlem yapılan tarih</th><th>Çalışan</th><th>Birim</th><th>Vardiya</th><th>Atamayı yapan</th>${meta.can_assign ? "<th>İşlem</th>" : ""}</tr></thead><tbody>${gorunenler.map((a) => `<tr><td>${esc(islemTarihi(a.created_at))}</td><td>${esc(a.work_date)}</td><td>${esc(a.employee_name)} <span class="muted small">${esc(a.employee_no)}</span></td><td>${esc(a.department || "—")}</td><td><strong>${esc(a.shift_name)}</strong> · ${esc(a.start_time)}–${esc(a.end_time)}</td><td>${esc(a.assigned_by || "—")}</td>${meta.can_assign ? `<td><button type="button" class="kucuk" data-shift-assignment-edit="${esc(a.id)}">Düzenle</button></td>` : ""}</tr>`).join("")}</tbody></table></div><div class="shift-log-pagination"><label>Sayfada göster <select id="${sayfaBoyutuId}"><option value="5"${sayfaBoyutu === 5 ? " selected" : ""}>5</option><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label><span class="muted small">${rows.length} kayıt · Sayfa ${sayfa} / ${sayfaSayisi}</span><div><button type="button" class="kucuk" data-page-prev${sayfa <= 1 ? " disabled" : ""}>Önceki</button> <button type="button" class="kucuk" data-page-next${sayfa >= sayfaSayisi ? " disabled" : ""}>Sonraki</button></div></div>`;
+        tablo.querySelector(`#${sayfaBoyutuId}`).addEventListener("change", (event) => { sayfaBoyutu = Number(event.target.value); sayfa = 1; renderAssignments(); });
+        tablo.querySelector("[data-page-prev]").addEventListener("click", () => { sayfa -= 1; renderAssignments(); });
+        tablo.querySelector("[data-page-next]").addEventListener("click", () => { sayfa += 1; renderAssignments(); });
+        tablo.querySelectorAll("[data-shift-assignment-edit]").forEach((button) => button.addEventListener("click", () => vardiyaAtamaDuzenle(button.dataset.shiftAssignmentEdit, rows, vardiyalar)));
+      };
+      renderAssignments();
+    }
+    if (altSekme === "control") {
+      const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const monday = (value) => { const d = new Date(`${value}T00:00:00`); const day = d.getDay(); d.setDate(d.getDate() - ((day + 6) % 7)); return d; };
+      const weekInput = document.getElementById("shift-control-week");
+      const employeePicker = document.getElementById("shift-control-picker");
+      const employeeSearch = document.getElementById("shift-control-search");
+      let selectedEmployeeIds = [];
+      const today = new Date(); const first = monday(fmt(today)); weekInput.value = fmt(first);
+      const bosDurum = (mesaj) => { document.getElementById("shift-control-table").innerHTML = `<div class="bos">${esc(mesaj)}</div>`; };
+      const renderWeek = async () => {
+        if (!selectedEmployeeIds.length) { bosDurum("Haftalık vardiya kontrolü için önce çalışan seçin."); return; }
+        const start = monday(weekInput.value); const days = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"].map((label, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return { label, iso: fmt(d), display: `${label} ${d.getDate()}.${String(d.getMonth() + 1).padStart(2, "0")}` }; });
+        const end = new Date(start); end.setDate(end.getDate() + 6);
+        const seciliTarih = new Date(`${weekInput.value}T00:00:00`);
+        const ayBaslangic = new Date(seciliTarih.getFullYear(), seciliTarih.getMonth(), 1);
+        const ayBitis = new Date(seciliTarih.getFullYear(), seciliTarih.getMonth() + 1, 0);
+        const sorguBaslangic = start < ayBaslangic ? start : ayBaslangic;
+        const sorguBitis = end > ayBitis ? end : ayBitis;
+        const secim = selectedEmployeeIds.map((id) => `employee_id=${encodeURIComponent(id)}`).join("&");
+        const kontrol = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-control?from=${fmt(sorguBaslangic)}&to=${fmt(sorguBitis)}&${secim}`);
+        const events = kontrol.data || []; const employees = (kontrol.meta?.employees || []).filter((e) => selectedEmployeeIds.includes(e.id));
+        const weekEvents = events.filter((e) => e.date >= fmt(start) && e.date <= fmt(end));
+        const formatDakika = (dakika) => `${Math.floor(dakika / 60)} saat${dakika % 60 ? ` ${dakika % 60} dk` : ""}`;
+        const vardiyaDakikasi = (employeeId, bas, son) => events
+          .filter((e) => e.kind === "shift" && e.employee_id === employeeId && e.date >= fmt(bas) && e.date <= fmt(son))
+          .reduce((toplam, e) => toplam + Number(e.duration_minutes || 0), 0);
+        const byCell = (id, iso) => weekEvents.filter((e) => e.employee_id === id && e.date === iso);
+        const eventHtml = (e) => `<div class="vardiya-hucre olay-${esc(e.kind)}"><strong>${esc(e.title)}</strong><span>${esc(e.time)}</span><small>${esc(e.kind_label)}</small></div>`;
+        document.getElementById("shift-control-table").innerHTML = employees.length ? `<div class="vardiya-legend"><span class="pill">Vardiya</span><span class="pill approved">İzin</span><span class="pill ok">Serbest zaman</span><span class="pill pending">Fazla mesai</span><span class="pill danger">Çakışma</span></div><p class="muted small">Saat toplamları atanmış vardiyalardan hesaplanır; mola süresi düşülür.</p><div class="tablo-kaydir"><table class="data-table vardiya-hafta"><thead><tr><th>Çalışan</th>${days.map((d) => `<th>${d.display}</th>`).join("")}</tr></thead><tbody>${employees.map((employee) => `<tr><td><strong>${esc(employee.employee)}</strong><br><span class="muted small">${esc(employee.employee_no)} · ${esc(employee.department || "—")}</span><br><span class="muted small">Bu hafta: <strong>${formatDakika(vardiyaDakikasi(employee.id, start, end))}</strong><br>Bu ay: <strong>${formatDakika(vardiyaDakikasi(employee.id, ayBaslangic, ayBitis))}</strong></span></td>${days.map((d) => `<td>${byCell(employee.id, d.iso).map(eventHtml).join("") || '<span class="muted small">—</span>'}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="bos">Çalışan bulunamadı.</div>`;
+      };
+      const ilk = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-control?from=${fmt(first)}&to=${fmt(first)}`);
+      const controlEmployees = ilk.meta?.employees || [];
+      employeePicker.innerHTML = controlEmployees.map((employee) => `<label class="calisan-secici-satir" data-arama="${esc(`${employee.employee} ${employee.employee_no} ${employee.department || ""}`.toLocaleLowerCase("tr-TR"))}"><input type="checkbox" class="shift-control-option" value="${esc(employee.id)}"><span><strong>${esc(employee.employee)}</strong><small>${esc(employee.employee_no)} · ${esc(employee.department || "Birim yok")}</small></span></label>`).join("") || `<span class="muted small">Kapsamınızda çalışan bulunamadı.</span>`;
+      employeeSearch.addEventListener("input", () => { const q = employeeSearch.value.trim().toLocaleLowerCase("tr-TR"); let count = 0; [...employeePicker.querySelectorAll(".calisan-secici-satir")].forEach((row) => { const uygun = !q || row.dataset.arama.includes(q); row.hidden = !uygun; if (uygun) count += 1; }); const sonuc = document.getElementById("shift-control-search-count"); if (sonuc) sonuc.textContent = `${count} çalışan bulundu · seçilen: ${selectedEmployeeIds.length}`; });
+      employeePicker.addEventListener("change", () => { selectedEmployeeIds = [...employeePicker.querySelectorAll(".shift-control-option:checked")].map((x) => x.value); const sonuc = document.getElementById("shift-control-search-count"); if (sonuc) sonuc.textContent = `${[...employeePicker.querySelectorAll(".calisan-secici-satir:not([hidden])")].length} çalışan bulundu · seçilen: ${selectedEmployeeIds.length}`; renderWeek(); });
+      weekInput.addEventListener("change", renderWeek);
+      bosDurum("Haftalık vardiya kontrolü için önce çalışan seçin.");
+    }
+  }
+
+  function shiftFormBody(v = null) {
+    return { code: document.getElementById("shift-code").value.trim(), name: document.getElementById("shift-name").value.trim(), start_time: document.getElementById("shift-start").value, end_time: document.getElementById("shift-end").value, break_minutes: Number(document.getElementById("shift-break").value || 0), crosses_midnight: document.getElementById("shift-midnight").checked, work_model: document.getElementById("shift-model").value, description: document.getElementById("shift-description").value.trim() };
+  }
+
+  async function vardiyaDuzenle(id, vardiyalar) {
+    const v = vardiyalar.find((x) => x.id === id) || {};
+    const onay = await onayModali("Vardiyayı düzenle", `<label>Ad</label><input id="shift-edit-name" value="${esc(v.name)}"><label>Başlangıç</label><input id="shift-edit-start" type="time" value="${esc(v.start_time)}"><label>Bitiş</label><input id="shift-edit-end" type="time" value="${esc(v.end_time)}"><label>Mola (dakika)</label><input id="shift-edit-break" type="number" value="${esc(v.break_minutes)}"><label><input id="shift-edit-midnight" type="checkbox"${v.crosses_midnight ? " checked" : ""}> Gece yarısını aşar</label><label>Açıklama</label><textarea id="shift-edit-description">${esc(v.description || "")}</textarea>`, "Kaydet");
+    if (!onay) return;
+    try { await PERSOPYRO_UI.cagir(`/test-ui/api/shifts/${id}/update`, { method: "POST", body: { name: document.getElementById("shift-edit-name").value.trim(), start_time: document.getElementById("shift-edit-start").value, end_time: document.getElementById("shift-edit-end").value, break_minutes: Number(document.getElementById("shift-edit-break").value || 0), crosses_midnight: document.getElementById("shift-edit-midnight").checked, description: document.getElementById("shift-edit-description").value.trim() } }); PERSOPYRO_UI.mesaj("ok", "Vardiya güncellendi."); await yukleVardiya("tanımlar"); } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  async function vardiyaAtamaDuzenle(id, atamalar, vardiyalar) {
+    const atama = atamalar.find((x) => x.id === id);
+    if (!atama) return;
+    const secenekler = vardiyalar.map((v) => `<option value="${esc(v.id)}"${v.id === atama.shift_id ? " selected" : ""}>${esc(v.name)} · ${esc(v.start_time)}–${esc(v.end_time)}</option>`).join("");
+    const onay = await onayModali(
+      "Vardiya atamasını düzenle",
+      `<p><strong>${esc(atama.employee_name)}</strong> · ${esc(atama.work_date)}</p>
+       <label>Vardiya</label><select id="shift-assignment-edit-shift">${secenekler}</select>
+       <label>Not</label><textarea id="shift-assignment-edit-note" rows="2">${esc(atama.note || "")}</textarea>`,
+      "Kaydet"
+    );
+    if (!onay) return;
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/shift-assignments/${id}/update`, {
+        method: "POST",
+        body: {
+          shift_id: document.getElementById("shift-assignment-edit-shift").value,
+          note: document.getElementById("shift-assignment-edit-note").value.trim(),
+        },
+      });
+      PERSOPYRO_UI.mesaj("ok", "Vardiya ataması güncellendi.");
+      await yukleVardiya("plan");
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  async function vardiyaSil(id) {
+    const onay = await onayModali("Vardiyayı sil", "<p>Bu vardiya tanımını soft-delete ile kaldırmak istiyor musunuz?</p>", "Sil");
+    if (!onay) return;
+    try { await PERSOPYRO_UI.cagir(`/test-ui/api/shifts/${id}/delete`, { method: "POST", body: { reason: "Vardiya tanımı kaldırıldı" } }); PERSOPYRO_UI.mesaj("ok", "Vardiya silindi."); await yukleVardiya("tanımlar"); } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
 
   // --- Onaylar -------------------------------------------------------------
@@ -2733,14 +3092,18 @@ tıklanınca kapanır.
           ${roller ? (roller.data.length ? roller.data.map((r) => `
             <div class="rol-kart">
               <div class="ust"><strong>${esc(r.name)}</strong>
-                <span class="badge teknik">${esc(r.code)}</span></div>
+                <span class="badge teknik">${r.role_type === "default" ? "Hazır rol" : r.role_type === "system" ? "Sistem rolü" : "Özel rol"}</span></div>
+              ${r.description ? `<p class="muted small">${esc(r.description)}</p>` : ""}
+              ${r.code === "tenant_admin" ? '<span class="badge ok">Tüm şirket yetkileri açık</span>' : ""}
               <div class="alt">${esc(r.scope_type_label)} · seviye ${esc(r.hierarchy_level || "—")} · ${esc(r.permission_count)} izin ·
-                ${esc(r.user_count)} atama</div>
+                ${esc(r.user_count)} etkin atama · ${r.is_assignable ? "atanabilir" : "atamaya kapalı"}</div>
               <div class="action-bar">
                 ${yetkili
                   ? `<button class="primary kucuk" data-yetki="${esc(r.id)}">Yetkileri düzenle</button>
-                     ${r.role_type === "custom" && r.can_edit_meta
-                       ? `<button class="kucuk" data-rol-duzenle="${esc(r.id)}">Rolü düzenle</button>` : ""}`
+                     <button class="kucuk" data-rol-duzenle="${esc(r.id)}">Rolü düzenle</button>
+                     ${r.can_delete
+                       ? `<button class="kucuk danger" data-rol-sil="${esc(r.id)}">Rolü sil</button>`
+                       : `<span class="muted small" title="${esc(r.delete_block_reason)}">${esc(r.delete_block_reason)}</span>`}`
                   : `<button class="kucuk" data-yetki="${esc(r.id)}">Yetkileri görüntüle</button>`}
               </div>
             </div>`).join("") : `<div class="bos">Tanımlı rol yok.</div>`)
@@ -2755,6 +3118,8 @@ tıklanınca kapanır.
       d.addEventListener("click", () => yetkiEditoru(d.dataset.yetki)));
     document.querySelectorAll("[data-rol-duzenle]").forEach((d) =>
       d.addEventListener("click", () => rolDuzenle(d.dataset.rolDuzenle, roller.data)));
+    document.querySelectorAll("[data-rol-sil]").forEach((d) =>
+      d.addEventListener("click", () => rolSil(d.dataset.rolSil)));
     const olustur = document.getElementById("rol-olustur");
     if (olustur) olustur.addEventListener("click", async () => {
       try {
@@ -2773,14 +3138,14 @@ tıklanınca kapanır.
   async function rolDuzenle(roleId, roller) {
     const r = (roller || []).find((x) => x.id === roleId) || {};
     const onay = await onayModali("Rolü düzenle",
-      `<p><strong>${esc(r.name || "")}</strong> (<code>${esc(r.code || "")}</code>)</p>
+      `<p><strong>${esc(r.name || "")}</strong></p>
        <label>Rol adı</label><input id="rol-yeni-ad" value="${esc(r.name || "")}">
        <label>Kapsam tipi</label>
        <select id="rol-yeni-kapsam">
-         <option value="TENANT">Tüm kiracı</option>
-         <option value="UNIT">Seçili birim + alt birimleri</option>
-         <option value="UNIT_DIRECT">Yalnızca seçili birim</option>
-         <option value="SELF">Yalnızca kendi kaydı</option>
+         <option value="TENANT">Şirket genelinde</option>
+         <option value="UNIT">Atandığı departman ve alt departmanları</option>
+         <option value="UNIT_DIRECT">Yalnızca atandığı departman</option>
+         <option value="SELF">Yalnızca kendi hesabı ve çalışan kaydı</option>
        </select>
        <label>Şirket içi hiyerarşi (1–30)</label>
        <input id="rol-yeni-seviye" type="number" min="1" max="30" value="${esc(r.hierarchy_level || 30)}">
@@ -2797,6 +3162,24 @@ tıklanınca kapanır.
         reason: document.getElementById("rol-duzenle-gerekce").value.trim(),
       }});
       PERSOPYRO_UI.mesaj("ok", "Rol güncellendi.");
+      await yukleYetki();
+    } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  async function rolSil(roleId) {
+    const onay = await onayModali(
+      "Rolü sil",
+      `<p>Bu rolü soft-delete ile kaldırmak istiyor musunuz?</p>
+       <label>Gerekçe</label><input id="rol-sil-gerekce" placeholder="Örn. görev yapısı değişti">`,
+      "Rolü sil"
+    );
+    if (!onay) return;
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/roles/${roleId}/delete`, {
+        method: "POST",
+        body: { reason: document.getElementById("rol-sil-gerekce").value.trim() },
+      });
+      PERSOPYRO_UI.mesaj("ok", "Rol silindi (soft delete, OD21).");
       await yukleYetki();
     } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
@@ -2973,10 +3356,10 @@ tıklanınca kapanır.
       <div class="card"><h1>Kapsam ve yetki</h1>
         <div class="grid">
           <div><h3>Roller</h3>${k.roles.map((r) => `<span class="pill">${esc(r.name)}</span>`).join(" ") || "—"}
-            <div class="muted small">${k.roles.map((r) => esc(r.code)).join(", ")}</div></div>
+            <div class="muted small">${k.roles.map((r) => esc(r.name || r.code)).join(", ")}</div></div>
           <div><h3>Kapsam</h3>${k.scope.tenant_wide
-            ? "Tüm kiracı"
-            : (k.scope.unit_count ? esc(k.scope.unit_count) + " birim + alt birimleri" : "Yalnızca kendi kaydı")}</div>
+            ? "Şirket genelinde"
+            : (k.scope.unit_count ? esc(k.scope.unit_count) + " departman + alt departmanları" : "Yalnızca kendi hesabı ve çalışan kaydı")}</div>
           <div><h3>Çalışan</h3>${k.employee
             ? esc(k.employee.employee_no) + (k.employee.position ? " · " + esc(k.employee.position) : "")
             : "Bu kullanıcıya bağlı çalışan kaydı yok."}</div>
@@ -3011,6 +3394,7 @@ tıklanınca kapanır.
     employees: yukleCalisanlar,
     leave: yukleIzin,
     overtime: yukleFazlaMesai,
+    shifts: yukleVardiya,
     approvals: yukleOnaylar,
     raw: yukleYetki,
   };
@@ -3021,6 +3405,7 @@ tıklanınca kapanır.
     employees: "employees",
     leave: "leave",
     overtime: "overtime",
+    shifts: "shifts",
     approvals: "approvals",
     raw: "roles_manage",
   };

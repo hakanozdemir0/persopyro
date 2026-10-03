@@ -129,3 +129,131 @@ Sıradaki iş
 - Mevcut P5a V1 davranışı korunur: onaylanan fazla mesai henüz izin/ücret karşılığı üretmez.
 - Overtime V2 bir sonraki ilgili ürün paketi olarak ele alınacaktır.
 - Commit, push ve fresh-install işlemleri kullanıcı onayı olmadan yapılmayacaktır.
+
+PLATFORM PANELİ — şirket oluşturma mikro adımı
+----------------------------------------------
+- `/platform/` ekranına SUPERADMIN için şirket + ilk `tenant_admin` hesabı oluşturma formu ve POST akışı eklendi.
+- Şirket, varsayılan kiracı rolleri, yönetici hesabı ve `tenant_admin` rol ataması aynı default DB transaction'ında oluşturulur; platform yetkisi endpoint'te ayrıca doğrulanır.
+- İlk yönetici parolası Django parola doğrulamasından geçer; parolayı platform denetim olayına kaydetmez.
+- OD1/OD4'e aykırı, SUPERADMIN'a koşulsuz PII izni veren etkin platform rol bağı tespit edilip `platform.0010_revoke_unapproved_tenant_pii` ile soft-delete edildi. PII onaysız gösterilmez. Gerekçeli talep/çift onay/süreli erişim akışı henüz uygulanmadı.
+- Uygulanan DB migration'ları: `tenancy.0010`, `platform.0006`–`platform.0010`.
+- Targeted test: panel, platform authorization ve bootstrap grubu — 49 passed. Test DB teardown sırasında devam eden bağlantı nedeniyle bir uyarı görüldü.
+- `manage.py check`: başarılı. `makemigrations --check --dry-run`: No changes detected. `git diff --check`: başarılı.
+- Canlı DB'de etkin SUPERADMIN bağları okundu: `platform.tenant.create` mevcut, `platform.tenant.pii.read` etkin değil.
+- Değiştirilen/oluşturulan dosyalar:
+  - `/home/hakan/persopyro/apps/platform/constants.py`
+  - `/home/hakan/persopyro/apps/platform/views.py`
+  - `/home/hakan/persopyro/apps/platform/urls.py`
+  - `/home/hakan/persopyro/apps/platform/templates/platform/dashboard.html`
+  - `/home/hakan/persopyro/apps/platform/migrations/0010_revoke_unapproved_tenant_pii.py`
+  - `/home/hakan/persopyro/tests/test_platform_panel.py`
+  - `/home/hakan/persopyro/tests/test_platform_authorization.py`
+  - `/home/hakan/persopyro/TUR SONU RAPORU.txt`
+
+Güvenlik/ürün TODO
+------------------
+- PII erişimi, OD1/OD4'teki gerekçeli talep, farklı ikinci onaylayıcı ve süreli grant akışı tamamlanana kadar kapalı kalmalıdır.
+- Bu adım kullanıcı silme işini içermedi.
+- Test DB teardown bağlantı uyarısının kaynağı ayrıca incelenmelidir.
+
+PLATFORM PANELİ — kullanıcı arayüzü ve çalışan durumları mikro adımı
+-------------------------------------------------------------------
+- Platform giriş, şirket listesi ve çalışan listesi; test-ui tasarım değişkenleriyle
+  (renk, kart, tablo, form, odak halkası ve dar ekran düzeni) ortak bir kabuğa alındı.
+- Çalışan durum kodu doğrudan gösterilmek yerine `Employee.get_status_display()`
+  ile Türkçe etiketleniyor (ör. active → Aktif).
+- `tests/test_platform_panel.py`: 10 passed; test DB teardown sırasında açık bağlantı
+  uyarısı devam etti. `manage.py check`: başarılı; `git diff --check`: başarılı.
+- Değiştirilen/oluşturulan dosyalar:
+  - `/home/hakan/persopyro/apps/platform/templates/platform/base.html`
+  - `/home/hakan/persopyro/apps/platform/templates/platform/dashboard.html`
+  - `/home/hakan/persopyro/apps/platform/templates/platform/login.html`
+  - `/home/hakan/persopyro/apps/platform/templates/platform/people.html`
+  - `/home/hakan/persopyro/apps/platform/views.py`
+  - `/home/hakan/persopyro/tests/test_platform_panel.py`
+  - `/home/hakan/persopyro/TUR SONU RAPORU.txt`
+- Kullanıcı şirket profili alanlarının (unvan, vergi numarası, iletişim, adres)
+  detay ekranında olmasını istedi; OD20 nedeniyle platform kayıt defterine kopyalanmayacak.
+- Kullanıcı tasarımı ve kodlama/test aşamasına geçişi onayladı; veritabanına
+  migration uygulamak için ayrıca onay istenecek. OD15/OD18 **kapalı**:
+  şirket yetkilisi önceden onaylamaz; AccessGrant erişimi/işlemi bittikten sonra
+  uygulama içi + e-posta bildirimi alır, kaydı görüp itiraz edebilir. Platform
+  onayları birbirinden farklı iki kullanıcıdan gelir; varsayılan süre ve tavan
+  60 dakika; bildirimlerde PII eski/yeni değerleri yer almaz.
+- `docs/AUTHORIZATION.md` ve `docs/ARCHITECTURE.md` güncellendi (K34).
+  `tests/test_platform_access_decisions.py` karar invariantını test ediyor.
+- İlk kod dilimi: `/home/hakan/persopyro/apps/platform/access_requests.py` içinde
+  yalnızca saf istek doğrulaması (işlem/alan allowlist'i, anlamlı gerekçe, 1–60 dk).
+  Kalıcı kayıt, izin kontrolü, çift onay, gerçek profil okuma/düzenleme, bildirim
+  ve panel bağlantısı henüz uygulanmadı.
+- Doğrulama: `tests/test_platform_access_requests.py` ve
+  `tests/test_platform_access_decisions.py` birlikte **5 passed**.
+- Yeni test dosyaları: `/home/hakan/persopyro/tests/test_platform_access_decisions.py`,
+  `/home/hakan/persopyro/tests/test_platform_access_requests.py`.
+- Kullanıcı, şirket yetkilisine kullanıcı limiti, şirket durumu ve diğer şirket
+  değişikliklerinden sonra bildirim gönderilmesini de istedi: uygulama içi + e-posta.
+- Repoda ortak bildirim sistemi henüz yok; e-posta teslimi, bildirim kuyruğu,
+  AccessGrant saklama/onay akışı ve şirket detay ekranı sonraki dilimlerdir.
+- Güvenlik kısıtı: mevcut regresyon testi `persopyro_platform` rolünün `hr.tenants`
+  tablosuna doğrudan INSERT/UPDATE/DELETE yapamadığını doğrular. Bu yetki
+  genişletilmeyecek; kontrollü yazma yolu/RLS tasarımı ayrıca uygulanıp test edilecek.
+- Bu dilimde hiçbir migration oluşturulmadı/uygulanmadı ve canlı DB'ye değişiklik
+  yapılmadı.
+
+DEVAM — 2026-10-02
+------------------
+- Mevcut çalışma ağacında platform erişim talebi akışı, `platform.0011` migration
+  taslağı, çift onay servisi ve şirket detay formu bulundu; bunlar korunup
+  doğrulandı.
+- Talep alanları allowlist ile sınırlıdır; gerekçe en az 20 karakter/3 kelime,
+  süre 1–60 dakikadır. Erişim grant'i yalnız iki ayrı kullanıcı onayından sonra
+  oluşturulur; talep sahibi kendi talebini onaylayamaz.
+- Doğrulama: `tests/test_platform_access_requests.py`,
+  `tests/test_platform_access_decisions.py`, `tests/test_platform_panel.py` —
+  **15 passed**. Test veritabanı teardown sırasında başka bağlantı uyarısı verdi.
+- `manage.py check`: başarılı. `git diff --check`: başarılı.
+- İlk aşamada `platform.0011` uygulanmadı; aşağıdaki devam adımında kullanıcı onayı
+  alındıktan sonra uygulandı.
+- Sıradaki uygulama adımları: grant denetimli gerçek profil okuma/yazma, kontrollü
+  tenant yazım yolu, işlem sonrası uygulama içi + e-posta outbox bildirimi. Canlı
+  migration için önceki açık onay koşulu geçerlidir.
+
+ŞİRKET PROFİLİ OKUMA — 2026-10-02
+---------------------------------
+- Aktif `read` grant'i ile gerçek `hr.tenants` alanları görüntülenebilir hâle
+  getirildi. Yalnız grant'teki alanlar okunur; yalnız talep sahibi grant'i
+  kullanabilir; grant süresi/iptali `active_access_grant()` tarafından denetlenir.
+- Grant kullanımı, alan adlarıyla platform audit kaydına yazılır; alan değerleri
+  audit kaydına eklenmez. Şirket ayrıntı ekranında onaylı grant için görüntüleme
+  bağlantısı eklendi.
+- Servis regresyon testi grant sahibi/alan filtresini denetler. Platform paneli +
+  erişim talebi/karar testleri: **16 passed**. Test DB teardown uyarısı sürdü.
+- Şirket alanlarını değiştirme, tenant yazım yolu ve işlem sonrası uygulama içi +
+  e-posta bildirimi henüz uygulanmadı. Bu adımlar birlikte tasarlanıp doğrulanacak.
+
+MIGRATION UYGULAMA — 2026-10-02
+-------------------------------
+- Kullanıcı onayı alındıktan sonra `bash scripts/migrate.sh platform
+  0011_access_requests_and_grants` çalıştırıldı.
+- `platform.0011_access_requests_and_grants`: **OK**. Proje betiği ayrıca cache
+  tablosunu doğruladı ve uygulama rolü yetkilerini standart SQL ile tazeledi.
+- Platform paneli/erişim talebi/karar testleri yeniden çalıştırıldı: **16 passed**;
+  test DB teardown sırasında başka bağlantı uyarısı devam etti.
+
+ŞİRKET YÖNETİMİ — 2026-10-02
+-----------------------------
+- SUPERADMIN şirket profilini doğrudan düzenleyebilir; değişen alanlar ve işlemi
+  yapan kişi platform audit kaydında görünür. Şirket profili değişikliği için
+  ek onay akışı kaldırıldı.
+- Şirket oluşturma ve ayrıntı ekranlarında plan, başlangıç/bitiş tarihi, kullanıcı,
+  depolama, aktif çalışan ve toplam çalışan kaydı limitleri düzenlenebilir. Profil
+  alanları şirket bazında seçilir; 0 limit değeri sınırsızdır.
+- Ana listeden bitiş tarihi ve çalışan bağlantısı kaldırıldı. Ayrıntıda hizmet
+  tarihleri, limitler, çalışan özeti/liste ve işlem geçmişi gösterilir.
+- Kaydetme sonunda şirkete e-posta bildirimi isteğe bağlıdır. SMTP hatası kaydı
+  geri almaz; sonuç audit kaydına yazılır.
+- `tenancy.0011_tenant_company_limits` ve `platform.0012_company_profile_fields_and_limits`
+  canlı veritabanına uygulandı.
+- İlgili platform/tenant testleri: **50 passed**. `ruff`, Django sistem kontrolü
+  ve `git diff --check` başarılı. Test veritabanı kapanışında başka bağlantı
+  uyarısı görüldü.

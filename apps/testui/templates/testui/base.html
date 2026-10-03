@@ -37,7 +37,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       /* Ölçüler */
       --r: 12px; --r-sm: 9px; --r-lg: 16px;
       --gap: 16px; --pad: 18px;
-      --page-max: 1400px;
+      --page-max: 1400px; --page-wide-max: 1680px;
       --shadow-sm: 0 1px 2px rgba(16, 24, 40, .06);
       --shadow: 0 1px 3px rgba(16, 24, 40, .07), 0 10px 28px -14px rgba(16, 24, 40, .22);
       --shadow-lg: 0 24px 60px -20px rgba(16, 24, 40, .35);
@@ -67,9 +67,13 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .badge.teknik { font-weight: 600; font-size: 11px; background: #eef2f8;
       color: var(--muted); border-color: var(--line); font-family: var(--mono); }
     header .spacer { margin-left: auto; }
+    .profile-link { display:inline-flex; align-items:center; gap:7px; }
+    .profile-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover;
+      border:1px solid var(--line); background:#fff; }
 
     /* --- Ana yerleşim ------------------------------------------------------- */
     main.page-container { max-width: var(--page-max); margin: 22px auto; padding: 0 20px 60px; }
+    main.page-container:has(#tab-employees) { max-width: var(--page-wide-max); }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
       padding: var(--pad) calc(var(--pad) + 2px); margin-bottom: var(--gap);
       box-shadow: var(--shadow-sm); }
@@ -106,6 +110,13 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .form-field-row { border: 1px solid var(--line); border-radius: var(--r-sm);
       background: #fff; padding: 10px 12px; margin-top: 8px; }
     .form-field-row .form-alt { margin-top: 9px; padding-top: 9px; }
+    .position-list-wrap { margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
+    .position-list-wrap h3 { margin:0 0 8px; font-size:14px; }
+    .position-row { display:flex; justify-content:space-between; align-items:center; gap:14px;
+      padding:10px 0; border-bottom:1px solid var(--line); }
+    .position-row:last-child { border-bottom:0; }
+    .position-edit-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; flex:1; }
+    .position-edit-grid label { display:block; margin:0; }
     .form-secim-kutusu { display: inline-flex; align-items: center; gap: 7px; min-height: 34px;
       padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
       background: #f8fafc; color: var(--fg-soft); font-size: 13px; }
@@ -116,6 +127,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       gap: var(--gap); align-items: start; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
       gap: 12px 16px; align-items: end; }
+    .leave-request-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .form-grid.uc { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
     .form-grid.genislik-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .section-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -221,9 +233,30 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     td .pill + .pill { margin-left: 4px; }
     .tablo-kaydir { overflow-x: auto; margin: 0 -4px; }
     .data-table td.aksiyon, .data-table th.aksiyon { text-align: right; white-space: nowrap; }
+    #calisan-tablosu { min-width: 1250px; }
+    .vardiya-hafta { min-width: 1180px; }
+    .vardiya-hafta th, .vardiya-hafta td { min-width: 150px; }
+    .vardiya-hafta th:first-child, .vardiya-hafta td:first-child { min-width: 220px; position: sticky; left: 0; z-index: 1; background: var(--card); }
+    .vardiya-hucre { display: flex; flex-direction: column; gap: 1px; margin: 2px 0; padding: 5px 6px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 5px; font-size: 12px; }
+    .vardiya-hucre span, .vardiya-hucre small { color: var(--muted); font-size: 11px; }
+    .vardiya-hucre.olay-leave { border-left-color: var(--ok); background: var(--ok-soft); }
+    .vardiya-hucre.olay-free_time { border-left-color: #7c3aed; background: #f5f3ff; }
+    .vardiya-hucre.olay-overtime { border-left-color: var(--warn); background: var(--warn-soft); }
+    .vardiya-legend { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 10px; }
+    .shift-log-pagination { display: flex; align-items: end; justify-content: flex-start; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+    .shift-log-pagination label { display: flex; align-items: center; gap: 7px; margin: 0; }
+    .shift-log-pagination select { width: auto; min-width: 78px; }
     .sayi { text-align: right; font-variant-numeric: tabular-nums; }
     .hucre-iki { display: flex; flex-direction: column; gap: 1px; }
     .hucre-iki .alt { font-size: 12px; color: var(--muted); }
+    .calisan-secici { max-height: 245px; overflow-y: auto; margin-top: 6px; padding: 5px;
+      border: 1px solid var(--line); border-radius: var(--r-sm); background: #fbfcfe; }
+    .calisan-secici-satir { display: flex; align-items: center; gap: 9px; padding: 8px 9px;
+      margin: 0; border-radius: 6px; cursor: pointer; font-weight: 400; }
+    .calisan-secici-satir:hover { background: var(--accent-soft); }
+    .calisan-secici-satir input { flex: 0 0 auto; width: 16px; height: 16px; }
+    .calisan-secici-satir span { display: flex; flex-direction: column; gap: 1px; }
+    .calisan-secici-satir small { color: var(--muted); font-size: 11px; }
 
     /* --- Etiketler / durum -------------------------------------------------- */
     .muted { color: var(--muted); }
@@ -386,6 +419,8 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       .card { padding: 14px; }
       h1 { font-size: 18px; }
       .tabs { padding: 6px 10px 10px; }
+      .position-row { align-items:stretch; flex-direction:column; }
+      .position-edit-grid { grid-template-columns:minmax(0,1fr); }
     }
     @media (prefers-reduced-motion: reduce) {
       * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
@@ -401,6 +436,10 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     {% if user.is_authenticated %}
       <span class="spacer"></span>
       <span class="muted">{{ user.email }}</span>
+      <a class="button profile-link" href="{% url 'test-ui-profile' %}">
+        <img class="profile-avatar" id="header-avatar" src="https://sekalaw.com/wp-content/uploads/2024/09/no-pp.jpg" alt="Profil fotoğrafı">
+        Profil
+      </a>
       <button id="logout-btn" type="button">Çıkış</button>
     {% endif %}
   </header>
@@ -463,7 +502,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
         };
         if (eslesme[statusi] === undefined) return "Beklenmeyen yanıt (" + statusi + ")";
         if (statusi === 500) return eslesme[500];
-        const detay = e.message || "";
+        const detay = e.message || e.detail || "";
         return (eslesme[statusi] + detay).trim();
       },
       // DİKKAT (regresyon): CSRF başlığı yalnızca gövde varken değil, **yazma
@@ -475,8 +514,12 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
         if (!guvenli) basliklar["X-CSRFToken"] = this.csrf();
         const secenekler = { method, headers: basliklar, credentials: "same-origin" };
         if (body !== null) {
-          basliklar["Content-Type"] = "application/json";
-          secenekler.body = JSON.stringify(body);
+          if (body instanceof FormData) {
+            secenekler.body = body;
+          } else {
+            basliklar["Content-Type"] = "application/json";
+            secenekler.body = JSON.stringify(body);
+          }
         }
         const yanit = await fetch(yol, secenekler);
         let govde = null;
@@ -499,8 +542,26 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     // girişe dönülür → geri tuşuyla korunan sayfaya dönülemez.
     // Pencere (modal) davranışı: Escape ile kapat.
     document.addEventListener("keydown", (olay) => {
-      if (olay.key !== "Escape") return;
       const kapak = document.getElementById("modal");
+      if (kapak && !kapak.hidden && olay.key === "Tab") {
+        const odaklanabilirler = [...kapak.querySelectorAll(
+          'button:not([disabled]):not([hidden]), input:not([disabled]):not([hidden]), textarea:not([disabled]):not([hidden]), select:not([disabled]):not([hidden]), a[href], [tabindex]:not([tabindex="-1"])'
+        )].filter((el) => el.getClientRects().length > 0);
+        const ilk = odaklanabilirler[0];
+        const son = odaklanabilirler[odaklanabilirler.length - 1];
+        if (!ilk) {
+          olay.preventDefault();
+          kapak.querySelector(".modal")?.focus();
+        } else if (olay.shiftKey && (document.activeElement === ilk || !kapak.contains(document.activeElement))) {
+          olay.preventDefault();
+          son.focus();
+        } else if (!olay.shiftKey && (document.activeElement === son || !kapak.contains(document.activeElement))) {
+          olay.preventDefault();
+          ilk.focus();
+        }
+        return;
+      }
+      if (olay.key !== "Escape") return;
       if (kapak && !kapak.hidden) {
         kapak.hidden = true;
         const iptal = document.getElementById("modal-cancel");
@@ -528,6 +589,12 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
         try { sessionStorage.clear(); localStorage.clear(); } catch (e) { /* yok sayılır */ }
         window.location.replace("/test-ui/login/");
       });
+    }
+    const avatar = document.getElementById("header-avatar");
+    if (avatar) {
+      PERSOPYRO_UI.cagir("/test-ui/api/me").then(({ data }) => {
+        if (data.employee && data.employee.photo_url) avatar.src = data.employee.photo_url;
+      }).catch(() => {});
     }
   </script>
   {% block script %}{% endblock %}

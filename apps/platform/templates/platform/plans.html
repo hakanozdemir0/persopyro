@@ -1,0 +1,43 @@
+{% extends "platform/base.html" %}
+{% block title %}Planlar · PersoPyro{% endblock %}
+{% block header_actions %}<span class="user-email">{{ email }}</span><a class="button ghost" href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesine dön</a>{% endblock %}
+{% block content %}
+<nav class="panel-tabs" aria-label="Şirket yönetimi">
+  <a href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>
+  <a href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
+  <a class="selected" href="{% url 'platform-plans' %}">Planlar ve plan düzenleme</a>
+</nav>
+<section class="page-heading"><div><p class="eyebrow">Sistem yönetimi</p><h1>Planlar</h1><p>Bir planı düzenlemek için satırındaki “Düzenle” düğmesini seçin. Limitlerde 0 sınırsızdır.</p></div></section>
+{% if saved %}<section class="card" role="status">Plan kaydedildi.</section>{% endif %}{% if removed %}<section class="card" role="status">Plan kaldırıldı.</section>{% endif %}
+{% if error == "in_use" %}<section class="card error" role="alert">Bu plan {{ error_count }} şirkette kullanılıyor. Önce bu şirketleri başka bir plana taşıyın; ardından planı kaldırabilirsiniz.</section>{% endif %}
+<section class="card"><div class="table-wrap"><table><thead><tr><th>Plan</th><th>Açıklama</th><th>Kullanıcı hesabı</th><th>Depolama</th><th>Aktif çalışan</th><th>Toplam kayıt</th><th>Kullanım</th><th>İşlem</th></tr></thead><tbody>
+{% for p in plans %}<tr id="plan-{{ p.0 }}"><td><strong>{{ p.1 }}</strong><div class="muted">{{ p.0 }}</div></td><td>{{ p.2|default:"—" }}</td><td>{% if p.3 == 0 %}Sınırsız{% else %}{{ p.3 }}{% endif %}</td><td>{% if p.4 == 0 %}Sınırsız{% else %}{{ p.4 }} MB{% endif %}</td><td>{% if p.5 == 0 %}Sınırsız{% else %}{{ p.5 }}{% endif %}</td><td>{% if p.6 == 0 %}Sınırsız{% else %}{{ p.6 }}{% endif %}</td><td>{{ p.8 }} şirket</td><td><div class="row-actions">
+<button type="button" data-plan-edit data-code="{{ p.0 }}" data-label="{{ p.1 }}" data-description="{{ p.2 }}" data-users="{{ p.3 }}" data-storage="{{ p.4 }}" data-active="{{ p.5 }}" data-records="{{ p.6 }}">Düzenle</button>
+{% if p.8 == 0 %}<form method="post" onsubmit="return confirm('Bu plan kalıcı olarak kaldırılsın mı?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="code" value="{{ p.0 }}"><button type="submit">Kaldır</button></form>{% else %}<button type="button" disabled title="Önce bu planı kullanan şirketleri başka plana taşıyın">Kaldır</button>{% endif %}
+</div></td></tr>{% empty %}<tr><td colspan="8" class="empty-state">Henüz plan yok.</td></tr>{% endfor %}
+</tbody></table></div></section>
+<section class="card" id="plan-form-card"><h2 id="plan-form-title">Yeni plan ekle</h2><p class="card-intro">Planı listeden seçerek düzenleyebilir veya yeni bir kod vererek plan ekleyebilirsiniz.</p>
+<form method="post" class="form-grid" id="plan-form">{% csrf_token %}<input type="hidden" name="action" value="save">
+<div class="field"><label for="plan-code">Plan kodu</label><input id="plan-code" name="code" pattern="[a-zA-Z0-9_-]+" maxlength="40" required></div>
+<div class="field"><label for="plan-label">Plan adı</label><input id="plan-label" name="label" maxlength="100" required></div>
+<div class="field"><label for="plan-description">Açıklama</label><input id="plan-description" name="description" maxlength="500"></div>
+<div class="field"><label for="plan-users">Şirket kullanıcı hesabı limiti</label><input id="plan-users" name="max_users" type="number" min="0" value="0"></div>
+<div class="field"><label for="plan-storage">Depolama limiti (MB)</label><input id="plan-storage" name="max_storage_mb" type="number" min="0" step="0.01" value="0"></div>
+<div class="field"><label for="plan-active">Aktif çalışan limiti</label><input id="plan-active" name="max_active_employees" type="number" min="0" value="0"></div>
+<div class="field"><label for="plan-records">Toplam çalışan kayıt limiti</label><input id="plan-records" name="max_employee_records" type="number" min="0" value="0"></div>
+<div class="form-actions"><button class="primary" type="submit" id="plan-submit">Planı ekle</button><button type="button" id="plan-reset">Yeni plan</button></div></form></section>
+{% endblock %}
+{% block extra_scripts %}<script>
+(() => {
+  const form = document.getElementById('plan-form');
+  document.querySelectorAll('[data-plan-edit]').forEach((button) => button.addEventListener('click', () => {
+    for (const [key, id] of Object.entries({code:'plan-code',label:'plan-label',description:'plan-description',users:'plan-users',storage:'plan-storage',active:'plan-active',records:'plan-records'})) document.getElementById(id).value = button.dataset[key];
+    document.getElementById('plan-code').readOnly = true;
+    document.getElementById('plan-form-title').textContent = `${button.dataset.label} planını düzenle`;
+    document.getElementById('plan-submit').textContent = 'Değişiklikleri kaydet';
+    document.getElementById('plan-form-card').scrollIntoView({behavior:'smooth'});
+    document.getElementById('plan-label').focus();
+  }));
+  document.getElementById('plan-reset').addEventListener('click', () => { form.reset(); document.getElementById('plan-code').readOnly = false; document.getElementById('plan-form-title').textContent='Yeni plan ekle'; document.getElementById('plan-submit').textContent='Planı ekle'; });
+})();
+</script>{% endblock %}

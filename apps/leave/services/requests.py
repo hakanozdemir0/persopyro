@@ -225,6 +225,45 @@ def _cakisma_guard(
         raise LeaveStateError(CAKISMA_MESAJI)
 
 
+def _fazla_mesai_cakismasi_var(*, employee: Employee, start_date: date, end_date: date) -> bool:
+    """Aynı dönemde gönderilmiş/onaylanmış fazla mesai var mı?"""
+    from apps.overtime.models import OvertimeRequest, OvertimeStatus
+
+    return OvertimeRequest.objects.filter(
+        tenant_id=employee.tenant_id, employee_id=employee.pk,
+        deleted_at__isnull=True,
+        status__in=(OvertimeStatus.PENDING, OvertimeStatus.APPROVED),
+        work_date__gte=start_date, work_date__lte=end_date,
+    ).exists()
+
+
+def _vardiya_cakismasi_var(
+    *, employee: Employee, start_date: date, end_date: date,
+    start_time=None, end_time=None,
+) -> bool:
+    """İzin aralığıyla kesişen aktif vardiya ataması var mı?"""
+    from apps.shifts.models import ShiftAssignment  # noqa: PLC0415
+
+    izin_baslangici = datetime.combine(start_date, start_time or time.min)
+    izin_bitisi = datetime.combine(end_date, end_time or time.max)
+    atamalar = ShiftAssignment.objects.filter(
+        tenant_id=employee.tenant_id,
+        employee_id=employee.pk,
+        deleted_at__isnull=True,
+        work_date__gte=start_date - timedelta(days=1),
+        work_date__lte=end_date,
+    ).select_related("shift")
+    for atama in atamalar:
+        vardiya_baslangici = datetime.combine(atama.work_date, atama.shift.start_time)
+        vardiya_bitis_tarihi = (
+            atama.work_date + timedelta(days=1) if atama.shift.crosses_midnight else atama.work_date
+        )
+        vardiya_bitisi = datetime.combine(vardiya_bitis_tarihi, atama.shift.end_time)
+        if vardiya_baslangici < izin_bitisi and izin_baslangici < vardiya_bitisi:
+            return True
+    return False
+
+
 def _calisani_kilitle(employee_id) -> None:  # noqa: ANN001
     """
     Çalışan satırını kilitler (uygulama düzeyi yarış çözümü).
@@ -298,6 +337,17 @@ def create_leave_request(
         # Yarış güvencesi: aynı çalışan için eşzamanlı talep oluşturma serileştirilir.
         _calisani_kilitle(employee.pk)
         _cakisma_guard(employee=employee, start_date=start_date, end_date=end_date)
+        if _vardiya_cakismasi_var(
+            employee=employee, start_date=start_date, end_date=end_date,
+            start_time=start_time, end_time=end_time,
+        ):
+            raise LeaveStateError(
+                "İzin tarih/saat aralığında planlanmış vardiya bulunduğundan izin oluşturulamaz."
+            )
+        if _fazla_mesai_cakismasi_var(employee=employee, start_date=start_date, end_date=end_date):
+            raise LeaveStateError(
+                "Bu tarih aralığında bekleyen veya onaylanmış fazla mesai bulunduğundan izin oluşturulamaz."
+            )
         request = LeaveRequest.objects.create(
             tenant_id=employee.tenant_id,
             employee=employee,
@@ -357,6 +407,19 @@ def _onaya_sun(request: LeaveRequest, *, actor) -> LeaveRequest:
         end_date=request.end_date,
         exclude_pk=request.pk,
     )
+    if _vardiya_cakismasi_var(
+        employee=request.employee, start_date=request.start_date, end_date=request.end_date,
+        start_time=request.start_time, end_time=request.end_time,
+    ):
+        raise LeaveStateError(
+            "İzin tarih/saat aralığında planlanmış vardiya bulunduğundan izin onaya gönderilemez."
+        )
+    if _fazla_mesai_cakismasi_var(
+        employee=request.employee, start_date=request.start_date, end_date=request.end_date
+    ):
+        raise LeaveStateError(
+            "Bu tarih aralığında bekleyen veya onaylanmış fazla mesai bulunduğundan izin onaya gönderilemez."
+        )
     request.submitted_at = timezone.now()
     request.status = LeaveRequestStatus.PENDING
     request.save(update_fields=["submitted_at", "status", "updated_at"])
@@ -715,6 +778,29 @@ def _karar_snapshot_yaz(request: LeaveRequest, *, karar: str) -> LeaveDecisionSn
 
 def _nihai_onay(request: LeaveRequest, *, actor, otomatik: bool = False) -> LeaveRequest:
     """Nihai onay: bakiye **tek kez** tüketilir, talep `approved` olur."""
+    # Fazla mesai talebi aynı gün onaylanmış veya onay bekliyor olabilir.
+    # İzin onayını da burada kapatmak, iki farklı onay akışının yarışında
+    # sonradan geçersiz bir kombinasyon oluşmasını engeller.
+    from apps.overtime.models import OvertimeRequest, OvertimeStatus
+
+    if OvertimeRequest.objects.filter(
+        tenant_id=request.tenant_id,
+        employee_id=request.employee_id,
+        deleted_at__isnull=True,
+        status__in=(OvertimeStatus.PENDING, OvertimeStatus.APPROVED),
+        work_date__gte=request.start_date,
+        work_date__lte=request.end_date,
+    ).exists():
+        raise LeaveStateError(
+            "Aynı gün için bekleyen veya onaylanmış fazla mesai bulunduğundan izin onaylanamaz."
+        )
+    if _vardiya_cakismasi_var(
+        employee=request.employee, start_date=request.start_date, end_date=request.end_date,
+        start_time=request.start_time, end_time=request.end_time,
+    ):
+        raise LeaveStateError(
+            "İzin tarih/saat aralığında planlanmış vardiya bulunduğundan izin onaylanamaz."
+        )
     if request.leave_type.requires_document and request.document_ref is None:
         raise LeaveStateError(
             f"'{request.leave_type.code}' belge zorunlu türdür: belge referansı olmadan "
@@ -878,6 +964,30 @@ def cancel_leave_request(*, actor, request: LeaveRequest, reason: str) -> LeaveR
             changes={"onceki_durum": durum, "has_reason": bool(gerekce)},
         )
     return kilitli
+
+
+def revise_leave_request(
+    *, actor, request: LeaveRequest, leave_type: LeaveType, start_date: date,
+    end_date: date, reason: str = "", is_half_day: bool = False,
+    start_time=None, end_time=None, requested_days=None,
+) -> LeaveRequest:
+    """Mevcut talebi iptal edip yeni içeriği tek işlemde yeniden onaya sunar."""
+    require_active(actor)
+    if not can_cancel_leave_request(actor, request):
+        raise LeaveAuthorizationError("İzin talebini düzenlemek için talep sahibi yetkisi gerekir.")
+    with transaction.atomic():
+        kilitli = LeaveRequest.objects.select_for_update().get(pk=request.pk)
+        if kilitli.status not in (
+            LeaveRequestStatus.DRAFT, LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED
+        ):
+            raise LeaveStateError(f"'{kilitli.status}' durumundaki talep düzenlenemez.")
+        cancel_leave_request(actor=actor, request=kilitli, reason="Talep düzenleme için yenilendi")
+        return create_leave_request(
+            actor=actor, employee=kilitli.employee, leave_type=leave_type,
+            start_date=start_date, end_date=end_date, reason=reason,
+            is_half_day=is_half_day, start_time=start_time, end_time=end_time,
+            requested_days=requested_days, submit=True,
+        )
 
 
 def mark_leave_taken(*, actor, request: LeaveRequest) -> LeaveRequest:

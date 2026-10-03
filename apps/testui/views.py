@@ -63,3 +63,21 @@ def app_page(request):  # noqa: ANN001, ANN201
             "kullanici_email": request.user.email,
         },
     )
+
+
+@never_cache
+@ensure_csrf_cookie
+def profile_page(request):  # noqa: ANN001, ANN201
+    """Kişisel profil ve parola işlemleri sayfası."""
+    _kapali_mi()
+    if not request.user.is_authenticated:
+        return redirect("test-ui-login")
+    return render(request, "testui/profile.html", {"kullanici_email": request.user.email})
+
+
+@never_cache
+@ensure_csrf_cookie
+def password_reset_page(request):  # noqa: ANN001, ANN201
+    """Email bağlantısından parola yenileme sayfası."""
+    _kapali_mi()
+    return render(request, "testui/password_reset.html")

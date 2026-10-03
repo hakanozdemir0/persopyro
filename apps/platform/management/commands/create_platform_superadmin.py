@@ -30,7 +30,7 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management.base import BaseCommand, CommandError
-from django.db import DatabaseError, connection
+from django.db import DatabaseError, connections, transaction
 from django.utils import timezone
 
 from apps.platform import permissions as platform_permissions
@@ -75,7 +75,7 @@ class Command(BaseCommand):
 
     def _platform_semasi_kontrol(self) -> None:
         try:
-            with connection.cursor() as cur:
+            with connections["platform"].cursor() as cur:
                 cur.execute("SELECT count(*) FROM platform.users")
         except DatabaseError as exc:
             raise CommandError(
@@ -115,6 +115,7 @@ class Command(BaseCommand):
 
     # --- akış ---------------------------------------------------------------
 
+    @transaction.atomic(using="platform")
     def handle(self, *args, **options) -> None:  # noqa: ANN002, ANN003, ARG002
         email = (options["email"] or "").strip().lower()
         full_name = (options["full_name"] or "").strip()
@@ -130,7 +131,7 @@ class Command(BaseCommand):
         self._platform_semasi_kontrol()
 
         # Sessiz yükseltme yok: kayıt varsa (her durumda) açık hata.
-        with connection.cursor() as cur:
+        with connections["platform"].cursor() as cur:
             cur.execute(
                 "SELECT id, status, is_active, deleted_at FROM platform.users WHERE email = %s",
                 [email],
@@ -150,7 +151,7 @@ class Command(BaseCommand):
         parola = self._parolayi_oku(options)
         self._parolayi_dogrula(parola, email, full_name)
 
-        with connection.cursor() as cur:
+        with connections["platform"].cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO platform.users

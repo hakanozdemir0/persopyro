@@ -32,6 +32,9 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("ui.overtime.view", "Fazla Mesai başlığını görme", "ui"),
     ("ui.overtime.requests", "Fazla mesai bildirimleri alt bölümünü görme", "ui"),
     ("ui.overtime.rules", "Fazla mesai kuralları alt bölümünü görme", "ui"),
+    ("ui.shift.view", "Vardiya başlığını görme", "ui"),
+    ("ui.shift.definitions", "Vardiya tanımları alt bölümünü görme", "ui"),
+    ("ui.shift.assignments", "Vardiya planı alt bölümünü görme", "ui"),
     ("ui.approvals.view", "Onaylar başlığını görme", "ui"),
     ("ui.roles.view", "Yetki Yönetimi başlığını görme", "ui"),
     # Kiracı ve kullanıcı yönetimi
@@ -51,6 +54,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("employee.read", "Çalışanları görme", "employee"),
     ("employee.create", "Çalışan ekleme", "employee"),
     ("employee.update", "Çalışan güncelleme", "employee"),
+    ("employee.photo.upload", "Çalışan fotoğrafı yükleme/değiştirme", "employee"),
     ("employee.delete", "Çalışan arşivleme (fiziksel silme DEĞİL — OD6)", "employee"),
     ("employee.sensitive.read", "Hassas çalışan verisini görme (maskesiz)", "employee"),
     ("employee.sensitive.write", "Hassas çalışan verisini yazma (K2/K3)", "employee"),
@@ -120,6 +124,9 @@ UI_PERMISSION_REQUIREMENTS: dict[str, frozenset[str]] = {
     "ui.overtime.view": frozenset({"overtime.request.read", "overtime.request.create"}),
     "ui.overtime.requests": frozenset({"overtime.request.read", "overtime.request.create"}),
     "ui.overtime.rules": frozenset({"overtime.rule.read", "overtime.rule.manage"}),
+    "ui.shift.view": frozenset({"shift.read", "shift.assign", "shift.schedule.manage"}),
+    "ui.shift.definitions": frozenset({"shift.schedule.manage"}),
+    "ui.shift.assignments": frozenset({"shift.read", "shift.assign"}),
     "ui.approvals.view": frozenset({"leave.request.approve", "overtime.request.approve"}),
     "ui.roles.view": frozenset({"role.read", "role.manage"}),
 }
@@ -143,6 +150,8 @@ def ui_permission_codes_for(permission_codes) -> set[str]:  # noqa: ANN001
 # yeni kiracının yöneticisi platform izinlerine sahip olurdu (yetki yükseltme).
 PLATFORM_PERMISSIONS: list[tuple[str, str, str]] = [
     ("platform.tenant.read", "Platform: kiracı bilgilerini görme (PII maskeli)", "platform"),
+    ("platform.tenant.pii.read", "Platform: kiracı kişisel verilerini görme (SUPERADMIN)", "platform"),
+    ("platform.tenant.create", "Platform: şirket ve şirket yöneticisi oluşturma (SUPERADMIN)", "platform"),
     ("platform.tenant.manage", "Platform: kiracı oluşturma/durum/limit yönetimi", "platform"),
     ("platform.settings.manage", "Platform: sistem ayarlarını yönetme", "platform"),
     ("platform.role.assign", "Platform: platform rolü atama (platform admini atama)", "platform"),
@@ -252,19 +261,22 @@ TENANT_OFFICER_PERMISSIONS: tuple[str, ...] = (
 
 DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
     "tenant_admin": {
-        "name": "Kiracı Yöneticisi",
+        "name": "Sistem Yöneticisi",
+        "description": "Şirket genelinde tüm uygulama modüllerinde tam yetkilidir. Platform yönetim yetkisi vermez.",
         "role_type": "default",
         "scope_type": "TENANT",  # §6.1: ŞY sınırı TENANT
         "permissions": ALL_PERMISSION_CODES,
     },
     "tenant_officer": {
-        "name": "Şirket Yetkilisi",
+        "name": "Şirket Operasyon Yetkilisi",
+        "description": "Şirket operasyonlarında tanımlı izinleri kullanır.",
         "role_type": "default",
         "scope_type": "TENANT",  # §6.1: ŞYT sınırı TENANT (modül kısıtlı)
         "permissions": list(TENANT_OFFICER_PERMISSIONS),
     },
     "hr_manager": {
-        "name": "İK Yöneticisi",
+        "name": "İnsan Kaynakları Yöneticisi",
+        "description": "İnsan kaynakları işlemlerini şirket genelinde yönetir.",
         "role_type": "default",
         # Şablon rol olarak korunur (§4.2); tüm izinleri matriste TENANT kapsamlı.
         "scope_type": "TENANT",
@@ -278,6 +290,7 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "employee.read",
             "employee.create",
             "employee.update",
+            "employee.photo.upload",
             "employee.sensitive.read",
             "employee.sensitive.write",
             "employee.suspend",
@@ -308,13 +321,28 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
         ],
     },
     "dept_manager": {
-        "name": "Departman Yöneticisi",
+        "name": "Departman Sorumlusu",
+        "description": "Atandığı departmanda ve alt departmanlarında yetkilidir.",
         "role_type": "default",
         "scope_type": "UNIT",  # OD5: atandığı birim + tüm alt ağaç
         "permissions": list(DEPT_MANAGER_PERMISSIONS),
     },
+    "shift_manager": {
+        "name": "Vardiya Sorumlusu",
+        "description": "Atandığı departman ve alt departmanlarının vardiya planını yönetir.",
+        "role_type": "default",
+        "scope_type": "UNIT",
+        "permissions": [
+            "org.department.read",
+            "employee.read",
+            "shift.read",
+            "shift.assign",
+            "shift.schedule.manage",
+        ],
+    },
     "employee": {
         "name": "Çalışan",
+        "description": "Çalışan kendi hesabına ve kendisine açık işlemlere erişir.",
         "role_type": "default",
         "scope_type": "SELF",  # §6.1: ÇALIŞAN sınırı SELF
         "permissions": [

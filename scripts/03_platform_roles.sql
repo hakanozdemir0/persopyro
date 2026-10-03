@@ -41,6 +41,10 @@ $$;
 -- Yükseltilmiş yetki YOK: süper kullanıcı değil, RLS'i atlayamaz, rol/DB yaratamaz.
 ALTER ROLE persopyro_platform NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
 
+-- 01_bootstrap.sql, PUBLIC'ten CONNECT yetkisini geri aldığı için platform rolü
+-- kendi ayrı DB bağlantısını açabilmelidir.
+GRANT CONNECT ON DATABASE persopyro TO persopyro_platform;
+
 -- NOT: parola bu betikte ATANMAZ (koda/repoya sır yazılmaz). Üretimde:
 --   ALTER ROLE persopyro_platform WITH PASSWORD '<secret-store>';
 
@@ -66,7 +70,8 @@ DO $$
 DECLARE
     tablo text;
     platform_tablolari constant text[] := ARRAY[
-        'users', 'roles', 'role_permissions', 'user_roles', 'tokens', 'tenant_registry'
+        'users', 'roles', 'role_permissions', 'user_roles', 'tokens',
+        'tenant_registry', 'company_plans'
     ];
 BEGIN
     FOREACH tablo IN ARRAY platform_tablolari LOOP
@@ -81,6 +86,20 @@ BEGIN
             END IF;
         END IF;
     END LOOP;
+END
+$$;
+
+-- Denetim defteri append-only'dir: platform rolü yalnızca ekleme/okuma yapar.
+DO $$
+BEGIN
+    IF to_regclass('platform.audit_events') IS NOT NULL THEN
+        REVOKE ALL ON platform.audit_events FROM PUBLIC;
+        REVOKE ALL ON platform.audit_events FROM persopyro_platform;
+        GRANT SELECT, INSERT ON platform.audit_events TO persopyro_platform;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'persopyro_app') THEN
+            REVOKE ALL ON platform.audit_events FROM persopyro_app;
+        END IF;
+    END IF;
 END
 $$;
 

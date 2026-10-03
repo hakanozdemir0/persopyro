@@ -32,6 +32,7 @@ def readiness(_request):
 
 
 urlpatterns = [
+    path("platform/", include("apps.platform.urls")),
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/health", health, name="health"),
     path("api/ready", readiness, name="readiness"),

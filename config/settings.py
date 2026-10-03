@@ -123,6 +123,8 @@ INSTALLED_APPS = [
     "apps.leave",
     # Fazla mesai — P5a V1 (talep + onay temeli; kural/ücret motoru ileriki faz).
     "apps.overtime",
+    # Vardiya tanımları ve gün bazlı vardiya planı.
+    "apps.shifts",
     # Manuel test arayüzü (yalnızca geliştirme/test; model içermez, migration üretmez).
     "apps.testui",
     # Platform katmanı (OD3/OD20/OD22/OD25): AYRI GÜVENLİK SINIRI — kiracı
@@ -187,6 +189,23 @@ DATABASES = {
         "OPTIONS": {"options": "-c search_path=hr,public"},
         "CONN_MAX_AGE": int(os.environ.get("POSTGRES_CONN_MAX_AGE", "60")),
     }
+}
+
+# Platform istekleri ayrı DB kimliğiyle çalışır; tenant runtime rolüne platform
+# şemasına erişim verilmez. Testlerde aynı test DB'sine ayna bağlantısı kurulur.
+PLATFORM_DB_CONNECTION_USER = os.environ.get(
+    "PLATFORM_DB_CONNECTION_USER", os.environ.get("PLATFORM_DB_ROLE", "persopyro_platform")
+)
+DATABASES["platform"] = {
+    "ENGINE": "django.db.backends.postgresql",
+    "NAME": os.environ.get("POSTGRES_DB", "persopyro"),
+    "USER": PLATFORM_DB_CONNECTION_USER,
+    "PASSWORD": os.environ.get("PLATFORM_POSTGRES_PASSWORD", ""),
+    "HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
+    "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+    "OPTIONS": {"options": "-c search_path=platform,hr,public"},
+    "CONN_MAX_AGE": int(os.environ.get("POSTGRES_CONN_MAX_AGE", "60")),
+    "TEST": {"MIRROR": "default"},
 }
 
 # --- Veritabanı rolleri -----------------------------------------------------
@@ -345,6 +364,9 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Çalışan evrakları çoklu yüklenebilir (API toplam sınırı 50 MB).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52 * 1024 * 1024
 
 # --- Üretim güvenlik ayarları ----------------------------------------------
 # Yalnızca DEBUG kapalıyken uygulanır; üretimde güvensiz varsayılan bırakılmaz.

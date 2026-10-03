@@ -1,0 +1,25 @@
+{% extends "platform/base.html" %}
+
+{% block title %}Yönetim girişi · PersoPyro{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+
+{% block content %}
+  <section class="card auth-card" aria-labelledby="login-title">
+    <p class="eyebrow">Güvenli erişim</p>
+    <h1 id="login-title">Yönetim paneline giriş</h1>
+    <p class="card-intro">Platform hesabınızla devam edin.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <div class="field">
+        <label for="email">E-posta</label>
+        <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Parola</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="primary" type="submit">Giriş yap</button>
+    </form>
+  </section>
+{% endblock %}

@@ -1,0 +1,50 @@
+{% extends "platform/base.html" %}
+
+{% block title %}Şirket çalışanları · PersoPyro{% endblock %}
+
+{% block header_actions %}
+  <a class="button ghost" href="{% url 'platform-dashboard' %}">← Şirket listesi</a>
+{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">Şirket yönetimi</p>
+      <h1>Çalışanlar</h1>
+      <p>Şirket çalışanlarının iş kayıtları ve hesap durumları.</p>
+    </div>
+  </section>
+
+  {% if can_read_pii %}
+    <div class="card"><p class="card-intro">Kişisel veriler görüntüleniyor; bu erişim denetim kaydına yazıldı.</p></div>
+  {% endif %}
+
+  <section class="card" aria-label="Çalışan listesi">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Personel no</th><th>Durum</th><th>İşe giriş</th><th>İşten çıkış</th><th>Hesap</th>{% if can_read_pii %}<th>Kişisel bilgiler</th>{% endif %}</tr>
+        </thead>
+        <tbody>
+        {% for person in people %}
+          <tr>
+            <td><strong>{{ person.employee_no }}</strong></td>
+            <td><span class="badge {% if person.status == 'Aktif' %}ok{% elif person.status == 'Askıda' %}warn{% else %}muted{% endif %}">{{ person.status }}</span></td>
+            <td>{{ person.hire_date }}</td>
+            <td>{{ person.termination_date|default:"—" }}</td>
+            <td>{% if person.has_account %}Var{% else %}Yok{% endif %}</td>
+            {% if can_read_pii %}
+            <td>
+              {% if person.user %}<strong>{{ person.user.first_name }} {{ person.user.last_name }}</strong><br>{{ person.user.email }}<br>{{ person.user.phone }}{% endif %}
+              {% if person.personal_data %}<details><summary>Kişisel / hassas alanları göster</summary><dl>{% for key, value in person.personal_data.items %}<dt>{{ key }}</dt><dd>{{ value|default:"—" }}</dd>{% endfor %}</dl></details>{% endif %}
+            </td>
+            {% endif %}
+          </tr>
+        {% empty %}
+          <tr><td class="empty-state" colspan="{% if can_read_pii %}6{% else %}5{% endif %}">Bu şirkette çalışan kaydı bulunamadı.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

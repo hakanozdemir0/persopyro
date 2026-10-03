@@ -117,10 +117,20 @@ def create_default_roles(tenant) -> dict[str, Role]:
                 tenant=tenant,
                 code=kod,
                 name=sablon["name"],
+                description=sablon.get("description", ""),
                 role_type=sablon["role_type"],
                 scope_type=sablon["scope_type"],  # OD5/M8: azami organizasyon kapsamı
                 is_assignable=True,
             )
+        else:
+            fields_to_update = []
+            for field in ("name", "description"):
+                value = sablon.get(field, "")
+                if getattr(rol, field) != value:
+                    setattr(rol, field, value)
+                    fields_to_update.append(field)
+            if fields_to_update:
+                rol.save(update_fields=[*fields_to_update, "updated_at"])
         mevcut = set(
             RolePermission.objects.filter(role=rol).values_list("permission__code", flat=True)
         )
@@ -646,6 +656,47 @@ def update_role_meta(  # noqa: ANN001
     return role
 
 
+@transaction.atomic
+def delete_role(*, actor, role, reason: str = ""):  # noqa: ANN001
+    """Özel bir rolü soft-delete eder ve işlemi denetim kaydına yazar.
+
+    Varsayılan roller sistemin rol kataloğunun parçasıdır; bunlar silinmez,
+    gerektiğinde `is_assignable` ile atanması kapatılır. Aktif ataması olan özel
+    rol de doğrudan silinemez; önce atamalar açıkça kaldırılmalıdır.
+    """
+    invalidate_permission_cache()
+    transaction.on_commit(invalidate_permission_cache)
+
+    _rol_yazma_guardlari(actor, role.tenant)
+    if role is None or role.deleted_at is not None:
+        raise RoleAssignmentValidationError("Rol bulunamadı veya silinmiş.")
+    if UserRole.objects.filter(user=actor, role=role, deleted_at__isnull=True).exists():
+        raise RoleAssignmentError(
+            "Kendinizde etkin olan bir rolü silemezsiniz (self-elevation yasağı)."
+        )
+    if role.role_type in (RoleType.DEFAULT, RoleType.SYSTEM):
+        raise RoleAssignmentValidationError(
+            "Varsayılan ve sistem rolleri silinemez; atanabilirlikleri kapatılabilir."
+        )
+    aktif_atamalar = UserRole.objects.filter(role=role, deleted_at__isnull=True).count()
+    if aktif_atamalar:
+        raise RoleAssignmentValidationError(
+            f"Rol silinemez: {aktif_atamalar} aktif atama var. Önce rol atamalarını kaldırın."
+        )
+
+    role.deleted_at = timezone.now()
+    role.save(update_fields=["deleted_at", "updated_at"])
+    log_action(
+        tenant_id=role.tenant_id,
+        action="role.delete",
+        user=actor,
+        table_name="roles",
+        record_id=role.pk,
+        changes={"code": role.code, "name": role.name, "reason": (reason or "")[:200]},
+    )
+    return role
+
+
 __all__ = [
     "MissingPermissionError",
     "RoleAssignmentError",
@@ -656,6 +707,7 @@ __all__ = [
     "can_assign_role",
     "create_custom_role",
     "create_default_roles",
+    "delete_role",
     "restore_role_assignment",
     "revoke_role_assignment",
     "update_role_meta",
