@@ -335,7 +335,7 @@ def test_suresi_dolan_kiraciya_erisim_reddedilir(tenant_a) -> None:
     """Sona ermiş şirket kullanım süresi tenant erişimini kapatır."""
     from apps.tenancy.access import tenant_access_allowed
 
-    kiracı_guncelle(tenant_a, valid_until=date.today() - timedelta(days=1))
+    kiracı_guncelle(tenant_a, valid_until=date.today())
     assert tenant_access_allowed(tenant_a.id) is False
 
 

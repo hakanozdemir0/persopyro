@@ -15,7 +15,7 @@ import uuid
 
 from django.http import JsonResponse
 
-from apps.tenancy.access import tenant_access_allowed
+from apps.tenancy.access import tenant_access_allowed, tenant_block_reason
 from apps.tenancy.context import (
     current_tenant_id,
     tenant_context,
@@ -27,7 +27,10 @@ TENANT_SESSION_KEY = "tenant_id"
 
 # Kiracı durumu uygun olmadığında bile erişilebilen yollar: yalnızca sağlık uçları.
 # Bunlar kiracı verisi döndürmez ve kimlik doğrulama gerektirmez (F11 istisnası).
-TENANT_EXEMPT_PATHS = frozenset({"/api/health", "/api/ready"})
+TENANT_EXEMPT_PATHS = frozenset({
+    "/api/health", "/api/ready", "/api/v1/auth/login", "/api/v1/auth/token",
+    "/test-ui/login/",
+})
 
 
 class RequestIdMiddleware:
@@ -71,6 +74,12 @@ class TenantContextMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        # Platform paneli kendi kimlik doğrulamasını ve kiracı bağlamını kurar.
+        # Aynı tarayıcıdaki süresi dolmuş şirket oturumu platform operatörünü
+        # engellememeli veya platform oturumunu düşürmemelidir.
+        if request.path == "/platform" or request.path.startswith("/platform/"):
+            return self.get_response(request)
+
         oturum_tenant = (
             request.session.get(TENANT_SESSION_KEY) if hasattr(request, "session") else None
         )
@@ -100,12 +109,27 @@ class TenantContextMiddleware:
         # anahtarı temizlenir; böylece kullanıcı başka bir kiracıyla giriş
         # yapabilir. RLS gevşetilmez, `BYPASSRLS` kullanılmaz.
         if not tenant_access_allowed(tenant_id) and request.path not in TENANT_EXEMPT_PATHS:
-            clear_session_tenant(request)
+            reason = tenant_block_reason(tenant_id)
+            if oturum_tenant:
+                for key in (
+                    TENANT_SESSION_KEY,
+                    "_auth_user_id",
+                    "_auth_user_backend",
+                    "_auth_user_hash",
+                    "auth_version",
+                ):
+                    request.session.pop(key, None)
+            else:
+                clear_session_tenant(request)
+            expired = reason == "tenant_expired"
             return JsonResponse(
                 {
                     "error": {
-                        "code": "tenant_unavailable",
-                        "message": "Kiracının erişimi kapalı.",
+                        "code": "tenant_expired" if expired else "tenant_unavailable",
+                        "message": (
+                            "Şirketinizin kullanım süresi sona erdi. Oturumunuz kapatılıyor."
+                            if expired else "Kiracının erişimi kapalı."
+                        ),
                     }
                 },
                 status=403,

@@ -123,6 +123,7 @@ tıklanınca kapanır.
       iptalBtn.onclick = () => { temizle(); cozumle(false); };
     });
   }
+  window.PERSOPYRO_UI.onay = (metin) => onayModali("İşlemi onayla", esc(metin), "Devam et");
 
   // Bilgi/Detay penceresi: mevcut modal altyapısı yeniden kullanılır (yeni
   // pencere bileşeni eklenmez). Yalnız "Kapat" düğmesi görünür.
@@ -1397,7 +1398,12 @@ tıklanınca kapanır.
           });
           PERSOPYRO_UI.mesaj("ok", "Unvan güncellendi.");
         } else {
-          if (!window.confirm(`“${position.name}” unvanı silinsin mi? Çalışan kayıtlarındaki mevcut unvan bilgisi korunur.`)) return;
+          const silmeOnayi = await onayModali(
+            "Unvanı sil",
+            `“${esc(position.name)}” unvanı silinsin mi? Çalışan kayıtlarındaki mevcut unvan bilgisi korunur.`,
+            "Unvanı sil",
+          );
+          if (!silmeOnayi) return;
           await PERSOPYRO_UI.cagir(`/test-ui/api/positions/${id}`, {method: "DELETE"});
           PERSOPYRO_UI.mesaj("ok", "Unvan silindi.");
         }
@@ -1567,6 +1573,7 @@ tıklanınca kapanır.
         ${c.user_email ? `<h3>Giriş hesabı</h3><div class="form-alt"><span>${esc(c.user_email)}</span>
           ${c.can_update_email ? `<button class="kucuk" data-email-update="${esc(calisanId)}">E-posta adresini güncelle</button>` : ""}</div>` : ""}
         ${lifecycleBolumu(c)}
+        ${c.can_delete_employee ? `<section class="detail-box danger-box"><h3>Çalışan verilerini sil</h3><p class="muted small">Kişisel bilgiler, fotoğraf, evraklar ve giriş hesabı silinir. Yasal ve denetim geçmişi için çalışan kaydı arşivlenir.</p><button type="button" class="danger" data-employee-erase="${esc(calisanId)}">Çalışanın verilerini sil</button></section>` : ""}
         ${izinHaklariBolumu}
         ${yetkiBolumu}
         ${piiBolumu}
@@ -1575,6 +1582,21 @@ tıklanınca kapanır.
       </div>`;
 
     const evrakAlani = document.getElementById("employee-documents-list");
+    document.querySelector("[data-employee-erase]")?.addEventListener("click", async (event) => {
+      const id = event.currentTarget.dataset.employeeErase;
+      const onay = await onayModali(
+        "Çalışan verilerini sil",
+        "Kişisel bilgiler, fotoğraf, evraklar ve giriş hesabı silinecek; çalışan kaydı arşivlenecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?",
+        "Verileri sil",
+      );
+      if (!onay) return;
+      try {
+        await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${id}/erase`, { method: "POST", body: {} });
+        PERSOPYRO_UI.mesaj("ok", "Çalışanın kişisel verileri ve dosyaları silindi; kayıt arşivlendi.");
+        cekmeceKapat();
+        await yukleCalisanlar();
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    });
     try {
       const evraklar = (await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/documents`)).data || [];
       evrakAlani.innerHTML = evraklar.length

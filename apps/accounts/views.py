@@ -29,8 +29,8 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.urls import reverse
-from django.utils.encoding import force_bytes, force_str
 from django.utils.decorators import method_decorator
+from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.views.decorators.csrf import csrf_protect
 from rest_framework import status
@@ -50,9 +50,10 @@ from apps.accounts.serializers import GirisSerializer, TokenIstekSerializer
 from apps.accounts.services import issue_api_token, revoke_token, revoke_tokens
 from apps.audit.models import AuditAction
 from apps.audit.services import log_action
-from apps.tenancy.access import tenant_access_allowed
-from apps.tenancy.middleware import clear_session_tenant, resolve_tenant_id, set_session_tenant
+from apps.rbac.models import UserRole
+from apps.tenancy.access import tenant_access_allowed, tenant_block_reason
 from apps.tenancy.context import tenant_context
+from apps.tenancy.middleware import clear_session_tenant, resolve_tenant_id, set_session_tenant
 
 
 def send_password_reset_link(request, user) -> None:  # noqa: ANN001
@@ -174,11 +175,32 @@ def _kimlik_dogrula(request, veri: dict, user_agent: str = ""):  # noqa: ANN001,
         # Kiracı bulunamadı: ayrıntı verilmez (numaralandırmayı önlemek için).
         return None, None, Response(GECERSIZ, status=status.HTTP_401_UNAUTHORIZED)
 
-    # F11 (kapalı): kiracı askıda/iptal/silinmişse giriş YAPILAMAZ. Kontrol parola
-    # doğrulamasından ÖNCE yapılır: kapatılmış bir hesabın parolası denenmez.
+    # Kiracı kullanımı kapalıysa parola denenmeden giriş reddedilir.
     if not tenant_access_allowed(tenant_id):
-        _kiracı_denetim(tenant_id, request, "tenant_unavailable")
-        return None, tenant_id, Response(KIRACI_KAPALI, status=status.HTTP_403_FORBIDDEN)
+        reason = tenant_block_reason(tenant_id)
+        if reason == "tenant_expired":
+            with tenant_context(tenant_id):
+                account = get_user_model().objects.filter(
+                    tenant_id=tenant_id, email__iexact=veri["email"], deleted_at__isnull=True
+                ).first()
+                is_admin = bool(
+                    account
+                    and UserRole.objects.filter(
+                        tenant_id=tenant_id, user_id=account.pk, role__code="tenant_admin"
+                    ).exists()
+                )
+            code = "tenant_expired_admin" if is_admin else "tenant_expired_employee"
+            message = (
+                "Şirketinizin kullanım süresi sona erdi. Oturum açılmıyor; "
+                "otomatik olarak giriş ekranına yönlendiriliyorsunuz."
+                if is_admin
+                else "Giriş yapılamadı. Lütfen şirket yöneticiniz ile görüşünüz."
+            )
+            body = {"error": {"code": code, "message": message}}
+        else:
+            body = KIRACI_KAPALI
+        _kiracı_denetim(tenant_id, request, reason or "tenant_unavailable")
+        return None, tenant_id, Response(body, status=status.HTTP_403_FORBIDDEN)
 
     kullanici = authenticate(
         request,

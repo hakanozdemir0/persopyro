@@ -177,6 +177,7 @@ urlpatterns = [
         api.EmployeeLifecycleView.as_view(),
         name="test-ui-employee-lifecycle",
     ),
+    path("api/employees/<str:employee_id>/erase", api.EmployeeDataEraseView.as_view(), name="test-ui-employee-data-erase"),
     path(
         "api/employees/<str:employee_id>/assignment",
         api.EmployeeAssignmentChangeView.as_view(),

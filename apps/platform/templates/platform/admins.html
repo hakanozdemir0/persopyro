@@ -1,0 +1,29 @@
+{% extends "platform/base.html" %}
+{% block title %}Platform yöneticileri · PersoPyro{% endblock %}
+{% block header_actions %}<span class="user-email">{{ email }}</span><form method="post" action="{% url 'platform-logout' %}">{% csrf_token %}<button class="ghost">Çıkış yap</button></form>{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Erişim yönetimi</p><h1>Platform yöneticileri</h1><p>Hesap rolünü, erişebileceği şirketleri ve görebileceği yönetim bölümlerini belirleyin.</p></div></section>
+{% if created %}<section class="card" role="status">Platform yöneticisi oluşturuldu.</section>{% endif %}
+{% if error %}<section class="card error" role="alert">{{ error }}</section>{% endif %}
+{% if can_create_admins %}<section class="card"><h2>Yeni yönetici oluştur</h2><form method="post" class="form-grid" id="platform-admin-form">{% csrf_token %}<div class="field"><label for="admin-name">Ad soyad</label><input id="admin-name" name="full_name" maxlength="200" required></div><div class="field"><label for="admin-email">E-posta</label><input id="admin-email" name="email" type="email" maxlength="190" autocomplete="email" required></div><div class="field"><label for="admin-password">Başlangıç parolası</label><input id="admin-password" name="password" type="password" autocomplete="new-password" required></div><div class="field"><label for="admin-role">Yönetici rolü</label><select id="admin-role" name="role_code"><option value="platform_admin" {% if selected_role == 'platform_admin' %}selected{% endif %}>Admin</option><option value="superadmin" {% if selected_role == 'superadmin' %}selected{% endif %}>Superadmin</option></select></div><fieldset class="field field-span" id="company-scope"><legend>Adminin yetkili olacağı şirketler</legend><p class="muted">Admin yalnızca seçtiğiniz şirketlere erişebilir. En az bir şirket seçin.</p><div class="row-actions" style="margin-bottom:10px"><button type="button" id="select-all-companies">Tümünü seç</button><button type="button" id="clear-all-companies">Tümünü kaldır</button></div>{% for company in companies %}<label class="check-field"><input type="checkbox" name="tenant_ids" value="{{ company.0 }}" {% if company.0|stringformat:"s" in selected_tenants %}checked{% endif %}> {{ company.1 }}</label>{% empty %}<p class="muted">Henüz şirket bulunmuyor.</p>{% endfor %}</fieldset><fieldset class="field field-span" id="admin-capabilities"><legend>Admin ekran izinleri</legend><label class="check-field"><input type="checkbox" name="can_view_admins" {% if can_view_admins %}checked{% endif %}> Yönetici listesini görebilsin</label><label class="check-field"><input type="checkbox" name="can_view_audit" {% if can_view_audit %}checked{% endif %}> İşlem kayıtlarını görebilsin</label></fieldset><p class="field-span muted" id="superadmin-note" hidden>Superadmin tüm şirketlere, yönetici listesine ve işlem kayıtlarına erişebilir.</p><div class="form-actions"><button class="primary" type="submit">Yönetici oluştur</button></div></form></section>{% endif %}
+<section class="card"><div class="section-head"><h2>Platform hesapları</h2><span class="muted">{{ admins|length }} kayıt</span></div><div class="table-wrap"><table><thead><tr><th>E-posta</th><th>Ad soyad</th><th>Rol</th><th>Yetkili şirketler</th><th>Durum</th><th>Oluşturulma</th></tr></thead><tbody>{% for item in admins %}<tr><td>{{ item.1 }}</td><td>{{ item.2|default:"—" }}</td><td>{{ item.5|default:"—" }}</td><td>{% if 'Süper Yöneticisi' in item.5 %}Tüm şirketler{% else %}{{ item.6|default:"—" }}{% endif %}</td><td>{{ item.3 }}</td><td>{{ item.4|date:"d.m.Y H:i" }}</td></tr>{% empty %}<tr><td class="empty-state" colspan="6">Yönetici kaydı yok.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}
+{% block extra_scripts %}<script>
+(() => {
+  const boxes = [...document.querySelectorAll('input[name="tenant_ids"]')];
+  document.getElementById('select-all-companies')?.addEventListener('click', () => boxes.forEach((box) => { box.checked = true; }));
+  document.getElementById('clear-all-companies')?.addEventListener('click', () => boxes.forEach((box) => { box.checked = false; }));
+  const role = document.getElementById('admin-role');
+  const scope = document.getElementById('company-scope');
+  const capabilities = document.getElementById('admin-capabilities');
+  const note = document.getElementById('superadmin-note');
+  function syncRole() {
+    const isSuperadmin = role?.value === 'superadmin';
+    if (scope) scope.hidden = isSuperadmin;
+    if (capabilities) capabilities.hidden = isSuperadmin;
+    if (note) note.hidden = !isSuperadmin;
+  }
+  role?.addEventListener('change', syncRole);
+  syncRole();
+})();
+</script>{% endblock %}

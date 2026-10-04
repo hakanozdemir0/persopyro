@@ -1,0 +1,8 @@
+{% extends "platform/base.html" %}
+{% block title %}Profilim · PersoPyro{% endblock %}
+{% block header_actions %}<span class="user-email">{{ email }}</span><form method="post" action="{% url 'platform-logout' %}">{% csrf_token %}<button class="ghost">Çıkış yap</button></form>{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Hesap ayarları</p><h1>Profilim</h1><p>Superadmin ve platform yöneticileri profil bilgilerini buradan güncelleyebilir.</p></div></section>
+{% if saved %}<section class="card" role="status">Profil güncellendi.</section>{% endif %}{% if error %}<section class="card error" role="alert">{{ error }}</section>{% endif %}
+<section class="card"><form method="post" class="form-grid">{% csrf_token %}<div class="field"><label for="profile-email">E-posta</label><input id="profile-email" type="email" value="{{ email }}" readonly></div><div class="field"><label for="profile-name">Ad soyad</label><input id="profile-name" name="full_name" value="{{ full_name }}" maxlength="200" required></div><div class="field"><label for="profile-password">Yeni parola <span class="muted">(değiştirmeyecekseniz boş bırakın)</span></label><input id="profile-password" name="password" type="password" autocomplete="new-password"></div><div class="form-actions"><button class="primary" type="submit">Profili kaydet</button></div></form></section>
+{% endblock %}

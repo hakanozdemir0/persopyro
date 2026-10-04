@@ -13,6 +13,7 @@ Kurallar (docs/SECURITY.md bölüm 6, docs/DEVELOPMENT_RULES.md):
 """
 
 from django.db import models
+from django.utils import timezone
 
 from apps.common.models import TimeStampedModel, UUIDModel
 
@@ -70,4 +71,5 @@ class AuditLog(UUIDModel, TimeStampedModel):
         ]
 
     def __str__(self) -> str:
-        return f"{self.action} {self.table_name} ({self.created_at:%Y-%m-%d %H:%M})"
+        created_at = timezone.localtime(self.created_at)
+        return f"{self.action} {self.table_name} ({created_at:%Y-%m-%d %H:%M})"

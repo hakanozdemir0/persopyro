@@ -165,6 +165,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "apps.platform.context_processors.platform_navigation",
             ],
         },
     },
@@ -319,6 +320,7 @@ EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
 EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Persopyro <no-reply@localhost>")
 
@@ -354,7 +356,7 @@ SESSION_ENGINE = "django.contrib.sessions.backends.db"
 # --- Uluslararasılaştırma / zaman -------------------------------------------
 
 LANGUAGE_CODE = "tr"
-TIME_ZONE = "UTC"
+TIME_ZONE = "Europe/Istanbul"
 USE_I18N = True
 USE_TZ = True
 

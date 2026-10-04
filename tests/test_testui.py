@@ -3290,3 +3290,35 @@ def test_izin_bakiye_ekrani_self_ve_kapsam_disi_sinirlari(client, tenant_a, user
     nolar = {s["employee_no"] for s in kapsam}
     assert "MUH-1" in nolar and "FIN-M1" in nolar
     assert "IK-1" not in nolar, "kapsam dışı çalışanın bakiyesi görünmemeli"
+
+
+def test_ui_calisan_verilerini_silme_kisisel_verileri_temizler(client, tenant_a, user_a) -> None:  # noqa: ANN001
+    """Çalışan silme kişisel verileri ve hesabı temizler, denetim izini tutar."""
+    lot = kadro(tenant_a, user_a)
+    calisan = lot["personel"]
+    with tenant_context(tenant_a.id):
+        personal = EmployeePersonalData.objects.create(
+            tenant=tenant_a,
+            employee=calisan,
+            first_name="Gizli",
+            last_name="Çalışan",
+            national_id="12345678901",
+            address="Özel adres",
+            personal_phone="5551112233",
+        )
+    assert _giris(client, tenant_a, lot["admin"].email, PAROLA_LEAVE).status_code == 200
+
+    yanit = _post(client, f"/test-ui/api/employees/{calisan.pk}/erase")
+    assert yanit.status_code == 200, yanit.content
+    calisan.refresh_from_db()
+    personal.refresh_from_db()
+    lot["personel_user"].refresh_from_db()
+    assert calisan.deleted_at is not None and calisan.status == "archived"
+    assert personal.deleted_at is not None
+    assert personal.first_name == personal.last_name == "Silinmiş"
+    assert personal.national_id == personal.address == personal.personal_phone == ""
+    assert not lot["personel_user"].is_active
+    assert "@invalid.local" in lot["personel_user"].email
+    assert AuditLog.objects.filter(
+        action="employee.personal_data.erase", record_id=calisan.pk
+    ).exists()

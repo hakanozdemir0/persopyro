@@ -72,7 +72,7 @@ def tenant_access_allowed(tenant_id: uuid.UUID | str | None) -> bool:
         deleted_at is None
         and status in ALLOWED_TENANT_STATUSES
         and (valid_from is None or valid_from <= timezone.localdate())
-        and (valid_until is None or valid_until >= timezone.localdate())
+        and (valid_until is None or valid_until > timezone.localdate())
     )
 
 
@@ -88,7 +88,7 @@ def tenant_block_reason(tenant_id: uuid.UUID | str | None) -> str:
         return "tenant_deleted"
     if valid_from is not None and valid_from > timezone.localdate():
         return "tenant_not_started"
-    if valid_until is not None and valid_until < timezone.localdate():
+    if valid_until is not None and valid_until <= timezone.localdate():
         return "tenant_expired"
     if status not in ALLOWED_TENANT_STATUSES:
         return f"tenant_{status}"

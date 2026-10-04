@@ -48,6 +48,7 @@ from apps.accounts.auth_version import (
     oturum_auth_version_dogrula,
 )
 from apps.accounts.models import UserStatus
+from apps.audit.services import log_action
 from apps.common.crypto import SecretDecryptionError, decrypt_str, encrypt_str
 from apps.leave.leave_type_catalog import LeaveCategory
 from apps.leave.models import (
@@ -110,6 +111,7 @@ from apps.organization.models import (
     Employee,
     EmployeeDocument,
     EmployeeManager,
+    EmployeePersonalData,
     EmployeeProfileChangeRequest,
     EmployeeProfileChangeStatus,
     FormFieldDefinition,
@@ -2485,6 +2487,94 @@ class EmployeeLifecycleView(TestUiView):
         return Response({"data": _calisan_ozeti(sonuc)})
 
 
+class EmployeeDataEraseView(TestUiView):
+    """Kişisel verileri ve dosyaları kaldırır; yasal/audit kaydını arşivler."""
+
+    @transaction.atomic
+    def post(self, request, employee_id: str):  # noqa: ANN001
+        try:
+            employee = _kapsamdaki_calisan(request.user, employee_id)
+        except Http404:
+            raise
+        if employee.user_id == request.user.pk or not user_has_permission(request.user, "employee.delete"):
+            return Response(
+                {"error": {"code": "permission_denied", "message": "Bu çalışanın verilerini silme yetkiniz yok.", "detail": ""}},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        now = timezone.now()
+        documents = list(EmployeeDocument.objects.filter(employee=employee))
+        for document in documents:
+            if document.file:
+                document.file.storage.delete(document.file.name)
+            document.deleted_at = now
+            document.title = "Silinmiş evrak"
+            document.original_filename = "silinmis"
+            document.file = ""
+            document.save(update_fields=("deleted_at", "title", "original_filename", "file", "updated_at"))
+        if employee.profile_photo:
+            employee.profile_photo.storage.delete(employee.profile_photo.name)
+
+        personal_data = EmployeePersonalData.objects.filter(employee=employee).first()
+        if personal_data is not None:
+            for field_name, value in {
+                "first_name": "Silinmiş", "last_name": "Silinmiş", "birth_date": None,
+                "national_id": "", "address": "", "personal_email": "", "personal_phone": "",
+                "iban": "", "bank_name": "", "emergency_contact_phone": "",
+                "emergency_contact_relation": "", "citizenship": "", "work_permit_type": "",
+                "work_permit_valid_until": None, "blood_type": None, "health_notes": None,
+                "disability_status": None, "biometric_ref": None, "custom_fields": {},
+                "deleted_at": now,
+            }.items():
+                setattr(personal_data, field_name, value)
+            personal_data.save(update_fields=(
+                "first_name", "last_name", "birth_date", "national_id", "address",
+                "personal_email", "personal_phone", "iban", "bank_name",
+                "emergency_contact_phone", "emergency_contact_relation", "citizenship",
+                "work_permit_type", "work_permit_valid_until", "blood_type", "health_notes",
+                "disability_status", "biometric_ref", "custom_fields", "deleted_at", "updated_at",
+            ))
+        for change_request in EmployeeProfileChangeRequest.objects.filter(employee=employee):
+            change_request.payload = ""
+            change_request.field_codes = []
+            change_request.review_note = ""
+            change_request.save(update_fields=("payload", "field_codes", "review_note", "updated_at"))
+
+        if employee.user_id:
+            account = employee.user
+            account.email = f"silinmis-{uuid.uuid4().hex}@invalid.local"
+            account.first_name = ""
+            account.last_name = ""
+            account.phone = ""
+            account.status = UserStatus.ARCHIVED
+            account.deleted_at = now
+            account.auth_version += 1
+            account.multi_factor_enabled = False
+            account.totp_secret = ""
+            account.set_unusable_password()
+            account.save(update_fields=(
+                "email", "first_name", "last_name", "phone", "status", "deleted_at",
+                "auth_version", "multi_factor_enabled", "totp_secret", "password",
+                "password_changed_at", "updated_at",
+            ))
+
+        employee.status = "archived"
+        employee.deleted_at = now
+        employee.termination_note = ""
+        employee.profile_photo = ""
+        employee.save(update_fields=("status", "deleted_at", "termination_note", "profile_photo", "updated_at"))
+        log_action(
+            tenant_id=employee.tenant_id,
+            action="employee.personal_data.erase",
+            user=request.user,
+            table_name="employees",
+            record_id=employee.pk,
+            changes={"kişisel_veriler": "silindi", "dosyalar": "silindi", "hesap": "kapatıldı", "kayıt": "arşivlendi"},
+            ip_address=request.META.get("REMOTE_ADDR", ""),
+        )
+        return Response({"data": {"erased": True}})
+
+
 class EmployeeHistoryView(TestUiView):
     """
     `Yaşananlar` — lazy partial (P1-B sonrası performans paketi).
@@ -4819,6 +4909,8 @@ class EmployeeDetailView(TestUiView):
                 and user_has_permission(request.user, "document.upload")
             ),
             "can_delete_documents": user_has_permission(request.user, "document.delete"),
+            "can_delete_employee": calisan.user_id != request.user.pk
+            and user_has_permission(request.user, "employee.delete"),
         }
         if detay["yetki_gorunur"] and calisan.user_id:
             atamalar = (

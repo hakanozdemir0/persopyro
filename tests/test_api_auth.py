@@ -11,11 +11,13 @@ Kapsam:
   * Kullanıcı numaralandırmasına karşı genel hata mesajı.
 """
 
+from datetime import date
+
 import pyotp
 import pytest
 
 from apps.common.crypto import encrypt_str
-from apps.rbac.models import Permission, Role, RolePermission
+from apps.rbac.models import Permission, Role, RolePermission, UserRole
 from apps.rbac.services import create_default_roles
 from apps.tenancy.context import tenant_context
 
@@ -43,6 +45,28 @@ def giris_yap(api_client, tenant, user, sifre="Guclu-Parola-123"):  # noqa: ANN0
         {"tenant": tenant.slug, "email": user.email, "password": sifre},
         format="json",
     )
+
+
+def test_suresi_dolan_sirkette_calisan_yonetici_mesaji_alir(api_client, tenant_a, user_a) -> None:
+    with tenant_context(tenant_a.id):
+        tenant_a.valid_until = date.today()
+        tenant_a.save(update_fields=["valid_until", "updated_at"])
+    response = giris_yap(api_client, tenant_a, user_a)
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "tenant_expired_employee"
+    assert "yöneticiniz ile görüşünüz" in response.json()["error"]["message"]
+
+
+def test_suresi_dolan_sirkette_yonetici_oturum_uyarisi_alir(api_client, tenant_a, user_a) -> None:
+    with tenant_context(tenant_a.id):
+        tenant_a.valid_until = date.today()
+        tenant_a.save(update_fields=["valid_until", "updated_at"])
+        admin_role = create_default_roles(tenant_a)["tenant_admin"]
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=admin_role)
+    response = giris_yap(api_client, tenant_a, user_a)
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "tenant_expired_admin"
+    assert "Oturum açılmıyor" in response.json()["error"]["message"]
 
 
 def token_govdesi(  # noqa: ANN001

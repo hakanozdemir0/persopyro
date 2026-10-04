@@ -2,11 +2,6 @@
 {% block title %}Planlar · PersoPyro{% endblock %}
 {% block header_actions %}<span class="user-email">{{ email }}</span><a class="button ghost" href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesine dön</a>{% endblock %}
 {% block content %}
-<nav class="panel-tabs" aria-label="Şirket yönetimi">
-  <a href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>
-  <a href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
-  <a class="selected" href="{% url 'platform-plans' %}">Planlar ve plan düzenleme</a>
-</nav>
 <section class="page-heading"><div><p class="eyebrow">Sistem yönetimi</p><h1>Planlar</h1><p>Bir planı düzenlemek için satırındaki “Düzenle” düğmesini seçin. Limitlerde 0 sınırsızdır.</p></div></section>
 {% if saved %}<section class="card" role="status">Plan kaydedildi.</section>{% endif %}{% if removed %}<section class="card" role="status">Plan kaldırıldı.</section>{% endif %}
 {% if error == "in_use" %}<section class="card error" role="alert">Bu plan {{ error_count }} şirkette kullanılıyor. Önce bu şirketleri başka bir plana taşıyın; ardından planı kaldırabilirsiniz.</section>{% endif %}

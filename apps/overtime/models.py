@@ -22,7 +22,7 @@ Tasarım kararları (ölçümle raporlanır):
     süre hem servis hem **DB `CHECK`** ile reddedilir.
   * **Saat dilimi:** kayıt `work_date` + yerel saat (`start_time`, `end_time`) tutar;
     hesaplama **iki saat arasındaki farktır** ve dönüşüm gerektirmez. Kiracı/işyeri
-    bazlı saat dilimi alanı **henüz yoktur** (platform `TIME_ZONE` = UTC); eklendiğinde
+    bazlı saat dilimi alanı **henüz yoktur** (platform `TIME_ZONE` = Europe/Istanbul); eklendiğinde
     kayıt biçimi değişmez → şema uyumludur.
   * **Karşılık türü (`compensation_type`)**: kapalı küme (`pay` | `time_off`) alanıdır ve
     bu sürümde **kural motoru olmadığı için dolmaz** (P5a/P5b). Değer kümesi dışındaki

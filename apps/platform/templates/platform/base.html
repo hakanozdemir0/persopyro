@@ -104,6 +104,7 @@
     .company-profile-row label { display:block; margin:0; color:var(--fg-soft); font-size:12.5px; font-weight:600; }
     .company-profile-row input[type="checkbox"] { width:auto; min-height:auto; }
     .panel-tabs { display:flex; gap:8px; margin-bottom:18px; border-bottom:1px solid var(--line); }
+    .page-nav { width:min(100%, var(--page-max)); margin:12px auto 0; padding:0 20px; overflow-x:auto; }
     .panel-tabs a { padding:10px 14px; color:var(--fg-soft); border-bottom:2px solid transparent; font-weight:650; }
     .panel-tabs a.selected { color:var(--accent-dark); border-color:var(--accent); }
     .decision-form { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
@@ -133,6 +134,7 @@
     @media (max-width: 700px) {
       .topbar { padding-inline: 14px; }
       .page-container { margin-top: 18px; padding-inline: 14px; }
+      .page-nav { padding-inline:14px; }
       .page-heading { align-items: flex-start; flex-direction: column; }
       .user-email { display: none; }
       .card { padding: 15px; }
@@ -149,9 +151,26 @@
     </a>
     <div class="header-actions">{% block header_actions %}{% endblock %}</div>
   </header>
+  {% if platform_nav_permissions %}<nav class="panel-tabs page-nav" aria-label="Platform yönetimi">
+    <a href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
+    {% if 'platform.tenant.create' in platform_nav_permissions %}<a href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>{% endif %}
+    {% if 'platform.settings.manage' in platform_nav_permissions %}<a href="{% url 'platform-plans' %}">Planlar</a>{% endif %}
+    {% if platform_nav_can_view_admins %}<a href="{% url 'platform-admins' %}">Yöneticiler</a>{% endif %}
+    {% if 'platform.audit.read' in platform_nav_permissions %}<a href="{% url 'platform-audit' %}">İşlem kayıtları</a>{% endif %}
+    <a href="{% url 'platform-profile' %}">Profilim</a>
+  </nav>{% endif %}
   <main class="page-container {% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
   {% block extra_scripts %}{% endblock %}
+  <script>
+    document.addEventListener("submit", (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || form.method.toUpperCase() !== "POST") return;
+      if (!window.confirm("Bu işlem kaydedilecek ve şirket veya yönetim bilgilerini değiştirebilir. Emin misiniz?")) {
+        event.preventDefault();
+      }
+    }, true);
+  </script>
 </body>
 </html>

@@ -62,7 +62,7 @@ def test_uygulama_rolu_tablo_sahibi_degil() -> None:
 
 
 def test_utc_saat_dilimi() -> None:
-    assert settings.TIME_ZONE == "UTC"
+    assert settings.TIME_ZONE == "Europe/Istanbul"
     assert settings.USE_TZ is True
 
 

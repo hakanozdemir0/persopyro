@@ -12,6 +12,7 @@ import datetime as dt
 from decimal import Decimal, InvalidOperation
 
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.audit.models import AuditLog
 from apps.organization.models import (
@@ -162,6 +163,7 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
         "employee.archive": "Arşivlendi",
     }
     for action, changes, created in auditler:
+        created = timezone.localtime(created)
         if action == "employee.termination.schedule":
             tarih = (changes or {}).get("termination_date")
             olaylar.append(
@@ -197,6 +199,7 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
     genel_etiketler = {
         "employee.personal_data.create": "Kişisel bilgiler oluşturuldu",
         "employee.personal_data.update": "Kişisel bilgiler güncellendi",
+        "employee.personal_data.erase": "Kişisel veriler silindi ve kayıt arşivlendi",
         "user.password.reset": "Parola güncellendi",
         "user.email.update": "Kurumsal e-posta güncellendi",
         "employee.manager.change": "Yönetici bilgisi güncellendi",
@@ -223,6 +226,7 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
         tenant_id=employee.tenant_id,
     ).exclude(action__in=DURUM_OLAYLARI + ("employee.status_change",)).select_related("user").order_by("created_at")
     for kayit in genel_olaylar:
+        created_at = timezone.localtime(kayit.created_at)
         etiket = genel_etiketler.get(kayit.action)
         if not etiket:
             continue
@@ -233,9 +237,9 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
             detay["Değişiklikler"] = degisimler
         olaylar.append(
             {
-                "date": kayit.created_at.date().isoformat(),
-                "date_display": _ad(kayit.created_at.date()),
-                "time_display": kayit.created_at.strftime("%H:%M"),
+                "date": created_at.date().isoformat(),
+                "date_display": _ad(created_at.date()),
+                "time_display": created_at.strftime("%H:%M"),
                 "type": "employee_update",
                 "label": etiket,
                 "summary": f"Yapan: {aktor}",
@@ -260,10 +264,11 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
             etiket = "Fazla mesai reddedildi"
         else:
             continue
+        decided_at = timezone.localtime(fm.decided_at)
         olaylar.append(
             {
-                "date": fm.decided_at.date().isoformat(),
-                "date_display": _ad(fm.decided_at.date()),
+                "date": decided_at.date().isoformat(),
+                "date_display": _ad(decided_at.date()),
                 "type": "overtime_decision",
                 "label": etiket,
                 "detail": {
@@ -408,6 +413,7 @@ def _izin_talep_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
 
     olaylar: list[dict] = []
     for talep in talepler:
+        created_at = timezone.localtime(talep.created_at)
         tur = talep.leave_type.name
         aralik = _aralik_metni(talep.start_date, talep.end_date, talep.days_requested)
         # Takvim aralığı K2 sınıfı değildir (maskeleme gerektirmez); gerekçe metni
@@ -416,8 +422,8 @@ def _izin_talep_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
 
         olaylar.append(
             {
-                "date": talep.created_at.date().isoformat(),
-                "date_display": _ad(talep.created_at.date()),
+                "date": created_at.date().isoformat(),
+                "date_display": _ad(created_at.date()),
                 "type": "leave_created",
                 "label": f"{tur} talebi oluşturuldu",
                 "summary": aralik,
@@ -430,6 +436,7 @@ def _izin_talep_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
             LeaveRequestStatus.TAKEN,
             LeaveRequestStatus.REJECTED,
         ):
+            decided_at = timezone.localtime(talep.decided_at)
             detay = dict(ortak)
             ozet = aralik
             if talep.status == LeaveRequestStatus.REJECTED:
@@ -451,8 +458,8 @@ def _izin_talep_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
                 ozet = f"{ozet} · {karar_etiketi}: {karar_veren}"
             olaylar.append(
                 {
-                    "date": talep.decided_at.date().isoformat(),
-                    "date_display": _ad(talep.decided_at.date()),
+                    "date": decided_at.date().isoformat(),
+                    "date_display": _ad(decided_at.date()),
                     "type": "leave_decision",
                     "label": etiket,
                     "summary": ozet,
@@ -467,12 +474,13 @@ def _izin_talep_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
                     f"{_gun_metni(snapshot.available_days)} gün"
                 )
                 olaylar[-1]["karar_sonrasi_kalan_snapshot_at"] = (
-                    snapshot.snapshot_at.isoformat()
+                    timezone.localtime(snapshot.snapshot_at).isoformat()
                 )
 
         if talep.canceled_at is not None:
             kayit = denetim.get(("leave.request.cancel", talep.pk))
             tarih = kayit.created_at if kayit is not None else talep.canceled_at
+            tarih = timezone.localtime(tarih)
             detay = dict(ortak)
             ozet = aralik
             if talep.cancel_reason:
@@ -495,6 +503,7 @@ def _izin_talep_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
         if talep.status == LeaveRequestStatus.TAKEN:
             kayit = denetim.get(("leave.request.taken", talep.pk))
             tarih = kayit.created_at if kayit is not None else talep.updated_at
+            tarih = timezone.localtime(tarih)
             detay = dict(ortak)
             isaretleyen = aktorler.get(kayit.user_id) if kayit is not None else None
             if isaretleyen:
@@ -541,6 +550,7 @@ def _izin_bakiye_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
 
     olaylar: list[dict] = []
     for kayit in kayitlar:
+        created_at = timezone.localtime(kayit.created_at)
         if kayit.entry_kind == BalanceEntryKind.ACCRUAL:
             etiket = f"{kayit.leave_type.name} hakkı tanımlandı"
             ozet = f"{_gun_metni(kayit.delta_days)} gün"
@@ -565,8 +575,8 @@ def _izin_bakiye_olaylari(employee: Employee) -> list[dict]:  # noqa: ANN001
 
         olaylar.append(
             {
-                "date": kayit.created_at.date().isoformat(),
-                "date_display": _ad(kayit.created_at.date()),
+                "date": created_at.date().isoformat(),
+                "date_display": _ad(created_at.date()),
                 "type": tip,
                 "label": etiket,
                 "summary": ozet,

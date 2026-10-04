@@ -82,7 +82,7 @@
   }
   function renderRequests(items) {
     const target = document.getElementById("profile-requests");
-    target.innerHTML = items.length ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Tarih</th><th>Alanlar</th><th>Durum</th><th>Karar notu</th></tr></thead><tbody>${items.map((r) => `<tr><td>${new Date(r.created_at).toLocaleString("tr-TR")}</td><td>${(r.field_codes || []).map(esc).join(", ")}</td><td>${esc(r.status_label)}</td><td>${esc(r.review_note || "—")}</td></tr>`).join("")}</tbody></table></div>` : "Henüz profil değişikliği talebiniz yok.";
+    target.innerHTML = items.length ? `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Tarih</th><th>Alanlar</th><th>Durum</th><th>Karar notu</th></tr></thead><tbody>${items.map((r) => `<tr><td>${new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Istanbul" }).format(new Date(r.created_at))}</td><td>${(r.field_codes || []).map(esc).join(", ")}</td><td>${esc(r.status_label)}</td><td>${esc(r.review_note || "—")}</td></tr>`).join("")}</tbody></table></div>` : "Henüz profil değişikliği talebiniz yok.";
   }
   async function loadProfile() {
     const {data} = await PERSOPYRO_UI.cagir("/test-ui/api/profile");

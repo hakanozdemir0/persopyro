@@ -135,11 +135,39 @@ def effective_permissions(platform_user_id) -> frozenset[str]:  # noqa: ANN001
     if not platform_user_is_active(platform_user_id):
         return frozenset()
     with connections["platform"].cursor() as cur:
-        return _kodlar(
+        permissions = set(_kodlar(
             cur,
             ETKIN_IZIN_SQL,
             [str(platform_user_id), f"{PLATFORM_PERMISSION_PREFIX}%"],
+        ))
+        cur.execute(
+            "SELECT can_view_audit FROM platform.user_capabilities WHERE platform_user_id=%s",
+            [str(platform_user_id)],
         )
+        capability = cur.fetchone()
+    if capability is not None:
+        if capability[0]:
+            permissions.add("platform.audit.read")
+        else:
+            permissions.discard("platform.audit.read")
+    return frozenset(permissions)
+
+
+def can_view_platform_admins(platform_user_id, permissions=None) -> bool:  # noqa: ANN001
+    """Superadmins can always manage accounts; admins need an explicit visibility flag."""
+    if not platform_user_is_active(platform_user_id):
+        return False
+    if permissions is None:
+        permissions = effective_permissions(platform_user_id)
+    if "platform.role.assign" in permissions:
+        return True
+    with connections["platform"].cursor() as cur:
+        cur.execute(
+            "SELECT can_view_admins FROM platform.user_capabilities WHERE platform_user_id=%s",
+            [str(platform_user_id)],
+        )
+        capability = cur.fetchone()
+    return bool(capability and capability[0])
 
 
 def active_roles(platform_user_id) -> list[str]:  # noqa: ANN001

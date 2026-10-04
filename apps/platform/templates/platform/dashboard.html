@@ -10,11 +10,6 @@
 {% endblock %}
 
 {% block content %}
-  <nav class="panel-tabs" aria-label="Şirket yönetimi">
-    <a class="{% if tab == 'create' %}selected{% endif %}" href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>
-    <a class="{% if tab == 'companies' %}selected{% endif %}" href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
-    <a href="{% url 'platform-plans' %}">Planlar ve plan düzenleme</a>
-  </nav>
   <section class="page-heading">
     <div>
       <p class="eyebrow">Sistem yönetimi</p>
@@ -66,8 +61,8 @@
       <div class="field"><label for="company-valid-from">Kullanım başlangıcı</label>
         <input id="company-valid-from" type="date" name="valid_from">
       </div>
-      <div class="field"><label for="company-valid-until">Kullanım bitişi</label>
-        <input id="company-valid-until" type="date" name="valid_until">
+      <div class="field"><label for="company-valid-until">Erişim kapanma tarihi</label>
+        <input id="company-valid-until" type="date" name="valid_until"><small>Erişim bu tarihin başladığı gün kapanır.</small>
       </div>
       </div>
       </section>
@@ -125,7 +120,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Şirket kodu</th><th>Alan adı</th><th>Durum</th><th>Şirket kullanıcı hesabı limiti</th><th>Plan</th><th>Oluşturulma</th><th>İşlemler</th></tr>
+          <tr><th>Şirket kodu</th><th>Alan adı</th><th>Durum</th><th>Şirket kullanıcı hesabı limiti</th><th>Plan</th><th>Depolama kullanımı</th><th>Oluşturulma</th><th>İşlemler</th></tr>
         </thead>
         <tbody>
         {% for tenant in tenants %}
@@ -135,11 +130,12 @@
             <td><span class="badge">{{ tenant.3 }}</span></td>
             <td>{{ tenant.4 }}</td>
             <td>{{ tenant.5|default:"—" }}</td>
+            <td>{% if tenant.7 > 0 %}{{ tenant.8|floatformat:"-2" }} / {{ tenant.7|floatformat:"-2" }} MB{% else %}{{ tenant.8|floatformat:"-2" }} MB / Sınırsız{% endif %}</td>
             <td>{{ tenant.6|date:"d.m.Y" }}</td>
-            <td><div class="row-actions"><a class="button" href="{% url 'platform-tenant-detail' tenant.0 %}">Ayrıntılar</a>{% if can_manage_companies %}<a class="button primary" href="{% url 'platform-tenant-detail' tenant.0 %}#company-edit">Düzenle</a>{% endif %}</div></td>
+            <td><div class="row-actions"><a class="button" href="{% url 'platform-tenant-detail' tenant.0 %}">Ayrıntılar</a>{% if can_manage_companies %}<a class="button primary" href="{% url 'platform-tenant-detail' tenant.0 %}#company-edit">Düzenle</a>{% endif %}{% if can_toggle_tenant %}{% if tenant.3 == 'active' or tenant.3 == 'trial' %}<form method="post" action="{% url 'platform-tenant-status' tenant.0 %}">{% csrf_token %}<input type="hidden" name="action" value="deactivate"><button class="danger" type="submit">Pasife al</button></form>{% elif tenant.3 == 'suspended' %}<form method="post" action="{% url 'platform-tenant-status' tenant.0 %}">{% csrf_token %}<input type="hidden" name="action" value="activate"><button class="primary" type="submit">Aktif et</button></form>{% endif %}{% endif %}</div></td>
           </tr>
         {% empty %}
-          <tr><td class="empty-state" colspan="7">Henüz şirket kaydı yok.</td></tr>
+          <tr><td class="empty-state" colspan="8">Henüz şirket kaydı yok.</td></tr>
         {% endfor %}
         </tbody>
       </table>

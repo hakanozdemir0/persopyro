@@ -45,11 +45,69 @@ def test_platform_panel_dashboard_requires_session() -> None:
     assert response.headers["Location"] == "/platform/login/"
 
 
+def test_expired_company_session_does_not_block_platform_panel(tenant_a) -> None:
+    user_id = _platform_user("expiry-panel@persopyro.test")
+    with tenant_context(tenant_a.id):
+        tenant_a.valid_until = date.today()
+        tenant_a.save(update_fields=["valid_until", "updated_at"])
+    client = Client()
+    session = client.session
+    session["platform_user_id"] = str(user_id)
+    session["tenant_id"] = str(tenant_a.id)
+    session.save()
+
+    response = client.get("/platform/")
+
+    assert response.status_code == 200
+    assert response.wsgi_request.session.get("platform_user_id") == str(user_id)
+
+
 def test_company_creation_permission_is_superadmin_only() -> None:
     superadmin_id = _platform_user("create-company-sa@persopyro.test")
     admin_id = _platform_user("create-company-admin@persopyro.test", role="platform_admin")
     assert "platform.tenant.create" in effective_permissions(superadmin_id)
     assert "platform.tenant.create" not in effective_permissions(admin_id)
+
+
+def test_only_superadmin_can_toggle_company_status(tenant_a) -> None:  # noqa: ANN001
+    superadmin_id = _platform_user("tenant-status-sa@persopyro.test")
+    admin_id = _platform_user("tenant-status-admin@persopyro.test", role="platform_admin")
+
+    def logged_client(user_id):
+        client = Client()
+        session = client.session
+        session["platform_user_id"] = str(user_id)
+        session.save()
+        return client
+
+    denied = logged_client(admin_id).post(
+        f"/platform/tenants/{tenant_a.id}/status/", {"action": "deactivate"}
+    )
+    assert denied.status_code == 403
+
+    client = logged_client(superadmin_id)
+    paused = client.post(
+        f"/platform/tenants/{tenant_a.id}/status/", {"action": "deactivate"}
+    )
+    assert paused.status_code == 302
+    with tenant_context(tenant_a.id):
+        tenant_a.refresh_from_db()
+    assert tenant_a.status == "suspended"
+
+    resumed = client.post(
+        f"/platform/tenants/{tenant_a.id}/status/", {"action": "activate"}
+    )
+    assert resumed.status_code == 302
+    with tenant_context(tenant_a.id):
+        tenant_a.refresh_from_db()
+    assert tenant_a.status == "active"
+    with connections["platform"].cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM platform.audit_events "
+            "WHERE action='platform.tenant.status.updated' AND tenant_id=%s",
+            [str(tenant_a.id)],
+        )
+        assert cursor.fetchone()[0] == 2
 
 
 def test_platform_panel_login_accepts_active_superadmin() -> None:

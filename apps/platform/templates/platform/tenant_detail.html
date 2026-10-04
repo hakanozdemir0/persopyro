@@ -9,11 +9,6 @@
 
 
 {% block content %}
-  <nav class="panel-tabs" aria-label="Şirket yönetimi">
-    <a href="{% url 'platform-dashboard' %}?tab=create">Şirket ekle</a>
-    <a class="selected" href="{% url 'platform-dashboard' %}?tab=companies">Şirket listesi</a>
-    <a href="{% url 'platform-plans' %}">Planlar ve plan düzenleme</a>
-  </nav>
   <section class="page-heading">
     <div>
       <p class="eyebrow">Şirket yönetimi</p>
@@ -26,6 +21,12 @@
     {% if notification_status == "sent" %}<p>Şirket e-postasına bildirim gönderildi.</p>
     {% elif notification_status == "failed" %}<p>E-posta gönderilemedi; şirket bilgileri kaydedildi.</p>{% endif %}
   </section>{% endif %}
+  {% if admin_action %}<section class="card" role="status">
+    {% if admin_action == 'reset_sent' %}Parola sıfırlama bağlantısı gönderildi.
+    {% elif admin_action == 'password_set' %}Şirket yöneticisinin parolası güncellendi.
+    {% elif admin_action == 'mail_failed' %}Sıfırlama e-postası gönderilemedi.
+    {% elif admin_action == 'invalid_password' %}Parola proje kurallarını karşılamıyor.
+    {% endif %}</section>{% endif %}
 
   <section class="card" aria-labelledby="summary-title">
     <div class="section-head"><h2 id="summary-title">Şirket özeti</h2><span class="badge">{{ company.get_status_display }}</span></div>
@@ -36,7 +37,7 @@
       <div><dt>Alan adı</dt><dd>{{ tenant.domain|default:"—" }}</dd></div>
       <div><dt>Plan</dt><dd>{{ plan_label|default:"—" }}</dd></div>
       <div><dt>Kullanım başlangıcı</dt><dd>{{ tenant.valid_from|date:"d.m.Y"|default:"—" }}</dd></div>
-      <div><dt>Kullanım bitişi</dt><dd>{{ tenant.valid_until|date:"d.m.Y"|default:"—" }}</dd></div>
+      <div><dt>Erişim kapanma tarihi</dt><dd>{{ tenant.valid_until|date:"d.m.Y"|default:"—" }}</dd></div>
     </dl>
     <h3 class="subsection-title">Şirket bilgi formu</h3>
     <dl class="detail-grid">
@@ -46,8 +47,7 @@
     <h3 class="subsection-title">Kullanım ve çalışan limitleri</h3>
     <dl class="detail-grid">
       <div><dt>Şirket kullanıcı hesabı limiti</dt><dd>{{ tenant.max_users|default:"Sınırsız" }} <span class="muted">(giriş yapabilen hesap sayısı)</span></dd></div>
-      <div><dt>Depolama limiti</dt><dd>{{ tenant.max_storage_mb }} MB</dd></div>
-      <div><dt>Kullanılan dosya alanı</dt><dd>{{ tenant.storage_used_mb }} MB</dd></div>
+      <div><dt>Depolama kullanımı</dt><dd>{% if tenant.max_storage_mb > 0 %}{{ tenant.storage_used_mb|floatformat:"-2" }} / {{ tenant.max_storage_mb|floatformat:"-2" }} MB{% else %}{{ tenant.storage_used_mb|floatformat:"-2" }} MB / Sınırsız{% endif %}</dd></div>
       <div><dt>Çalışan başına dosya kotası</dt><dd>{{ tenant.employee_file_max_mb }} MB</dd></div>
       <div><dt>İzin verilen evrak biçimleri</dt><dd>{{ tenant.employee_file_extensions|join:", "|default:"Dosya yükleme kapalı" }}</dd></div>
       <div><dt>Aktif çalışan</dt><dd>{{ active_employee_count }} / {{ tenant.max_active_employees|default:"Sınırsız" }}</dd></div>
@@ -68,7 +68,7 @@
       <div class="field"><label for="company-status">Durum</label><select id="company-status" name="status">{% for value, label in status_choices %}<option value="{{ value }}" {% if company.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
       <div class="field"><label for="company-plan">Plan</label><select id="company-plan" name="plan_code">{% for plan in plan_specs %}<option value="{{ plan.0 }}" data-users="{{ plan.2 }}" data-storage="{{ plan.3 }}" data-active="{{ plan.4 }}" data-records="{{ plan.5 }}" {% if tenant.plan_code == plan.0 %}selected{% endif %}>{{ plan.1 }}</option>{% endfor %}</select></div>
       <div class="field"><label for="valid-from">Kullanım başlangıcı</label><input id="valid-from" type="date" name="valid_from" value="{{ tenant.valid_from|date:'Y-m-d' }}"></div>
-      <div class="field"><label for="valid-until">Kullanım bitişi</label><input id="valid-until" type="date" name="valid_until" value="{{ tenant.valid_until|date:'Y-m-d' }}"></div>
+      <div class="field"><label for="valid-until">Erişim kapanma tarihi</label><input id="valid-until" type="date" name="valid_until" value="{{ tenant.valid_until|date:'Y-m-d' }}"><small>Erişim bu tarihin başladığı gün kapanır.</small></div>
       <div class="field"><label for="max-users">Şirket kullanıcı hesabı limiti (giriş yapabilen hesap sayısı; 0 = sınırsız)</label><input id="max-users" type="number" name="max_users" min="0" value="{{ tenant.max_users }}" required></div>
       <div class="field"><label for="max-storage">Depolama limiti (MB; 0 = sınırsız)</label><input id="max-storage" type="number" name="max_storage_mb" min="0" step="0.01" value="{{ tenant.max_storage_mb }}" required></div>
       <div class="field"><label for="employee-file-max">Çalışan başına toplam dosya kotası (MB)</label><input id="employee-file-max" type="number" name="employee_storage_max_mb" min="0.1" max="50" step="0.1" value="{{ tenant.employee_file_max_mb }}" required><small>Fotoğraf ve evrak dosyalarının toplamına uygulanır (en fazla 50 MB).</small></div>
@@ -113,6 +113,27 @@
     </form>
   </section>
   {% endif %}
+
+  <section class="card" aria-labelledby="admins-title">
+    <div class="section-head"><h2 id="admins-title">Şirket yöneticileri</h2></div>
+    {% for admin in company_admins %}
+      <div class="company-form-section" style="margin-top:12px">
+        <h3>{{ admin.get_full_name|default:admin.email }} <span class="muted">· {{ admin.email }}</span></h3>
+        {% if can_manage %}
+          <form method="post" action="{% url 'platform-tenant-admin-credentials' tenant.id admin.id %}" class="form-grid" style="margin-top:12px">
+            {% csrf_token %}<input type="hidden" name="action" value="set_password">
+            <div class="field"><label for="admin-password-{{ admin.id }}">Yeni parola belirle</label><input id="admin-password-{{ admin.id }}" type="password" name="password" autocomplete="new-password" required></div>
+            <div class="form-actions"><button class="primary" type="submit">Parolayı kaydet</button></div>
+          </form>
+          <form method="post" action="{% url 'platform-tenant-admin-credentials' tenant.id admin.id %}" style="margin-top:10px">
+            {% csrf_token %}<input type="hidden" name="action" value="reset_link">
+            <button type="submit">Parola sıfırlama bağlantısı gönder</button>
+          </form>
+        {% endif %}
+      </div>
+    {% empty %}<p class="empty-state">Şirket yöneticisi hesabı bulunamadı.</p>{% endfor %}
+    {% if not can_manage %}<p class="card-intro">Hesap işlemleri SUPERADMIN hesabına açıktır.</p>{% endif %}
+  </section>
 
   <section class="card" aria-labelledby="employees-title">
     <div class="section-head"><h2 id="employees-title">Çalışanlar</h2><a class="button" href="{% url 'platform-tenant-people' tenant.id %}">Çalışan kayıtlarını aç</a></div>

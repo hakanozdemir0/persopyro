@@ -24,6 +24,8 @@ staticfiles/
 
 # Nesne depolama / yerel belge kopyaları
 media/
+/tenant-files/
+/backups/
 
 # Editör / işletim sistemi
 .idea/

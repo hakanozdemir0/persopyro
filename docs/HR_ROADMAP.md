@@ -1442,7 +1442,7 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 | **Async exports** | **YOK** | P8: eşik üstü raporlar worker'a; ilerleme durumu ve bildirim |
 | **Data retention** | **YOK** | P3/P9: belge/audit/çalışan arşiv saklama süreleri + otomatik temizlik + KVKK silme talebi akışı (OD6/OD48) |
 | **GDPR/KVKK** | K1–K3 sınıflandırması + erişim kapıları var | Veri sahibi başvurusu (erişim/silme/düzeltme) akışı; işleme amacı kaydı; **yurt dışı aktarım** notu (SaaS, AB barındırma kararı) |
-| **Localization (i18n)** | Ölçüldü: `USE_I18N = True`, `LANGUAGE_CODE = "tr"`, `USE_TZ = True`, `TIME_ZONE = "UTC"`; **`LOCALE_PATHS` ve çeviri dosyaları yok**, arayüz metinleri TR sabit | P7: çoklu dil (UI + e-posta şablonları, `ARCHITECTURE.md` §11 TR/EN hedefi); ülke bazlı tarih/para biçimi |
+| **Localization (i18n)** | Ölçüldü: `USE_I18N = True`, `LANGUAGE_CODE = "tr"`, `USE_TZ = True`, `TIME_ZONE = "Europe/Istanbul"`; **`LOCALE_PATHS` ve çeviri dosyaları yok**, arayüz metinleri TR sabit | P7: çoklu dil (UI + e-posta şablonları, `ARCHITECTURE.md` §11 TR/EN hedefi); ülke bazlı tarih/para biçimi |
 | **Timezone** | Tek TZ (proje ayarı) | Vardiya/devam modülü **kiracı ve lokasyon** bazlı TZ ister (§10 `working_calendars.timezone`) |
 | **Currency** | **YOK** | P6: `currency` (ISO-4217) zorunlu; çoklu para birimi; kur dönüşümü **kapsam dışı** (raporlama tek para biriminde) |
 | **Country-specific rules** | **YOK** (kod ve tasarım yok; `hr.country_rule*` `DATABASE.md`'de geçmiyor — ölçüldü) | §14: versiyonlanmış kural seti; global kod ülke `if`'i içermez |

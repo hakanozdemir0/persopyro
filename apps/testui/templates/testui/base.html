@@ -342,6 +342,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .detail-box { margin-top: 0; border: 1px solid var(--line); border-radius: var(--r);
       padding: 14px 16px; background: linear-gradient(180deg, #fbfdff, #f8fafd);
       box-shadow: var(--shadow-sm); }
+    .detail-box.danger-box { margin-top: 16px; border-color: #eecac6; background: #fffafa; }
     .detail-box h2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .kv th { width: 34%; text-transform: none; letter-spacing: 0; font-size: 13px;
       font-weight: 600; color: var(--muted); background: transparent; }
@@ -464,6 +465,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       // tip: "ok" (başarı) | "info" | "error". Erişilebilirlik: aria-live
       // bölgesi (#global-msg); hata → role="alert" (acil duyuru).
       mesaj(tip, metin) {
+        if (tip === "error" && metin === "İşlem iptal edildi.") tip = "info";
         const el = document.getElementById("global-msg");
         if (!el) return;
         if (MSG_ZAMANLAYICI) { clearTimeout(MSG_ZAMANLAYICI); MSG_ZAMANLAYICI = null; }
@@ -510,6 +512,15 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       // çıkış) sessizce 403 alır ve oturum kapanmaz.
       async cagir(yol, { method = "GET", body = null } = {}) {
         const guvenli = method === "GET" || method === "HEAD";
+        if (!guvenli) {
+          const onaylandi = this.onay
+            ? await this.onay("Bu işlem kaydedilecek ve ilgili kayıtları değiştirebilir. Emin misiniz?")
+            : window.confirm("Bu işlem kaydedilecek ve ilgili kayıtları değiştirebilir. Emin misiniz?");
+          if (!onaylandi) {
+            this.mesaj("info", "İşlem iptal edildi.");
+            throw new Error("İşlem iptal edildi.");
+          }
+        }
         const basliklar = { "Accept": "application/json" };
         if (!guvenli) basliklar["X-CSRFToken"] = this.csrf();
         const secenekler = { method, headers: basliklar, credentials: "same-origin" };
@@ -526,6 +537,10 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
         try { govde = await yanit.json(); } catch (e) { govde = null; }
         if (!yanit.ok) {
           const kod = (govde && govde.error && govde.error.code) || "";
+          if (kod === "tenant_expired" || kod === "tenant_expired_admin") {
+            this.mesaj("error", (govde && govde.error && govde.error.message) || "Şirket kullanım süresi sona erdi.");
+            window.setTimeout(() => window.location.replace("/test-ui/login/"), 30000);
+          }
           if (yanit.status === 401 || kod === "not_authenticated") {
             // Oturum gerçekten kapalı: korunan sayfada kalma, girişe dön.
             window.location.replace("/test-ui/login/");
