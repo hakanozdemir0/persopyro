@@ -230,6 +230,9 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     tbody tr:hover { background: #fafcff; }
     tbody tr.secili { background: var(--accent-soft); }
     tbody tr:last-child td { border-bottom: none; }
+    .data-table.zebra tbody > tr:nth-child(even) > td { background: #f7f9fc; }
+    .data-table.zebra tbody > tr:hover > td { background: #eef4ff; }
+    .data-table.zebra tbody > tr.secili > td { background: var(--accent-soft); }
     td .pill + .pill { margin-left: 4px; }
     .tablo-kaydir { overflow-x: auto; margin: 0 -4px; }
     .data-table td.aksiyon, .data-table th.aksiyon { text-align: right; white-space: nowrap; }
@@ -253,6 +256,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       border: 1px solid var(--line); border-radius: var(--r-sm); background: #fbfcfe; }
     .calisan-secici-satir { display: flex; align-items: center; gap: 9px; padding: 8px 9px;
       margin: 0; border-radius: 6px; cursor: pointer; font-weight: 400; }
+    .calisan-secici-satir:nth-child(even) { background: #f7f9fc; }
     .calisan-secici-satir:hover { background: var(--accent-soft); }
     .calisan-secici-satir input { flex: 0 0 auto; width: 16px; height: 16px; }
     .calisan-secici-satir span { display: flex; flex-direction: column; gap: 1px; }

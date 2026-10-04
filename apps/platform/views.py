@@ -402,10 +402,13 @@ def platform_dashboard(request):  # noqa: ANN001, ANN201
         tenant_id = row[0]
         with tenant_context(tenant_id):
             storage_used_mb = round(tenant_file_usage_bytes(tenant_id) / (1024 * 1024), 2)
+            company_name = Tenant.objects.filter(pk=tenant_id, deleted_at__isnull=True).values_list(
+                "name", flat=True
+            ).first() or row[1]
         tenants.append(
             (
                 *row[:5], dict(TENANT_PLAN_CHOICES).get(row[5], row[5]),
-                row[6], row[7], storage_used_mb,
+                row[6], row[7], storage_used_mb, company_name,
             )
         )
     record_platform_event(
@@ -421,6 +424,7 @@ def platform_dashboard(request):  # noqa: ANN001, ANN201
         {
             "email": user[2],
             "tenants": tenants,
+            "company_search": request.GET.get("q", ""),
             "can_create_tenant": "platform.tenant.create" in permissions,
             "can_manage_companies": "platform.settings.manage" in permissions,
             "can_manage_admins": "platform.role.assign" in permissions,

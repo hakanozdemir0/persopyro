@@ -115,28 +115,44 @@
   {% if tab != 'create' %}<section class="card" aria-labelledby="company-list-title">
     <div class="section-head">
       <h2 id="company-list-title">Şirket listesi</h2>
-      <span class="muted">{{ tenants|length }} kayıt</span>
+      <span class="muted"><span id="company-result-count">{{ tenants|length }}</span> kayıt</span>
+    </div>
+    <div class="form-grid" style="margin-bottom:14px">
+      <div class="field">
+        <label for="company-search">Şirketlerde ara</label>
+        <input id="company-search" type="search" value="{{ company_search }}" placeholder="Şirket adı veya listedeki başka bir bilgi">
+      </div>
+      <div class="field">
+        <label for="company-status-filter">Durum</label>
+        <select id="company-status-filter">
+          <option value="active" selected>Aktif şirketler</option>
+          <option value="inactive">Pasif şirketler</option>
+          <option value="all">Tüm şirketler</option>
+        </select>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Şirket kodu</th><th>Alan adı</th><th>Durum</th><th>Şirket kullanıcı hesabı limiti</th><th>Plan</th><th>Depolama kullanımı</th><th>Oluşturulma</th><th>İşlemler</th></tr>
+          <tr><th>Şirket adı</th><th>Şirket kodu</th><th>Alan adı</th><th>Durum</th><th>Şirket kullanıcı hesabı limiti</th><th>Plan</th><th>Depolama kullanımı</th><th>Oluşturulma</th><th>İşlemler</th></tr>
         </thead>
-        <tbody>
+        <tbody id="company-list-rows">
         {% for tenant in tenants %}
-          <tr>
+          <tr data-company-row>
+            <td><strong>{{ tenant.9 }}</strong></td>
             <td><strong>{{ tenant.1 }}</strong></td>
             <td>{{ tenant.2|default:"—" }}</td>
-            <td><span class="badge">{{ tenant.3 }}</span></td>
+            <td><span class="badge" data-company-status="{{ tenant.3 }}">{{ tenant.3 }}</span></td>
             <td>{{ tenant.4 }}</td>
             <td>{{ tenant.5|default:"—" }}</td>
             <td>{% if tenant.7 > 0 %}{{ tenant.8|floatformat:"-2" }} / {{ tenant.7|floatformat:"-2" }} MB{% else %}{{ tenant.8|floatformat:"-2" }} MB / Sınırsız{% endif %}</td>
             <td>{{ tenant.6|date:"d.m.Y" }}</td>
-            <td><div class="row-actions"><a class="button" href="{% url 'platform-tenant-detail' tenant.0 %}">Ayrıntılar</a>{% if can_manage_companies %}<a class="button primary" href="{% url 'platform-tenant-detail' tenant.0 %}#company-edit">Düzenle</a>{% endif %}{% if can_toggle_tenant %}{% if tenant.3 == 'active' or tenant.3 == 'trial' %}<form method="post" action="{% url 'platform-tenant-status' tenant.0 %}">{% csrf_token %}<input type="hidden" name="action" value="deactivate"><button class="danger" type="submit">Pasife al</button></form>{% elif tenant.3 == 'suspended' %}<form method="post" action="{% url 'platform-tenant-status' tenant.0 %}">{% csrf_token %}<input type="hidden" name="action" value="activate"><button class="primary" type="submit">Aktif et</button></form>{% endif %}{% endif %}</div></td>
+            <td><div class="row-actions"><a class="button" href="{% url 'platform-tenant-detail' tenant.0 %}">Ayrıntılar</a>{% if can_manage_companies %}<a class="button primary" href="{% url 'platform-tenant-detail' tenant.0 %}#company-edit">Düzenle</a>{% endif %}{% if can_toggle_tenant %}{% if tenant.3 == 'active' or tenant.3 == 'trial' %}<form method="post" action="{% url 'platform-tenant-status' tenant.0 %}">{% csrf_token %}<input type="hidden" name="action" value="deactivate"><button class="company-status-action deactivate" type="submit">Pasife al</button></form>{% elif tenant.3 == 'suspended' %}<form method="post" action="{% url 'platform-tenant-status' tenant.0 %}">{% csrf_token %}<input type="hidden" name="action" value="activate"><button class="company-status-action activate" type="submit">Aktif et</button></form>{% endif %}{% endif %}</div></td>
           </tr>
         {% empty %}
-          <tr><td class="empty-state" colspan="8">Henüz şirket kaydı yok.</td></tr>
+          <tr><td class="empty-state" colspan="9">Henüz şirket kaydı yok.</td></tr>
         {% endfor %}
+          <tr id="company-search-empty" hidden><td class="empty-state" colspan="9">Aramayla eşleşen şirket bulunamadı.</td></tr>
         </tbody>
       </table>
     </div>
@@ -146,6 +162,32 @@
 {% block extra_scripts %}
 <script>
 (() => {
+  const companySearch = document.getElementById('company-search');
+  if (companySearch) {
+    const statusFilter = document.getElementById('company-status-filter');
+    const rows = [...document.querySelectorAll('[data-company-row]')];
+    const empty = document.getElementById('company-search-empty');
+    const count = document.getElementById('company-result-count');
+    const normalize = (value) => value.toLocaleLowerCase('tr-TR').trim();
+    const filterCompanies = () => {
+      const query = normalize(companySearch.value);
+      const selectedStatus = statusFilter?.value || 'active';
+      let visible = 0;
+      rows.forEach((row) => {
+        const status = row.querySelector('[data-company-status]')?.dataset.companyStatus;
+        const isActive = status === 'active' || status === 'trial';
+        const matchesStatus = selectedStatus === 'all' || (selectedStatus === 'active' ? isActive : !isActive);
+        const matches = matchesStatus && normalize(row.textContent).includes(query);
+        row.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      if (empty) empty.hidden = (!query && selectedStatus === 'all') || visible > 0;
+      if (count) count.textContent = String(visible);
+    };
+    companySearch.addEventListener('input', filterCompanies);
+    statusFilter?.addEventListener('change', filterCompanies);
+    filterCompanies();
+  }
   const customBox = document.getElementById('create-custom-fields');
   if (customBox) {
     const customJson = document.getElementById('create-custom-fields-json');
