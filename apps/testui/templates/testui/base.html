@@ -20,7 +20,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
 <html lang="tr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
   <title>{% block title %}Persopyro — Manuel Test Arayüzü{% endblock %}</title>
   <style>
@@ -42,14 +42,35 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       --shadow: 0 1px 3px rgba(16, 24, 40, .07), 0 10px 28px -14px rgba(16, 24, 40, .22);
       --shadow-lg: 0 24px 60px -20px rgba(16, 24, 40, .35);
       --ring: 0 0 0 3px rgba(37, 99, 235, .18);
+      --topbar-bg: rgba(255, 255, 255, .9); --field-bg: #fff;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --fg:#e5e7eb; --fg-soft:#cbd5e1; --muted:#94a3b8; --bg:#111827; --card:#1f2937;
+      --line:#374151; --line-strong:#4b5563; --accent:#60a5fa; --accent-dark:#93c5fd;
+      --accent-soft:#1e3a5f; --ok:#4ade80; --ok-soft:#153b2b; --warn:#fbbf24;
+      --warn-soft:#422e12; --err:#f87171; --err-soft:#451f24; --dev:#c4b5fd;
+      --dev-soft:#35265a; --topbar-bg:rgba(31,41,55,.94); --field-bg:#111827;
+      --shadow-sm:0 1px 2px rgba(0,0,0,.22); --shadow:0 1px 3px rgba(0,0,0,.25), 0 10px 28px -14px rgba(0,0,0,.55);
+      --ring:0 0 0 3px rgba(96,165,250,.28);
+    }
+    :root[data-theme="green"] { --accent:#15803d; --accent-dark:#166534; --accent-soft:#ecfdf3; --ring:0 0 0 3px rgba(21,128,61,.18); }
+    :root[data-theme="red"] { --accent:#b42318; --accent-dark:#912018; --accent-soft:#fef3f2; --ring:0 0 0 3px rgba(180,35,24,.18); }
+    :root[data-theme="pink"] { --accent:#db2777; --accent-dark:#be185d; --accent-soft:#fdf2f8; --ring:0 0 0 3px rgba(219,39,119,.18); }
+    :root[data-theme="coral"] { --accent:#e45757; --accent-dark:#c24141; --accent-soft:#fff1f0; --ring:0 0 0 3px rgba(228,87,87,.18); }
+    :root[data-theme="dark"] .badge.teknik { background:#273449; color:var(--muted); border-color:var(--line); }
+    :root[data-theme="dark"] .hak-kutu { background:#273449; }
+    :root[data-theme="dark"] .hak-kutu.vurgu { background:#1e3a5f; border-color:#365579; }
+    :root[data-theme="dark"] .card.ic, :root[data-theme="dark"] .form-field-row { background:#182230; }
+    :root[data-theme="dark"] th, :root[data-theme="dark"] tbody tr:hover { background:#273449; }
+    :root[data-theme="dark"] .profile-avatar { background:#273449; }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--bg); color: var(--fg);
       font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       -webkit-font-smoothing: antialiased; }
     /* Üst bar (başlık + sekmeler) sayfa kaydırılırken sabit kalır. */
-    .topbar { position: sticky; top: 0; z-index: 30; background: rgba(255, 255, 255, .9);
+    .topbar { position: sticky; top: 0; z-index: 30; background: var(--topbar-bg);
       backdrop-filter: saturate(180%) blur(10px);
       border-bottom: 1px solid var(--line); box-shadow: var(--shadow-sm); }
     .topbar header { border-bottom: none; padding-bottom: 6px; }
@@ -68,6 +89,8 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       color: var(--muted); border-color: var(--line); font-family: var(--mono); }
     header .spacer { margin-left: auto; }
     .profile-link { display:inline-flex; align-items:center; gap:7px; }
+    .theme-picker { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; }
+    .theme-picker select { width:auto; min-height:36px; padding:5px 28px 5px 9px; font-size:13px; }
     .profile-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover;
       border:1px solid var(--line); background:#fff; }
 
@@ -177,7 +200,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .onay-zincir li.guncel { color: var(--ink); font-weight: 600; }
     input, select, textarea { width: 100%; height: 38px; padding: 8px 11px;
       border: 1px solid var(--line-strong); border-radius: var(--r-sm); font: inherit;
-      background: #fff; color: var(--fg);
+      background: var(--field-bg); color: var(--fg);
       transition: border-color .12s ease, box-shadow .12s ease; }
     textarea { height: auto; }
     input::placeholder, textarea::placeholder { color: #9aa8ba; }
@@ -420,12 +443,74 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       .split { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 640px) {
-      main.page-container { padding: 0 10px 60px; }
-      .card { padding: 14px; }
+      :root { --gap: 12px; --pad: 14px; }
+      html, body { max-width: 100%; overflow-x: hidden; }
+      body { font-size: 14px; }
+      .topbar header {
+        padding: 10px max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+        gap: 8px;
+      }
+      .topbar header > .muted { display: none; }
+      .topbar .badge { font-size: 11px; }
+      .topbar .spacer { display: none; }
+      .topbar header .profile-link, .topbar header #logout-btn { min-height: 42px; }
+      .tabs {
+        padding: 6px max(10px, env(safe-area-inset-left)) 10px;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+        scrollbar-width: thin;
+      }
+      .tabs button { min-height: 44px; touch-action: manipulation; }
+      main.page-container {
+        width: 100%; max-width: 100%; margin: 14px auto;
+        padding: 0 max(10px, env(safe-area-inset-right)) 48px max(10px, env(safe-area-inset-left));
+      }
+      .card { min-width: 0; padding: 14px; }
       h1 { font-size: 18px; }
-      .tabs { padding: 6px 10px 10px; }
-      .position-row { align-items:stretch; flex-direction:column; }
-      .position-edit-grid { grid-template-columns:minmax(0,1fr); }
+      .grid, .grid-auto, .grid-2, .grid-3, .grid-4, .grid-esit,
+      .split, .form-grid, .form-grid.uc, .form-grid.genislik-5,
+      .leave-request-form, .option-grid, .modul-izinler {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .hak-izgara { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .position-row { align-items: stretch; flex-direction: column; }
+      .position-edit-grid { grid-template-columns: minmax(0, 1fr); }
+      .section-head, .kart-baslik { align-items: stretch; }
+      .section-head .sag, .kart-baslik .sag {
+        width: 100%; margin-left: 0; flex-wrap: wrap; justify-content: flex-start;
+      }
+      .action-bar, .form-alt { align-items: stretch; }
+      .action-bar > button, .action-bar > .button,
+      .form-alt > button, .form-alt > .button { min-height: 44px; }
+      .filtre-bar { align-items: stretch; }
+      .filtre-bar > *, .filtre-bar input { width: 100%; max-width: none; }
+      input, select, textarea { min-height: 44px; font-size: 16px; }
+      textarea { min-height: 96px; }
+      button, .button { min-height: 44px; touch-action: manipulation; }
+      button.kucuk { min-height: 40px; }
+      .tablo-kaydir {
+        max-width: 100%; margin: 0; overflow-x: auto;
+        -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+        scrollbar-width: thin;
+      }
+      .tablo-kaydir table { width: max-content; min-width: 100%; }
+      th, td { padding: 8px; }
+      .detail-panel { left: 0; right: 0; width: 100%; border-left: 0; }
+      .detail-panel-head {
+        padding: 12px max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left));
+      }
+      .detail-panel-body {
+        padding: 14px max(14px, env(safe-area-inset-right)) calc(28px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+      }
+      .modal-backdrop {
+        align-items: flex-end; padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+      }
+      .modal { width: 100%; max-height: calc(100dvh - 16px); border-radius: var(--r-lg) var(--r-lg) 10px 10px; }
+      .modal-actions { flex-direction: column; }
+      .modal-actions button { width: 100%; min-height: 44px; }
+      .login-wrap { width: 100%; margin: 3vh auto; }
+      .login-wrap .card { padding: 18px 16px; }
+      .teknik, code, pre { overflow-wrap: anywhere; }
     }
     @media (prefers-reduced-motion: reduce) {
       * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
@@ -440,6 +525,13 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     {% block header_extra %}{% endblock %}
     {% if user.is_authenticated %}
       <span class="spacer"></span>
+      <label class="theme-picker" for="theme-select"><span>Tema</span>
+        <select id="theme-select" aria-label="Görünüm teması">
+          <option value="light">Açık</option><option value="dark">Koyu</option>
+          <option value="green">Yeşil</option><option value="red">Kırmızı</option>
+          <option value="pink">Pembe</option><option value="coral">Açık kırmızı</option>
+        </select>
+      </label>
       <span class="muted">{{ user.email }}</span>
       <a class="button profile-link" href="{% url 'test-ui-profile' %}">
         <img class="profile-avatar" id="header-avatar" src="https://sekalaw.com/wp-content/uploads/2024/09/no-pp.jpg" alt="Profil fotoğrafı">
@@ -456,6 +548,22 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     {% block content %}{% endblock %}
   </main>
   <script>
+    // Tema tercihi bu tarayıcıda saklanır ve tüm test arayüzü sayfalarında korunur.
+    (() => {
+      const kok = document.documentElement;
+      const secici = document.getElementById("theme-select");
+      const temalar = new Set(["light", "dark", "green", "red", "pink", "coral"]);
+      let tema = "light";
+      try { const kayitli = localStorage.getItem("persopyro-theme"); if (temalar.has(kayitli)) tema = kayitli; } catch (_) {}
+      kok.dataset.theme = tema;
+      if (secici) {
+        secici.value = tema;
+        secici.addEventListener("change", () => {
+          kok.dataset.theme = temalar.has(secici.value) ? secici.value : "light";
+          try { localStorage.setItem("persopyro-theme", kok.dataset.theme); } catch (_) {}
+        });
+      }
+    })();
     // Ortak yardımcılar: CSRF'li fetch + anlaşılır hata mesajları.
     // Reusable geri bildirim (§7): başarı 5 sn sonra kapanır; hata, kullanıcı
     // kapatana kadar kalır (kapatma düğmesi). Yeni dependency yok.
