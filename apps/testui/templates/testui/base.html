@@ -43,6 +43,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       --shadow-lg: 0 24px 60px -20px rgba(16, 24, 40, .35);
       --ring: 0 0 0 3px rgba(37, 99, 235, .18);
       --topbar-bg: rgba(255, 255, 255, .9); --field-bg: #fff;
+      --table-zebra: #f7f9fc; --table-zebra-hover: #eef4ff;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
     :root[data-theme="dark"] {
@@ -52,6 +53,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       --accent-soft:#1e3a5f; --ok:#4ade80; --ok-soft:#153b2b; --warn:#fbbf24;
       --warn-soft:#422e12; --err:#f87171; --err-soft:#451f24; --dev:#c4b5fd;
       --dev-soft:#35265a; --topbar-bg:rgba(31,41,55,.94); --field-bg:#111827;
+      --table-zebra:#263244; --table-zebra-hover:#334155;
       --shadow-sm:0 1px 2px rgba(0,0,0,.22); --shadow:0 1px 3px rgba(0,0,0,.25), 0 10px 28px -14px rgba(0,0,0,.55);
       --ring:0 0 0 3px rgba(96,165,250,.28);
     }
@@ -89,8 +91,21 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       color: var(--muted); border-color: var(--line); font-family: var(--mono); }
     header .spacer { margin-left: auto; }
     .profile-link { display:inline-flex; align-items:center; gap:7px; }
-    .theme-picker { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; }
-    .theme-picker select { width:auto; min-height:36px; padding:5px 28px 5px 9px; font-size:13px; }
+    .theme-picker { position:relative; display:inline-flex; align-items:center; }
+    .theme-trigger { width:34px; min-height:34px; padding:0; border:1px solid var(--line-strong);
+      border-radius:10px; background:var(--card); box-shadow:var(--shadow-sm); }
+    .theme-trigger:hover { background:var(--card); border-color:var(--accent); }
+    .theme-trigger:focus-visible, .theme-option:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    .theme-swatch { display:block; width:17px; height:17px; margin:auto; border:1px solid rgba(15,23,42,.18);
+      border-radius:5px; background:var(--swatch); box-shadow:inset 0 0 0 1px rgba(255,255,255,.12); }
+    .theme-menu { position:absolute; top:calc(100% + 8px); right:0; z-index:50; display:grid;
+      grid-template-columns:repeat(3, 36px); gap:5px; padding:8px; border:1px solid var(--line);
+      border-radius:12px; background:var(--card); box-shadow:var(--shadow); }
+    .theme-menu[hidden] { display:none; }
+    .theme-option { display:grid; width:36px; height:36px; min-height:36px; place-items:center;
+      padding:0; border:1px solid transparent; border-radius:8px; background:transparent; box-shadow:none; }
+    .theme-option:hover { border-color:var(--line-strong); background:var(--bg); }
+    .theme-option[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-soft); }
     .profile-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover;
       border:1px solid var(--line); background:#fff; }
 
@@ -253,8 +268,8 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     tbody tr:hover { background: #fafcff; }
     tbody tr.secili { background: var(--accent-soft); }
     tbody tr:last-child td { border-bottom: none; }
-    .data-table.zebra tbody > tr:nth-child(even) > td { background: #f7f9fc; }
-    .data-table.zebra tbody > tr:hover > td { background: #eef4ff; }
+    .data-table.zebra tbody > tr:nth-child(even) > td { background: var(--table-zebra); }
+    .data-table.zebra tbody > tr:hover > td { background: var(--table-zebra-hover); }
     .data-table.zebra tbody > tr.secili > td { background: var(--accent-soft); }
     td .pill + .pill { margin-left: 4px; }
     .tablo-kaydir { overflow-x: auto; margin: 0 -4px; }
@@ -525,13 +540,19 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     {% block header_extra %}{% endblock %}
     {% if user.is_authenticated %}
       <span class="spacer"></span>
-      <label class="theme-picker" for="theme-select"><span>Tema</span>
-        <select id="theme-select" aria-label="Görünüm teması">
-          <option value="light">Açık</option><option value="dark">Koyu</option>
-          <option value="green">Yeşil</option><option value="red">Kırmızı</option>
-          <option value="pink">Pembe</option><option value="coral">Açık kırmızı</option>
-        </select>
-      </label>
+      <div class="theme-picker">
+        <button class="theme-trigger" id="theme-trigger" type="button" aria-label="Görünüm temasını değiştir" aria-haspopup="true" aria-expanded="false" aria-controls="theme-menu" title="Görünüm temasını değiştir">
+          <span class="theme-swatch" id="theme-current-swatch" aria-hidden="true"></span>
+        </button>
+        <div class="theme-menu" id="theme-menu" role="group" aria-label="Görünüm temaları" hidden>
+          <button class="theme-option" type="button" data-theme-choice="light" aria-label="Açık tema" aria-pressed="false" title="Açık"><span class="theme-swatch" style="--swatch:#f4f6fb"></span></button>
+          <button class="theme-option" type="button" data-theme-choice="dark" aria-label="Koyu tema" aria-pressed="false" title="Koyu"><span class="theme-swatch" style="--swatch:#1f2937"></span></button>
+          <button class="theme-option" type="button" data-theme-choice="green" aria-label="Yeşil tema" aria-pressed="false" title="Yeşil"><span class="theme-swatch" style="--swatch:#15803d"></span></button>
+          <button class="theme-option" type="button" data-theme-choice="red" aria-label="Kırmızı tema" aria-pressed="false" title="Kırmızı"><span class="theme-swatch" style="--swatch:#b42318"></span></button>
+          <button class="theme-option" type="button" data-theme-choice="pink" aria-label="Pembe tema" aria-pressed="false" title="Pembe"><span class="theme-swatch" style="--swatch:#db2777"></span></button>
+          <button class="theme-option" type="button" data-theme-choice="coral" aria-label="Açık kırmızı tema" aria-pressed="false" title="Açık kırmızı"><span class="theme-swatch" style="--swatch:#e45757"></span></button>
+        </div>
+      </div>
       <span class="muted">{{ user.email }}</span>
       <a class="button profile-link" href="{% url 'test-ui-profile' %}">
         <img class="profile-avatar" id="header-avatar" src="https://sekalaw.com/wp-content/uploads/2024/09/no-pp.jpg" alt="Profil fotoğrafı">
@@ -551,16 +572,32 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     // Tema tercihi bu tarayıcıda saklanır ve tüm test arayüzü sayfalarında korunur.
     (() => {
       const kok = document.documentElement;
-      const secici = document.getElementById("theme-select");
+      const tetikleyici = document.getElementById("theme-trigger");
+      const menu = document.getElementById("theme-menu");
+      const guncelRenk = document.getElementById("theme-current-swatch");
+      const secenekler = [...document.querySelectorAll("[data-theme-choice]")];
       const temalar = new Set(["light", "dark", "green", "red", "pink", "coral"]);
+      const renkler = { light:"#f4f6fb", dark:"#1f2937", green:"#15803d", red:"#b42318", pink:"#db2777", coral:"#e45757" };
       let tema = "light";
       try { const kayitli = localStorage.getItem("persopyro-theme"); if (temalar.has(kayitli)) tema = kayitli; } catch (_) {}
       kok.dataset.theme = tema;
-      if (secici) {
-        secici.value = tema;
-        secici.addEventListener("change", () => {
-          kok.dataset.theme = temalar.has(secici.value) ? secici.value : "light";
-          try { localStorage.setItem("persopyro-theme", kok.dataset.theme); } catch (_) {}
+      if (guncelRenk) guncelRenk.style.setProperty("--swatch", renkler[tema]);
+      secenekler.forEach((secenek) => secenek.setAttribute("aria-pressed", String(secenek.dataset.themeChoice === tema)));
+      if (tetikleyici && menu) {
+        const menuAc = (acik) => { menu.hidden = !acik; tetikleyici.setAttribute("aria-expanded", String(acik)); };
+        tetikleyici.addEventListener("click", () => menuAc(menu.hidden));
+        secenekler.forEach((secenek) => secenek.addEventListener("click", () => {
+          tema = temalar.has(secenek.dataset.themeChoice) ? secenek.dataset.themeChoice : "light";
+          kok.dataset.theme = tema;
+          guncelRenk.style.setProperty("--swatch", renkler[tema]);
+          secenekler.forEach((oge) => oge.setAttribute("aria-pressed", String(oge === secenek)));
+          try { localStorage.setItem("persopyro-theme", tema); } catch (_) {}
+          menuAc(false);
+          tetikleyici.focus();
+        }));
+        document.addEventListener("click", (olay) => { if (!olay.target.closest(".theme-picker")) menuAc(false); });
+        document.addEventListener("keydown", (olay) => {
+          if (olay.key === "Escape" && !menu.hidden) { menuAc(false); tetikleyici.focus(); }
         });
       }
     })();
