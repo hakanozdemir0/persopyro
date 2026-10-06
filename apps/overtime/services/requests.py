@@ -7,9 +7,8 @@ Tasarım:
     olmayan üst sınır reddedilir (`OVERTIME_MAX_MINUTES`); aynı kural DB `CHECK`'i
     ile de zorlanır (bkz. `overtime/0002_p5a_overtime_guards`).
   * **Onay altyapısı ortak:** adımlar `hr.approval_steps` tablosunda kurulur
-    (`subject_kind='overtime_request'`); sıra atlanamaz (OD39). Adım **birincil
-    yönetici** → **İK** sırasıyla kurulur; kaydı açan kişi birincil yöneticisi ise o
-    adım kurulmaz (`SEPARATE_ACTOR`: kendi talebini onaylayamaz).
+    (`subject_kind='overtime_request'`); birincil yönetici tek onaycıdır ve
+    kararında isterse İK adımını ekler. Yönetici yoksa talep İK rolüne düşer.
   * **Karşılık/katsayı YOK:** bu dilimde `compensation_type` yazılmaz (kural motoru
     P5a/P5b ile gelir); ücret veya izin karşılığı **hesaplanmaz**.
   * Her işlem `log_action` ile denetim kaydına yazılır (parola/PII yazılmaz).
@@ -26,6 +25,7 @@ from apps.audit.services import log_action
 from apps.leave.models import ApprovalStep, ApprovalStepStatus, ApprovalSubjectKind
 from apps.leave.models import LeaveType, RecordStatus
 from apps.leave.services.balances import credit_time_off_balance
+from apps.leave.services.authorization import direct_reports
 from apps.leave.services.requests import HR_APPROVER_ROLE_CODE
 from apps.organization.models import Employee, EmployeeManager, ManagerRelationType
 from apps.overtime.models import (
@@ -127,7 +127,7 @@ def _onayli_izin_var(employee: Employee, work_date) -> bool:
 
 def _adimlari_olustur(talep: OvertimeRequest) -> list[ApprovalStep]:
     """
-    Onay adımlarını kurar: **birincil yönetici → İK** (OD39).
+    Birincil yönetici varsa tek onay adımı, yönetici yoksa İK adımı kurar.
 
     Birincil yönetici yoksa ya da kaydı açanın kendisiyse yönetici adımı **kurulmaz**
     (kendi talebini onaylayamaz); adım İK rolüne düşer.
@@ -162,16 +162,17 @@ def _adimlari_olustur(talep: OvertimeRequest) -> list[ApprovalStep]:
             )
             sira += 1
 
-    adimlar.append(
-        ApprovalStep(
-            tenant_id=talep.tenant_id,
-            subject_kind=ApprovalSubjectKind.OVERTIME_REQUEST,
-            subject_id=talep.pk,
-            step_no=sira,
-            approver_role_code=HR_APPROVER_ROLE_CODE,
-            status=ApprovalStepStatus.PENDING,
+    if not adimlar:
+        adimlar.append(
+            ApprovalStep(
+                tenant_id=talep.tenant_id,
+                subject_kind=ApprovalSubjectKind.OVERTIME_REQUEST,
+                subject_id=talep.pk,
+                step_no=sira,
+                approver_role_code=HR_APPROVER_ROLE_CODE,
+                status=ApprovalStepStatus.PENDING,
+            )
         )
-    )
     for adim in adimlar:
         adim.save()
     return adimlar
@@ -284,7 +285,8 @@ def create_overtime_request(
 
 
 def decide_overtime_request(
-    *, actor, talep: OvertimeRequest, decision: str, reason: str = ""
+    *, actor, talep: OvertimeRequest, decision: str, reason: str = "",
+    request_hr_review: bool = False,
 ) -> OvertimeRequest:
     """
     Geçerli onay adımı için karar verir (`approved` / `rejected`).
@@ -314,6 +316,37 @@ def decide_overtime_request(
                 "'farklı aktör' koşulu gerekir (kendi bildiriminizi onaylayamazsınız)."
             )
 
+        if request_hr_review:
+            if decision != OvertimeStatus.APPROVED:
+                raise OvertimeValidationError("İK onayı yalnız yönetici onayıyla birlikte istenebilir.")
+            if (
+                adim.approver_user_id != getattr(actor, "pk", None)
+                or kilitli.employee_id not in direct_reports(actor)
+            ):
+                raise OvertimeAuthorizationError(
+                    "İK onayını yalnız çalışanın doğrudan yöneticisi isteyebilir."
+                )
+            hr_adimi_var = ApprovalStep.objects.filter(
+                subject_kind=ApprovalSubjectKind.OVERTIME_REQUEST,
+                subject_id=kilitli.pk,
+                approver_role_code=HR_APPROVER_ROLE_CODE,
+                deleted_at__isnull=True,
+            ).exists()
+            if not hr_adimi_var:
+                son_adim = ApprovalStep.objects.filter(
+                    subject_kind=ApprovalSubjectKind.OVERTIME_REQUEST,
+                    subject_id=kilitli.pk,
+                    deleted_at__isnull=True,
+                ).order_by("-step_no").values_list("step_no", flat=True).first() or adim.step_no
+                ApprovalStep.objects.create(
+                    tenant_id=kilitli.tenant_id,
+                    subject_kind=ApprovalSubjectKind.OVERTIME_REQUEST,
+                    subject_id=kilitli.pk,
+                    step_no=son_adim + 1,
+                    approver_role_code=HR_APPROVER_ROLE_CODE,
+                    status=ApprovalStepStatus.PENDING,
+                )
+
         gerekce = (reason or "").strip()
         simdi = timezone.now()
         adim.status = decision
@@ -337,6 +370,7 @@ def decide_overtime_request(
                 "step_no": adim.step_no,
                 "request_id": str(kilitli.pk),
                 "sonraki_adim": getattr(current_step(kilitli), "step_no", None),
+                "ik_onayi_istendi": bool(request_hr_review),
             },
         )
         return kilitli

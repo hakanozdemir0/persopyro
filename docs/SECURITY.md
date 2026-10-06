@@ -65,9 +65,11 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 - Başarısız girişler sayılır ve hesap kilitlenir ✅
   (`LOGIN_MAX_FAILED_ATTEMPTS=5`, `LOGIN_LOCKOUT_MINUTES=15`); kilit süresince
   doğru parola da kabul edilmez.
-- **MFA (TOTP)** ✅ uygulandı: hem oturum hem API token girişinde zorunludur
-  (hesapta açıksa). TOTP sırrı veritabanında **şifreli** saklanır (Fernet ✅);
-  anahtar okunamazsa giriş reddedilir (fail-closed).
+- **MFA (TOTP)** ✅ uygulandı: üretimde oturum ve API token girişinde zorunludur
+  (hesapta açıksa). `DEBUG=1` yerel geliştirme ortamında oturum girişi tek
+  adımlıdır; API token girişinde MFA denetimi yine uygulanır. TOTP sırrı
+  veritabanında **şifreli** saklanır (Fernet ✅); anahtar okunamazsa MFA
+  denetiminin uygulandığı giriş yolu reddedilir (fail-closed).
 - Giriş uçları en katı hız sınırı sınıfındadır ✅ (`auth`, önbellek destekli);
   sınır aşımında 429.
 - **Oturum** ✅: veritabanında tutulur, ömrü 12 saat, çıkışta sunucu tarafında

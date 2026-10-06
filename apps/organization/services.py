@@ -43,6 +43,7 @@ from apps.organization.employee_form_catalog import EMPLOYEE_FORM_FIELDS
 from apps.organization.models import (
     Department,
     Employee,
+    EmployeeStatus,
     EmployeeAssignment,
     EmployeeEmploymentTerms,
     EmployeeManager,
@@ -628,6 +629,16 @@ def set_primary_manager(  # noqa: ANN001, PLR0913
     _kapsam_dogrula(actor, department_id=employee.department_id, islem="Birincil yönetici atama")
     if employee.pk == manager_employee.pk:
         raise OrganizationError("Çalışan kendi yöneticisi olamaz.")
+    if manager_employee.status != EmployeeStatus.ACTIVE:
+        raise OrganizationError("Yönetici olarak yalnızca aktif çalışan atanabilir.")
+    if not object_in_org_scope(
+        actor,
+        department_id=manager_employee.department_id,
+        owner_user_id=manager_employee.user_id,
+    ):
+        raise OrganizationAuthorizationError(
+            "Yönetici adayı aktörün organizasyon kapsamı dışında."
+        )
 
     baslangic = effective_from or timezone.localdate()
     mevcut = (
@@ -921,6 +932,14 @@ def change_assignment(
     """
     _aktoru_dogrula(actor, "employee.update")
     _ayni_kiracili_mi(actor, employee, "Atama değişikliği")
+    if not object_in_org_scope(
+        actor,
+        department_id=employee.department_id,
+        owner_user_id=employee.user_id,
+    ):
+        raise OrganizationAuthorizationError(
+            "Atama değişikliği: çalışan aktörün organizasyon kapsamı dışında."
+        )
     gerekce = (reason or "").strip()
     if not gerekce:
         raise OrganizationError("Atama değişikliği için gerekçe zorunludur.")
@@ -936,6 +955,9 @@ def change_assignment(
         _ayni_kiracili_mi(actor, hedef_birim, "Atama değişikliği")
         if hedef_birim.deleted_at is not None:
             raise OrganizationError("Silinmiş birim yeni atamada kullanılamaz.")
+        if hedef_birim.status != RecordStatus.ACTIVE:
+            raise OrganizationError("Pasif birim yeni atamada kullanılamaz.")
+        _kapsam_dogrula(actor, department_id=hedef_birim.pk, islem="Atama değişikliği")
     if hedef_pozisyon is not None:
         _ayni_kiracili_mi(actor, hedef_pozisyon, "Atama değişikliği")
         if hedef_pozisyon.deleted_at is not None:

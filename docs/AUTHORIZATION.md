@@ -607,13 +607,14 @@ Denetim kararı (`apps/overtime/services/authorization.py`):
 |---|---|
 | Bildirim oluşturma | `overtime.request.create` ∧ aynı kiracı ∧ **yalnız kendi çalışan kaydı** (`SELF`); çalışan aktif olmalı; süre sunucuda |
 | Görme | `overtime.request.read` ∧ aynı kiracı ∧ (`SELF` ∨ organizasyon kapsamı ∨ karar verebildiği adım) |
-| Onay/red | `overtime.request.approve` ∧ aynı kiracı ∧ (`ASSIGNED` ∨ **TENANT** kapsam) ∧ `SEPARATE_ACTOR` (kendi talebine karar veremez) ∧ kapsam |
+| Onay/red | `overtime.request.approve` ∧ aynı kiracı ∧ **geçerli `approval_steps` adımına atanmış olma** ∧ `SEPARATE_ACTOR` ∧ kapsam |
 | İptal | `overtime.request.cancel` ∧ aynı kiracı ∧ (`SELF` yalnız onay öncesi ∨ kapsam); gerekçe zorunlu |
 
-**Onay yönlendirmesi:** izin modülüyle **aynı** model ve aynı altyapı (`hr.approval_steps`,
-`subject_kind='overtime_request'`): (1) birincil yönetici (`SEPARATE_ACTOR` ihlalinde atlanır),
-(2) yetkili rol adımı. Tenant geneli yetkili (ŞİRKET YÖN.) uygun adımda karar verebilir — bu
-davranış izin modülüyle **birebir aynıdır** (OD62).
+**Onay yönlendirmesi (2026-10-06):** yeni taleplerde `hr.approval_steps`,
+`subject_kind='overtime_request'` üzerinden önce yalnız birincil yöneticiye atanmış tek adım
+oluşturulur. Yönetici onaylarken isterse İK rolüne ikinci adımı ekler. Birincil yönetici
+yoksa İK yedek adım olur. Normal onay yalnız atanmış güncel adım sahibi tarafından verilir;
+kiracı geneli kapsam tek başına onay yetkisi üretmez.
 
 #### F. Vardiya ve devam
 
@@ -1256,7 +1257,7 @@ izinli(işlem, kayıt) = (kullanıcı ilgili izin koduna sahip)  ∧  (kayıt et
 | **M8** | `hr.roles.scope_type` kapalı küme (`TENANT`, `UNIT`, `UNIT_DIRECT`, `ASSIGNED`, `SELF`) + dokümandaki backfill; varsayılan şablonlarda `dept_manager` = `UNIT` | ✅ UYGULANDI (`rbac/0006`): NOT NULL + DB `CHECK`; backfill eşlemesi uygulandı |
 | **M9** | `hr.user_roles.scope_org_unit_id` (FK + aynı kiracı guard'ı) + **guard tetikleyicisi**: rol `scope_type ∈ {UNIT, UNIT_DIRECT}` ise `scope_org_unit_id` **zorunlu**; benzersizlik `(user_id, role_id, scope_org_unit_id)` **`NULLS NOT DISTINCT`** | ✅ **TAMAMLANDI** (`rbac/0007` + `0008_od5_scope_org_unit_fk` + `0009`/`0010`): kolon, benzersizlik, **gerçek FK (`hr.departments.id`)**, kiracı guard'ı ve "aktif birim" denetimi; devre dışı bırakma serbest |
 | **M10–M13** | `departments`/`positions`/`employees`/`employee_manager`: kapsam hesabı için `(tenant_id, parent_id)` indeksi (M24) ve `employees.department_id` zorunluluğu | ✅ UYGULANDI (`organization/0001`–`0009`): tablolar + `department_id` NOT NULL + kısmi benzersizlikler + kiracı guard'ları + RLS/FORCE; alt ağaç çözümlemesi tek noktada |
-| **M14** | İzin modülü: talep görünürlüğü/onayı kapsam ile daraltılır; `ASSIGNED`/`SEPARATE_ACTOR` koşullarının veri kaynağı `approval_steps` | ✅ UYGULANDI (`leave/0001`–`0004`, `rbac/0011`): `izin ∧ kapsam` kararı `apps/leave/services/authorization.py`; onay sırası (birincil yönetici → yetkili rol) atlanamaz; bakiye olay defteriyle izlenir; izin gerekçesi (K2) denetim kaydına yazılmaz |
+| **M14** | İzin modülü: talep görünürlüğü/onayı kapsam ile daraltılır; `ASSIGNED`/`SEPARATE_ACTOR` koşullarının veri kaynağı `approval_steps` | ✅ UYGULANDI: onay yalnız güncel atanmış adım sahibince verilir; yeni taleplerde varsayılan doğrudan yönetici, isteğe bağlı İK adımı (2026-10-06 kararı); bakiye olay defteriyle izlenir |
 | **Resolver** | **organization scope resolver** (`scope_org_unit_id` → alt ağaç kimlikleri, kiracı bağlamında) + **permission resolver** ile birleşik karar: `izin ∧ kapsam` | ✅ UYGULANDI (`apps/rbac/services/scope.py`): recursive CTE ile gerçek alt ağaç (≤ 20), `UNIT_DIRECT` ayrımı, çoklu atama birleşimi, fail-closed; nesne kararı `object_in_org_scope()` + çalışan hedefi için `can_access_employee()`. İki görünüm: `declared_permission_codes` (sahiplik) / `effective_permission_codes` (kullanılabilir) |
 | **Testler** | T7 (kendini yükseltme), alt ağaç/kardeş birim ayrımı, multi-scope birleşim, NULL fail-closed, silinmiş birim/atama, süre bitimi, move sonrası yeniden hesaplama, PII ayrımı | ✅ UYGULANDI: M7–M9 testleri + M10–M13 testleri (`tests/test_organization_m10_m13.py`, 56 test): alt ağaç/kardeş birim, çoklu kapsam birleşimi, silinmiş birim/atama, süre bitimi, move sonrası **yeniden hesaplama**, izin ∧ kapsam (ALLOW/DENY), K2/K3 ayrımı |
 
@@ -2571,20 +2572,18 @@ Fazla mesai V1 uygulamasında ortaya çıkan üç davranış sorusu **karara ba�
 yeni açık karar (❓) **bırakılmamıştır**. Şema/kod karşılığı: `apps/overtime/`,
 `docs/DATABASE.md` A.11, `docs/HR_ROADMAP.md` §11/P5a.
 
-#### OD62 — Fazla mesai onay zinciri izin modülüyle aynı mı? — **KAPALI** ✅ (2026-09-13)
+#### OD62 — Fazla mesai onay altyapısı — **2026-10-06'da güncellendi**
 
-- **KARAR — V1:** Onay zinciri **mevcut izin onay modeliyle aynıdır**: (1) çalışanın
-  **birincil yöneticisi** (`employee_manager`, `SEPARATE_ACTOR` ihlalinde atlanır),
-  (2) **yetkili rol** adımı. Yeni onay motoru **yazılmaz**; `hr.approval_steps`
-  yeniden kullanılır (`subject_kind='overtime_request'`).
-- **KARAR — tenant geneli yetkili:** `TENANT` kapsamlı yetkili (ŞİRKET YÖN.), adım sahibi
-  olmasa da **uygun adımda** karar verebilir (izin modülüyle birebir aynı davranış).
-  `UNIT` kapsamlı yönetici yalnız kapsamı içindeki çalışanın talebine karar verir;
-  kapsam dışı → **404**.
+- **GÜNCEL KARAR:** `hr.approval_steps` altyapısı yeniden kullanılır. Yeni taleplerde
+  varsayılan tek adım çalışanın **birincil yöneticisidir**; yönetici isterse onay verirken
+  İK ek adımını ister. Yönetici yoksa İK rolü yedek adım olur. Kayıtlı eski taleplerin
+  adımları değiştirilmez.
+- **Normal karar yetkisi:** yalnız geçerli adımın atanmış sahibi onaylayabilir; `TENANT`
+  kapsam tek başına atanmamış adımda karar yetkisi vermez. İzin override'ı gerekçeli ve
+  ayrı izinle çalışmaya devam eder.
 - **KARAR — kendi talebine karar verilemez** (`SEPARATE_ACTOR`); çalışan şablonuna
   `overtime.request.approve` **verilmez**.
-- **Gerekçe:** Aynı iş kuralı için iki farklı onay yolu bakım yükü ve tutarsız denetim izi
-  üretir; izin modülü üretimde çalışıyor ve OD39 önerisiyle de uyumludur.
+- **Gerekçe:** İK adımı yalnız doğrudan yöneticinin ek inceleme istediği taleplere eklenir.
 - **DB etkisi:** yok (mevcut `approval_steps`). **Migration:** `leave/0005` (kapalı küme
   genişletmesi). **UI etkisi:** onay kuyruğunda adım açıklaması (`… — Yönetici (adım 1)`).
 

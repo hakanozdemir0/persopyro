@@ -505,7 +505,7 @@ tıklanınca kapanır.
     panelKok.querySelectorAll("[data-cancel]").forEach((d) =>
       d.addEventListener("click", () => iptalEt(d.dataset.cancel)));
     panelKok.querySelectorAll("[data-ok]").forEach((d) =>
-      d.addEventListener("click", () => karar(d.dataset.ok, "approved")));
+      d.addEventListener("click", () => karar(d.dataset.ok, "approved", d.dataset.hr === "true")));
     panelKok.querySelectorAll("[data-no]").forEach((d) =>
       d.addEventListener("click", () => karar(d.dataset.no, "rejected")));
     // Karara bağlanan izinler: "Detay" → karar anı bakiyesi dahil tam kayıt.
@@ -611,7 +611,7 @@ tıklanınca kapanır.
         ${t.can_cancel ? `<button class="danger" data-cancel="${esc(t.id)}">İptal</button>` : ""}`;
     }
     if (!t.can_approve) return "";
-    return `<button class="primary" data-ok="${esc(t.id)}">Onayla</button>
+    return `<button class="primary" data-ok="${esc(t.id)}" data-hr="${t.can_request_hr_review ? "true" : "false"}">Onayla</button>
       <button class="danger" data-no="${esc(t.id)}">Reddet</button>`;
   }
 
@@ -656,8 +656,9 @@ tıklanınca kapanır.
 
   // Karar: onayda not isteğe bağlı, redde gerekçe **zorunlu**. Pencere içi form
   // kullanılır (ham `prompt()` yok — tarayıcı diyalog engeli akışı kesiyordu).
-  async function karar(id, kararTipi) {
+  async function karar(id, kararTipi, ikSecenegi = false) {
     let neden = "";
+    let ikOnayiIste = false;
     if (kararTipi === "rejected") {
       neden = await gerekceModali("Talebi reddet", {
         etiket: "Red gerekçesi",
@@ -669,14 +670,16 @@ tıklanınca kapanır.
       // Onayda gerekçe istenmez (önceki davranış korunur); yalnız açık onay.
       const onay = await onayModali(
         "Talebi onayla",
-        "<p>Bu izin talebini onaylamak istediğinize emin misiniz?</p>",
+        `<p>Bu izin talebini onaylamak istediğinize emin misiniz?</p>
+         ${ikSecenegi ? '<label class="approval-choice" for="leave-hr-review"><input type="checkbox" id="leave-hr-review"><span class="approval-choice-copy"><strong>İK yöneticisinden de onay iste</strong><small>Seçersen talep, senin onayından sonra İK yöneticisine iletilir.</small></span></label>' : ""}`,
         "Onayla"
       );
       if (!onay) return;
+      ikOnayiIste = ikSecenegi && Boolean(document.getElementById("leave-hr-review")?.checked);
     }
     try {
       await PERSOPYRO_UI.cagir(`/test-ui/api/leave-requests/${id}/decision`,
-        { method: "POST", body: { decision: kararTipi, reason: neden } });
+        { method: "POST", body: { decision: kararTipi, reason: neden, request_hr_review: ikOnayiIste } });
       PERSOPYRO_UI.mesaj("ok", kararTipi === "approved" ? "Talep onaylandı." : "Talep reddedildi.");
       // Bakiye görünümü backend'den yeniden çekilir (onay/red sonrası güncel değer).
       await Promise.all([yuklePanel(), yukleOnaylar(), yukleCalisanlar()]);
@@ -909,6 +912,14 @@ tıklanınca kapanır.
       const cikisYanit = await PERSOPYRO_UI.cagir("/test-ui/api/employees?include_departed=1");
       cikisData = cikisYanit.data || [];
     }
+    const alfabetikCalisanSirasi = (a, b) => {
+      const adA = a.user_name || a.user_email || a.employee_no || "";
+      const adB = b.user_name || b.user_email || b.employee_no || "";
+      return adA.localeCompare(adB, "tr", { sensitivity: "base" })
+        || String(a.employee_no || "").localeCompare(String(b.employee_no || ""), "tr", { numeric: true });
+    };
+    data.sort(alfabetikCalisanSirasi);
+    cikisData.sort(alfabetikCalisanSirasi);
     EMPLOYEES = data;
     const kayitSayisi = data.length;
     const lookupMeta = (LOOKUPS && LOOKUPS.meta) || {};
@@ -1562,10 +1573,13 @@ tıklanınca kapanır.
         <h3>İş Bilgileri</h3>
         <div class="tablo-kaydir"><table class="kv"><tbody>
           <tr><th>Çalışan no</th><td><strong>${esc(c.employee_no)}</strong></td></tr>
-          <tr><th>Birim</th><td>${esc(c.department) || yok}</td></tr>
-          <tr><th>Unvan</th><td>${esc(c.position) || yok}</td></tr>
+          <tr><th>Birim</th><td>${esc(c.department) || yok}
+            ${c.can_change_department ? `<button type="button" class="kucuk" data-department-change="${esc(calisanId)}">Birimi değiştir</button>` : ""}</td></tr>
+          <tr><th>Unvan</th><td>${esc(c.position) || yok}
+            ${c.can_change_assignment ? `<button type="button" class="kucuk" data-position-change="${esc(calisanId)}">Unvanı değiştir</button>` : ""}</td></tr>
           <tr><th>Yönetici</th><td>${c.manager
-            ? esc(c.manager.employee_no) + (c.manager.name ? " · " + esc(c.manager.name) : "") : yok}</td></tr>
+            ? esc(c.manager.employee_no) + (c.manager.name ? " · " + esc(c.manager.name) : "") : yok}
+            ${c.can_change_manager ? `<button type="button" class="kucuk" data-manager-change="${esc(calisanId)}">Yöneticiyi değiştir</button>` : ""}</td></tr>
           <tr><th>İşe giriş</th><td>${c.hire_date ? tarih(c.hire_date) : yok}</td></tr>
           <tr><th>Durum</th><td>${esc(c.status_label || c.status)}</td></tr>
         </tbody></table></div>
@@ -1581,6 +1595,12 @@ tıklanınca kapanır.
         <div id="yasananlar-alan"><button class="kucuk" data-yasananlar="${esc(calisanId)}">Yaşananları yükle</button></div>
       </div>`;
 
+    document.querySelector("#employee-detail [data-position-change]")?.addEventListener("click", () =>
+      calisanUnvaniniDegistir(calisanId, c.position_id));
+    document.querySelector("#employee-detail [data-department-change]")?.addEventListener("click", () =>
+      calisanBiriminiDegistir(c));
+    document.querySelector("#employee-detail [data-manager-change]")?.addEventListener("click", () =>
+      calisanYoneticiDegistir(c));
     const evrakAlani = document.getElementById("employee-documents-list");
     document.querySelector("[data-employee-erase]")?.addEventListener("click", async (event) => {
       const id = event.currentTarget.dataset.employeeErase;
@@ -1749,6 +1769,201 @@ tıklanınca kapanır.
       PERSOPYRO_UI.mesaj("ok", "Çalışan yeniden işe alındı ve aktifleştirildi.");
       await yukleCalisanlar("", "cikis");
     } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+  }
+
+  async function calisanUnvaniniDegistir(calisanId, mevcutUnvanId) {
+    try {
+      await yukleLookups();
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+      return;
+    }
+    const unvanlar = LOOKUPS.data.positions || [];
+    if (!unvanlar.length) {
+      PERSOPYRO_UI.mesaj("error", "Önce kullanılabilir bir unvan tanımlanmalı.");
+      return;
+    }
+
+    const degisiklik = await new Promise((coz) => {
+      const kapak = document.getElementById("modal");
+      const okBtn = document.getElementById("modal-ok");
+      const iptalBtn = document.getElementById("modal-cancel");
+      document.getElementById("modal-title").textContent = "Çalışan unvanını değiştir";
+      document.getElementById("modal-body").innerHTML = `
+        <div><label for="employee-position-select">Yeni unvan</label>
+          <select id="employee-position-select">${lookupSecenekler(unvanlar, mevcutUnvanId || "")}</select></div>
+        <div class="form-alt"><label for="employee-position-reason">Değişiklik gerekçesi <span class="zorunlu">*</span></label>
+          <textarea id="employee-position-reason" rows="3" placeholder="Örn. görev değişikliği"></textarea></div>
+        <p id="employee-position-error" class="muted small" style="color:var(--err)" hidden></p>`;
+      okBtn.textContent = "Unvanı değiştir";
+      iptalBtn.textContent = "Vazgeç";
+      iptalBtn.hidden = false;
+      kapak.hidden = false;
+      modalOdakla();
+      const temizle = () => {
+        kapak.hidden = true;
+        okBtn.onclick = null;
+        iptalBtn.onclick = null;
+      };
+      okBtn.onclick = () => {
+        const positionId = document.getElementById("employee-position-select").value;
+        const reason = document.getElementById("employee-position-reason").value.trim();
+        const error = document.getElementById("employee-position-error");
+        if (!positionId || !reason) {
+          error.textContent = !positionId ? "Yeni unvan seçin." : "Değişiklik gerekçesi zorunludur.";
+          error.hidden = false;
+          return;
+        }
+        temizle();
+        coz({ position_id: positionId, reason });
+      };
+      iptalBtn.onclick = () => { temizle(); coz(null); };
+    });
+    if (!degisiklik) return;
+
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisanId}/assignment`, {
+        method: "POST", body: degisiklik, onayGerekli: false,
+      });
+      PERSOPYRO_UI.mesaj("ok", "Çalışan unvanı güncellendi.");
+      await calisanDetay(calisanId);
+      await yukleCalisanlar();
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+    }
+  }
+
+  function secimGerekceModali({ baslik, etiket, secenekler, secili = "", tarih = "" }) {
+    return new Promise((coz) => {
+      const kapak = document.getElementById("modal");
+      const okBtn = document.getElementById("modal-ok");
+      const iptalBtn = document.getElementById("modal-cancel");
+      document.getElementById("modal-title").textContent = baslik;
+      document.getElementById("modal-body").innerHTML = `
+        <div><label for="assignment-choice">${esc(etiket)}</label>
+          <select id="assignment-choice">${lookupSecenekler(secenekler, secili)}</select></div>
+        ${tarih ? `<div class="form-alt"><label for="assignment-date">Başlangıç tarihi</label>
+          <input id="assignment-date" type="date" value="${esc(tarih)}" required></div>` : ""}
+        <div class="form-alt"><label for="assignment-reason">Değişiklik gerekçesi <span class="zorunlu">*</span></label>
+          <textarea id="assignment-reason" rows="3" placeholder="Örn. görev değişikliği"></textarea></div>
+        <p id="assignment-error" class="muted small" style="color:var(--err)" hidden></p>`;
+      okBtn.textContent = "Kaydet";
+      iptalBtn.textContent = "Vazgeç";
+      iptalBtn.hidden = false;
+      kapak.hidden = false;
+      modalOdakla();
+      const temizle = () => {
+        kapak.hidden = true;
+        okBtn.onclick = null;
+        iptalBtn.onclick = null;
+      };
+      okBtn.onclick = () => {
+        const value = document.getElementById("assignment-choice").value;
+        const reason = document.getElementById("assignment-reason").value.trim();
+        const dateInput = document.getElementById("assignment-date");
+        const error = document.getElementById("assignment-error");
+        if (!value || !reason || (dateInput && !dateInput.value)) {
+          error.textContent = !value ? `${etiket} seçin.`
+            : (!reason ? "Değişiklik gerekçesi zorunludur." : "Başlangıç tarihi zorunludur.");
+          error.hidden = false;
+          return;
+        }
+        temizle();
+        coz({ value, reason, effective_from: dateInput ? dateInput.value : null });
+      };
+      iptalBtn.onclick = () => { temizle(); coz(null); };
+    });
+  }
+
+  async function calisanBiriminiDegistir(calisan) {
+    const birimler = calisan.assignable_departments || [];
+    if (!birimler.length) {
+      PERSOPYRO_UI.mesaj("error", "Kapsamınızda atanabilecek birim bulunamadı.");
+      return;
+    }
+    const degisiklik = await secimGerekceModali({
+      baslik: "Çalışanın birimini değiştir",
+      etiket: "Yeni birim",
+      secenekler: birimler,
+      secili: calisan.department_id || "",
+    });
+    if (!degisiklik) return;
+    if (degisiklik.value === calisan.department_id) {
+      PERSOPYRO_UI.mesaj("info", "Çalışan zaten bu birimde.");
+      return;
+    }
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisan.id}/assignment`, {
+        method: "POST",
+        body: { department_id: degisiklik.value, reason: degisiklik.reason },
+        onayGerekli: false,
+      });
+      PERSOPYRO_UI.mesaj("ok", "Çalışanın birim ataması güncellendi.");
+      await calisanDetay(calisan.id);
+      await yukleCalisanlar();
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+    }
+  }
+
+  function isoGunEkle(iso, gun) {
+    const [yil, ay, tarih] = iso.split("-").map(Number);
+    const deger = new Date(yil, ay - 1, tarih + gun);
+    return `${deger.getFullYear()}-${String(deger.getMonth() + 1).padStart(2, "0")}-${String(deger.getDate()).padStart(2, "0")}`;
+  }
+
+  async function calisanYoneticiDegistir(calisan) {
+    try {
+      await yukleLookups();
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+      return;
+    }
+    const yoneticiler = (LOOKUPS.data.employees || [])
+      .filter((e) => e.id !== calisan.id)
+      .map((e) => ({
+        id: e.id,
+        name: `${e.employee_no} · ${e.label}${e.department ? ` · ${e.department}` : ""}`,
+      }));
+    if (!yoneticiler.length) {
+      PERSOPYRO_UI.mesaj("error", "Kapsamınızda atanabilecek aktif yönetici adayı yok.");
+      return;
+    }
+    const bugun = new Date();
+    const bugunIso = `${bugun.getFullYear()}-${String(bugun.getMonth() + 1).padStart(2, "0")}-${String(bugun.getDate()).padStart(2, "0")}`;
+    let baslangic = calisan.hire_date && calisan.hire_date > bugunIso ? calisan.hire_date : bugunIso;
+    if (calisan.manager?.effective_from) {
+      const enErken = isoGunEkle(calisan.manager.effective_from, 1);
+      if (enErken > baslangic) baslangic = enErken;
+    }
+    const degisiklik = await secimGerekceModali({
+      baslik: "Çalışanın yöneticisini değiştir",
+      etiket: "Yeni yönetici",
+      secenekler: yoneticiler,
+      secili: "",
+      tarih: baslangic,
+    });
+    if (!degisiklik) return;
+    if (degisiklik.value === calisan.manager?.id) {
+      PERSOPYRO_UI.mesaj("info", "Çalışanın yöneticisi zaten seçili.");
+      return;
+    }
+    try {
+      await PERSOPYRO_UI.cagir(`/test-ui/api/employees/${calisan.id}/manager`, {
+        method: "POST",
+        body: {
+          manager_employee_id: degisiklik.value,
+          effective_from: degisiklik.effective_from,
+          reason: degisiklik.reason,
+        },
+        onayGerekli: false,
+      });
+      PERSOPYRO_UI.mesaj("ok", "Çalışanın yöneticisi güncellendi.");
+      await calisanDetay(calisan.id);
+      await yukleCalisanlar();
+    } catch (hata) {
+      PERSOPYRO_UI.mesaj("error", hata.message);
+    }
   }
 
   async function lifecycleIslem(islem, calisanId) {
@@ -2178,8 +2393,8 @@ tıklanınca kapanır.
     ]);
   }
 
-  // İzin politikası: "bakiye yetersizse de talep açılabilir" anahtarı buradan
-  // yönetilir (`leave.type.manage`). Kararı `update_leave_policy` verir.
+  // Hakediş politikası ayarları (`leave.type.manage`). Negatif bakiye ayarı
+  // izin türleri listesindeki Özellikler bölümünden yönetilir.
   async function yukleIzinPolitikasi() {
     const hedef = document.getElementById("lr-policy");
     if (!hedef) return;
@@ -2188,30 +2403,24 @@ tıklanınca kapanır.
       hedef.innerHTML = "<p class='muted'>Tanımlı izin politikası yok.</p>";
       return;
     }
-    hedef.innerHTML = `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>İzin türü</th><th>Hakediş</th><th>Bakiye
-      yetersizse talep açılabilir</th><th>Onaydan sonra iade</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
+    hedef.innerHTML = `<div class="tablo-kaydir"><table class="data-table"><thead><tr><th>İzin türü</th><th>Hakediş</th><th>Onaydan sonra iade</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
       ${data.map((p) => `<tr><td>${esc(p.leave_type)}</td>
         <td>${esc(p.accrual_method)}${p.fixed_days ? ` · ${esc(p.fixed_days)} gün` : ""}</td>
-        <td><input type="checkbox" id="pol-neg-${esc(p.id)}" ${p.allow_negative_balance ? "checked" : ""}></td>
         <td><input type="checkbox" id="pol-ref-${esc(p.id)}" ${p.allow_refund_after_approval ? "checked" : ""}></td>
         <td class="aksiyon"><button class="kucuk" data-pol="${esc(p.id)}">Kaydet</button></td></tr>`).join("")}
       </tbody></table></div>
-      <p class="muted small">"Bakiye yetersizse talep açılabilir" kapalıysa kalan gün yetersizken
-        talep oluşturulamaz; açıkken talep açılır ve kararı onaylayan verir (onay ekranında
-        talep sahibinin bakiyesini görür).</p>`;
+      <p class="muted small">Negatif bakiye izni, ilgili izin türünün Özellikler bölümünden yönetilir.</p>`;
     document.querySelectorAll("[data-pol]").forEach((d) => d.addEventListener("click", async () => {
-      const negatif = document.getElementById(`pol-neg-${d.dataset.pol}`).checked;
       const iade = document.getElementById(`pol-ref-${d.dataset.pol}`).checked;
       const onay = await onayModali(
         "İzin politikasını güncelle",
-        `<p>Bu politika değiştirilsin mi?</p><p class="muted small">Negatif bakiye: <strong>${negatif ? "Açık" : "Kapalı"}</strong> · Onay sonrası iade: <strong>${iade ? "Açık" : "Kapalı"}</strong></p>`,
+        `<p>Bu politika değiştirilsin mi?</p><p class="muted small">Onay sonrası iade: <strong>${iade ? "Açık" : "Kapalı"}</strong></p>`,
         "Güncelle"
       );
       if (!onay) return;
       try {
         await PERSOPYRO_UI.cagir(`/test-ui/api/leave-policies/${d.dataset.pol}/update`, {
           method: "POST", body: {
-            allow_negative_balance: negatif,
             allow_refund_after_approval: iade,
             reason: "Test arayüzünden güncellendi",
           }});
@@ -2226,18 +2435,24 @@ tıklanınca kapanır.
     if (!hedef) return;
     const { data, meta } = await PERSOPYRO_UI.cagir("/test-ui/api/leave-types");
     hedef.innerHTML = `
-      <div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th>
+      <div class="tablo-kaydir"><table class="data-table"><thead><tr><th>Kod</th><th>Ad</th><th>Kategori</th><th>Ücretli</th><th>Bakiye</th><th>Özellikler</th>
         <th>1 gün saat</th><th>Belge</th><th>Onay</th><th>Durum</th><th class="aksiyon">İşlem</th></tr></thead><tbody>
         ${data.map((t) => `<tr><td><span class="badge teknik">${esc(t.code)}</span></td><td>${esc(t.name)}</td>
           <td>${esc(t.category_label)}</td><td>${t.is_paid ? "Evet" : "Hayır"}</td>
-          <td>${t.uses_balance ? "Evet" : "Hayır"}</td><td>${t.is_time_based ? esc(t.workday_hours) : "—"}</td><td>${t.requires_document ? "Evet" : "Hayır"}</td>
+          <td>${t.uses_balance ? "Evet" : "Hayır"}</td>
+          <td>${t.uses_balance
+            ? (meta.can_manage ? `<label><input type="checkbox" id="tur-neg-${esc(t.id)}" ${t.allow_negative_balance ? "checked" : ""}> Eksi bakiyeye izin ver</label>` : (t.allow_negative_balance ? "Açık" : "Kapalı"))
+            : "—"}</td>
+          <td>${t.is_time_based ? esc(t.workday_hours) : "—"}</td><td>${t.requires_document ? "Evet" : "Hayır"}</td>
           <td>${t.requires_approval ? "Evet" : "Hayır"}</td>
           <td>${esc(t.status_label)}${t.is_system ? " <span class='badge teknik'>sistem</span>" : ""}</td>
           <td class="aksiyon">${meta.can_manage
-            ? `${t.aktif && (t.is_time_based || t.code === "time_off") ? `<button class="kucuk" data-tur-saat="${esc(t.id)}" data-tur-dakika="${esc(t.workday_minutes || 480)}">Saat ayarı</button>` : ""}
+            ? `${t.uses_balance ? `<button class="kucuk" data-tur-negatif="${esc(t.id)}">Eksi bakiye ayarını kaydet</button>` : ""}
+               ${t.aktif && (t.is_time_based || t.code === "time_off") ? `<button class="kucuk" data-tur-saat="${esc(t.id)}" data-tur-dakika="${esc(t.workday_minutes || 480)}">Saat ayarı</button>` : ""}
                ${t.aktif ? `<button class="danger kucuk" data-tur-kapat="${esc(t.id)}">Devre dışı bırak</button>` : `<button class="kucuk" data-tur-ac="${esc(t.id)}">Aktifleştir</button>`}` : ""}</td>
         </tr>`).join("")}
       </tbody></table></div>
+      <p class="muted small">Bu seçenek, bakiye kullanan izin türlerinde talebin kalan hakkı aşmasına izin verir. Tür için hakediş politikası yoksa 0 günlük başlangıç politikası oluşturulur.</p>
       ${meta.can_manage ? `
         <h4>Yeni izin türü</h4>
         <p class="muted small">Kısayol: bir şablon seçip <strong>Uygula</strong> deyin,
@@ -2332,6 +2547,19 @@ tıklanınca kapanır.
           await Promise.all([yukleLookups(), yukleIzinTurleri()]);
         } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
       }));
+    document.querySelectorAll("[data-tur-negatif]").forEach((d) => d.addEventListener("click", async () => {
+      const izin = document.getElementById(`tur-neg-${d.dataset.turNegatif}`).checked;
+      try {
+        await PERSOPYRO_UI.cagir(`/test-ui/api/leave-types/${d.dataset.turNegatif}/update`, {
+          method: "POST",
+          body: { allow_negative_balance: izin, reason: "İzin türü özelliklerinden güncellendi" },
+        });
+        PERSOPYRO_UI.mesaj("ok", izin
+          ? "Bakiye yetersiz olsa da bu izin türüyle talep açılabilir."
+          : "Eksi bakiye izni kapatıldı.");
+        await yukleIzinTurleri();
+      } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+    }));
     document.querySelectorAll("[data-tur-ac]").forEach((d) => d.addEventListener("click", async () => {
       const onay = await onayModali("İzin türünü aktifleştir", `<p>Bu izin türü yeniden kullanılabilir olsun mu?</p><label>Gerekçe</label><input id="tur-ac-gerekce" placeholder="Örn. yeniden kullanılmaya başlandı">`, "Aktifleştir");
       if (!onay) return;
@@ -2504,7 +2732,7 @@ tıklanınca kapanır.
         <td>${durumPill(t.status, t.status_label)}</td>
         <td class="aksiyon">
           ${kararGoster && t.can_decide
-            ? `<button class="kucuk primary" data-fm-onay="${esc(t.id)}">Onayla</button>
+          ? `<button class="kucuk primary" data-fm-onay="${esc(t.id)}" data-hr="${t.can_request_hr_review ? "true" : "false"}">Onayla</button>
                <button class="kucuk danger" data-fm-red="${esc(t.id)}">Reddet</button>` : ""}
           ${t.can_cancel ? `<button class="kucuk" data-fm-iptal="${esc(t.id)}">İptal et</button>` : ""}
         </td>
@@ -2641,7 +2869,7 @@ tıklanınca kapanır.
     document.querySelectorAll("[data-fm-iptal]").forEach((b) =>
       b.addEventListener("click", () => fmIptal(b.dataset.fmIptal)));
     document.querySelectorAll("[data-fm-onay]").forEach((b) =>
-      b.addEventListener("click", () => fmKarar(b.dataset.fmOnay, "approved")));
+      b.addEventListener("click", () => fmKarar(b.dataset.fmOnay, "approved", b.dataset.hr === "true")));
     document.querySelectorAll("[data-fm-red]").forEach((b) =>
       b.addEventListener("click", () => fmKarar(b.dataset.fmRed, "rejected")));
   }
@@ -2752,15 +2980,18 @@ tıklanınca kapanır.
     }
   }
 
-  async function fmKarar(id, kararTipi) {
+  async function fmKarar(id, kararTipi, ikSecenegi = false) {
     let gerekce = "";
+    let ikOnayiIste = false;
     if (kararTipi === "approved") {
       const onay = await onayModali(
         "Fazla mesai bildirimini onayla",
-        "<p>Bu fazla mesai bildirimini onaylamak istediğinize emin misiniz?</p>",
+        `<p>Bu fazla mesai bildirimini onaylamak istediğinize emin misiniz?</p>
+         ${ikSecenegi ? '<label class="approval-choice" for="overtime-hr-review"><input type="checkbox" id="overtime-hr-review"><span class="approval-choice-copy"><strong>İK yöneticisinden de onay iste</strong><small>Seçersen bildirim, senin onayından sonra İK yöneticisine iletilir.</small></span></label>' : ""}`,
         "Onayla"
       );
       if (!onay) return;
+      ikOnayiIste = ikSecenegi && Boolean(document.getElementById("overtime-hr-review")?.checked);
     } else if (kararTipi === "rejected") {
       const onay = await onayModali(
         "Fazla mesai bildirimini reddet",
@@ -2773,7 +3004,7 @@ tıklanınca kapanır.
     }
     try {
       const { data } = await PERSOPYRO_UI.cagir(`/test-ui/api/overtime/${id}/decision`, {
-        method: "POST", body: { decision: kararTipi, reason: gerekce },
+        method: "POST", body: { decision: kararTipi, reason: gerekce, request_hr_review: ikOnayiIste },
       });
       PERSOPYRO_UI.mesaj("ok",
         kararTipi === "approved"
@@ -2788,11 +3019,15 @@ tıklanınca kapanır.
   // --- Vardiya -------------------------------------------------------------
   async function yukleVardiya(altSekme = "control") {
     const panel = document.getElementById("tab-shifts");
-    const yanit = await PERSOPYRO_UI.cagir("/test-ui/api/shifts");
+    const shiftMenu = (ME && ME.data && ME.data.menu) || {};
+    if (!shiftMenu.shifts && shiftMenu.shift_report) altSekme = "rapor";
+    if (!shiftMenu.shift_definitions && altSekme === "tanımlar") altSekme = "control";
+    if (!shiftMenu.shift_report && altSekme === "rapor") altSekme = "control";
+    const yanit = shiftMenu.shifts
+      ? await PERSOPYRO_UI.cagir("/test-ui/api/shifts")
+      : { data: [], meta: {} };
     const vardiyalar = yanit.data || [];
     const meta = yanit.meta || {};
-    const shiftMenu = (ME && ME.data && ME.data.menu) || {};
-    if (!shiftMenu.shift_definitions && altSekme === "tanımlar") altSekme = "control";
     let vardiyaCalisanlari = EMPLOYEES || [];
     if (meta.can_assign) {
       try { vardiyaCalisanlari = (await PERSOPYRO_UI.cagir("/test-ui/api/employees?for_shift=1")).data || []; } catch (hata) { /* form boş kalır */ }
@@ -2810,8 +3045,9 @@ tıklanınca kapanır.
       <label>Açıklama</label><textarea id="shift-description" rows="2">${esc(v.description || "")}</textarea>`;
     panel.innerHTML = `
       <div class="alt-sekmeler">
-        <button type="button" data-shift-alt="control" class="${altSekme === "control" ? "active" : ""}">Vardiya Kontrolü</button>
-        <button type="button" data-shift-alt="plan" class="${altSekme === "plan" ? "active" : ""}">Atama Planı</button>
+        ${shiftMenu.shifts ? `<button type="button" data-shift-alt="control" class="${altSekme === "control" ? "active" : ""}">Vardiya Kontrolü</button>
+        <button type="button" data-shift-alt="plan" class="${altSekme === "plan" ? "active" : ""}">Atama Planı</button>` : ""}
+        ${shiftMenu.shift_report ? `<button type="button" data-shift-alt="rapor" class="${altSekme === "rapor" ? "active" : ""}">Vardiya Raporu</button>` : ""}
         ${shiftMenu.shift_definitions ? `<button type="button" data-shift-alt="tanımlar" class="${altSekme === "tanımlar" ? "active" : ""}">Vardiya Tanımları</button>` : ""}
       </div>
       ${altSekme === "tanımlar" ? `
@@ -2823,19 +3059,21 @@ tıklanınca kapanır.
         ${vardiyalar.length ? vardiyalar.map((v) => `<div class="form-field-row"><div><strong>${esc(v.name)}</strong> <span class="badge teknik">${esc(v.code)}</span><br><span class="muted small">${esc(v.start_time)}–${esc(v.end_time)} · mola ${esc(v.break_minutes)} dk · ${esc(v.work_model_label)} · ${esc(v.assignment_count)} atama</span>${v.description ? `<br><span class="muted small">${esc(v.description)}</span>` : ""}</div>
           ${meta.can_manage ? `<div class="form-alt"><button type="button" class="kucuk" data-shift-edit="${esc(v.id)}">Düzenle</button><button type="button" class="kucuk danger" data-shift-delete="${esc(v.id)}">Sil</button></div>` : ""}</div>`).join("") : `<div class="bos">Henüz vardiya tanımı yok.</div>`}
       </div>` : altSekme === "plan" ? `
-      <div class="card"><div class="section-head"><h1>Vardiya atama / plan</h1><span class="sag muted small">Gün veya hafta bazlı</span></div>
-        ${meta.can_assign ? `<p class="muted">Bir vardiya seçip tek bir güne veya seçtiğiniz haftanın günlerine atayın. Mevcut planı değiştirmek için değiştirme seçeneğini kullanın.</p>
+      <div class="card"><div class="section-head"><h1>Vardiya atama / plan</h1><span class="sag muted small">Günlük veya tekrarlı plan</span></div>
+        ${meta.can_assign ? `<p class="muted">Vardiyayı tek güne veya başlangıç-bitiş aralığında haftanın seçilen günlerine atayın. Aralığı aylara yayarak aylık plan oluşturabilirsiniz.</p>
         <div><label>Çalışan ara ve seç</label><input id="shift-employee-search" placeholder="Ad, çalışan no veya birim ara"><div id="shift-employee-picker" class="calisan-secici">${employees.map((e) => `<label class="calisan-secici-satir" data-arama="${esc(`${e.user_name || e.user_email || e.employee_no} ${e.employee_no} ${e.department || ""}`.toLocaleLowerCase("tr-TR"))}"><input type="checkbox" class="shift-employee-option" value="${esc(e.id)}"><span><strong>${esc(e.user_name || e.user_email || e.employee_no)}</strong><small>${esc(e.employee_no)} · ${esc(e.department || "Birim yok")}</small></span></label>`).join("") || `<span class="muted small">Kapsamınızda seçilebilir çalışan yok.</span>`}</div><span id="shift-employee-search-count" class="muted small">${employees.length} çalışan · seçilen: 0</span></div>
         <div><label>Vardiya</label><select id="shift-assignment-shift">${vardiyalar.map((v) => `<option value="${esc(v.id)}">${esc(v.name)} · ${esc(v.start_time)}–${esc(v.end_time)}</option>`).join("")}</select>
-          <label>Plan türü</label><select id="shift-plan-mode"><option value="daily">Tek gün</option><option value="weekly">Haftalık / tekrarlı</option></select>
+          <label>Plan türü</label><select id="shift-plan-mode"><option value="daily">Tek gün</option><option value="weekly">Haftalık / Aylık</option></select>
           <div id="shift-daily-fields"><label>Tarih</label><input id="shift-date" type="date" value="${bugun}"></div>
           <div id="shift-weekly-fields" hidden><label>Başlangıç</label><input id="shift-week-start" type="date" value="${bugun}"><label>Bitiş</label><input id="shift-week-end" type="date" value="${bugun}"><label>Haftanın günleri</label><div class="form-secim-kutusu">${[["0","Pzt"],["1","Sal"],["2","Çar"],["3","Per"],["4","Cum"],["5","Cmt"],["6","Paz"]].map(([k, l]) => `<label><input type="checkbox" class="shift-weekday" value="${k}"${Number(k) < 5 ? " checked" : ""}> ${l}</label>`).join(" ")}</div></div>
           <label><input id="shift-replace" type="checkbox"> Mevcut planı değiştir</label><label>Not</label><textarea id="shift-note" rows="2" placeholder="İsteğe bağlı açıklama"></textarea></div></div>
         <div class="form-alt"><button class="primary" id="shift-assign">Vardiyayı ata</button></div>` : `<p class="muted">Vardiya atamak için <code>shift.assign</code> yetkisi gerekir.</p>`}
-      </div>
-      <div class="card"><div class="section-head"><h2>Görüntüleme kapsamımdaki atamalar</h2></div>
-        <p class="muted small">Yalnızca kendi vardiyalarınız ve aktif birincil bağlı çalışanlarınızın atamaları gösterilir.</p>
-        <div id="shift-assignments-table"><p class="muted">Yükleniyor…</p></div>
+      </div>` : altSekme === "rapor" ? `
+      <div class="card"><div class="section-head"><h1>Vardiya Raporu</h1><span class="sag muted small">Planlı saat ve geç kalış</span></div>
+        <p class="muted">Saat toplamları vardiya süresinden mola düşülerek hesaplanır. Haftalık veya aylık dönem seçip raporu Excel olarak indirebilirsiniz.</p>
+        <div class="filtre-bar"><div><label>Rapor dönemi</label><select id="shift-report-period"><option value="weekly">Haftalık</option><option value="monthly">Aylık</option></select></div><div><label>Hafta / ay için tarih</label><input id="shift-report-date" type="date" value="${bugun}"></div><button type="button" class="primary" id="shift-report-excel">Excel raporunu indir</button></div>
+        <div class="card ic"><label>Çalışan ara ve seç</label><input id="shift-report-employee-search" placeholder="Ad, çalışan no veya birim ara"><div id="shift-report-employee-picker" class="calisan-secici"><span class="muted small">Çalışanlar yükleniyor…</span></div><span id="shift-report-employee-count" class="muted small">Çalışanlar yükleniyor…</span></div>
+        <div id="shift-report-results"><p class="muted">Rapor yükleniyor…</p></div>
       </div>` : `
       <div class="card"><div class="section-head"><h1>Vardiya kontrolü</h1><span class="sag muted small">Vardiya · izin · serbest zaman · fazla mesai</span></div>
         <p class="muted">Onaylanmış izin, serbest zaman ve fazla mesai kayıtları vardiya planıyla aynı listede gösterilir.</p>
@@ -2883,31 +3121,8 @@ tıklanınca kapanır.
       const body = { employee_ids: secili, shift_id: document.getElementById("shift-assignment-shift").value, mode: mode.value, replace_existing: document.getElementById("shift-replace").checked, note: document.getElementById("shift-note").value.trim() };
       if (weekly) { body.start_date = document.getElementById("shift-week-start").value; body.end_date = document.getElementById("shift-week-end").value; body.weekdays = [...document.querySelectorAll(".shift-weekday:checked")].map((x) => Number(x.value)); }
       else body.dates = [document.getElementById("shift-date").value];
-      try { const sonuc = await PERSOPYRO_UI.cagir("/test-ui/api/shift-assignments", { method: "POST", body }); PERSOPYRO_UI.mesaj("ok", `${sonuc.data.count} günlük vardiya ataması yapıldı.`); await yukleVardiya("plan"); } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+      try { const sonuc = await PERSOPYRO_UI.cagir("/test-ui/api/shift-assignments", { method: "POST", body }); PERSOPYRO_UI.mesaj("ok", `${sonuc.data.count} vardiya ataması kaydedildi.`); await yukleVardiya("plan"); } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
     });
-    if (altSekme === "plan") {
-      const bas = new Date(); const son = new Date(); son.setDate(son.getDate() + 30);
-      const fmt = (d) => d.toISOString().slice(0, 10);
-      const plan = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-assignments?from=${fmt(bas)}&to=${fmt(son)}`);
-      const rows = plan.data || [];
-      const sayfaBoyutuId = "shift-assignment-page-size";
-      let sayfa = 1;
-      let sayfaBoyutu = 5;
-      const tablo = document.getElementById("shift-assignments-table");
-      const renderAssignments = () => {
-        const sayfaSayisi = Math.max(1, Math.ceil(rows.length / sayfaBoyutu));
-        sayfa = Math.min(sayfa, sayfaSayisi);
-        if (!rows.length) { tablo.innerHTML = `<div class="bos">Görüntüleme kapsamınızda yaklaşan vardiya ataması yok.</div>`; return; }
-        const gorunenler = rows.slice((sayfa - 1) * sayfaBoyutu, sayfa * sayfaBoyutu);
-        const islemTarihi = (value) => value ? new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Istanbul" }).format(new Date(value)) : "—";
-        tablo.innerHTML = `<div class="tablo-kaydir"><table class="data-table zebra"><thead><tr><th>İşlem tarihi</th><th>İşlem yapılan tarih</th><th>Çalışan</th><th>Birim</th><th>Vardiya</th><th>Atamayı yapan</th>${meta.can_assign ? "<th>İşlem</th>" : ""}</tr></thead><tbody>${gorunenler.map((a) => `<tr><td>${esc(islemTarihi(a.created_at))}</td><td>${esc(a.work_date)}</td><td>${esc(a.employee_name)} <span class="muted small">${esc(a.employee_no)}</span></td><td>${esc(a.department || "—")}</td><td><strong>${esc(a.shift_name)}</strong> · ${esc(a.start_time)}–${esc(a.end_time)}</td><td>${esc(a.assigned_by || "—")}</td>${meta.can_assign ? `<td><button type="button" class="kucuk" data-shift-assignment-edit="${esc(a.id)}">Düzenle</button></td>` : ""}</tr>`).join("")}</tbody></table></div><div class="shift-log-pagination"><label>Sayfada göster <select id="${sayfaBoyutuId}"><option value="5"${sayfaBoyutu === 5 ? " selected" : ""}>5</option><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label><span class="muted small">${rows.length} kayıt · Sayfa ${sayfa} / ${sayfaSayisi}</span><div><button type="button" class="kucuk" data-page-prev${sayfa <= 1 ? " disabled" : ""}>Önceki</button> <button type="button" class="kucuk" data-page-next${sayfa >= sayfaSayisi ? " disabled" : ""}>Sonraki</button></div></div>`;
-        tablo.querySelector(`#${sayfaBoyutuId}`).addEventListener("change", (event) => { sayfaBoyutu = Number(event.target.value); sayfa = 1; renderAssignments(); });
-        tablo.querySelector("[data-page-prev]").addEventListener("click", () => { sayfa -= 1; renderAssignments(); });
-        tablo.querySelector("[data-page-next]").addEventListener("click", () => { sayfa += 1; renderAssignments(); });
-        tablo.querySelectorAll("[data-shift-assignment-edit]").forEach((button) => button.addEventListener("click", () => vardiyaAtamaDuzenle(button.dataset.shiftAssignmentEdit, rows, vardiyalar)));
-      };
-      renderAssignments();
-    }
     if (altSekme === "control") {
       const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const monday = (value) => { const d = new Date(`${value}T00:00:00`); const day = d.getDay(); d.setDate(d.getDate() - ((day + 6) % 7)); return d; };
@@ -2915,6 +3130,7 @@ tıklanınca kapanır.
       const employeePicker = document.getElementById("shift-control-picker");
       const employeeSearch = document.getElementById("shift-control-search");
       let selectedEmployeeIds = [];
+      let visibleWeekEvents = [];
       const today = new Date(); const first = monday(fmt(today)); weekInput.value = fmt(first);
       const bosDurum = (mesaj) => { document.getElementById("shift-control-table").innerHTML = `<div class="bos">${esc(mesaj)}</div>`; };
       const renderWeek = async () => {
@@ -2930,12 +3146,13 @@ tıklanınca kapanır.
         const kontrol = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-control?from=${fmt(sorguBaslangic)}&to=${fmt(sorguBitis)}&${secim}`);
         const events = kontrol.data || []; const employees = (kontrol.meta?.employees || []).filter((e) => selectedEmployeeIds.includes(e.id));
         const weekEvents = events.filter((e) => e.date >= fmt(start) && e.date <= fmt(end));
+        visibleWeekEvents = weekEvents;
         const formatDakika = (dakika) => `${Math.floor(dakika / 60)} saat${dakika % 60 ? ` ${dakika % 60} dk` : ""}`;
         const vardiyaDakikasi = (employeeId, bas, son) => events
           .filter((e) => e.kind === "shift" && e.employee_id === employeeId && e.date >= fmt(bas) && e.date <= fmt(son))
           .reduce((toplam, e) => toplam + Number(e.duration_minutes || 0), 0);
         const byCell = (id, iso) => weekEvents.filter((e) => e.employee_id === id && e.date === iso);
-        const eventHtml = (e) => `<div class="vardiya-hucre olay-${esc(e.kind)}"><strong>${esc(e.title)}</strong><span>${esc(e.time)}</span><small>${esc(e.kind_label)}</small></div>`;
+        const eventHtml = (e) => `<div class="vardiya-hucre olay-${esc(e.kind)}"><strong>${esc(e.title)}</strong><span>${esc(e.time)}</span><small>${esc(e.kind_label)}</small>${e.kind === "shift" && e.can_remove ? `<div class="form-alt"><button type="button" class="kucuk" data-shift-control-edit="${esc(e.assignment_id)}">Düzenle</button><button type="button" class="kucuk danger" data-shift-control-delete="${esc(e.assignment_id)}">Sil</button></div>` : ""}</div>`;
         document.getElementById("shift-control-table").innerHTML = employees.length ? `<div class="vardiya-legend"><span class="pill">Vardiya</span><span class="pill approved">İzin</span><span class="pill ok">Serbest zaman</span><span class="pill pending">Fazla mesai</span><span class="pill danger">Çakışma</span></div><p class="muted small">Saat toplamları atanmış vardiyalardan hesaplanır; mola süresi düşülür.</p><div class="tablo-kaydir"><table class="data-table vardiya-hafta zebra"><thead><tr><th>Çalışan</th>${days.map((d) => `<th>${d.display}</th>`).join("")}</tr></thead><tbody>${employees.map((employee) => `<tr><td><strong>${esc(employee.employee)}</strong><br><span class="muted small">${esc(employee.employee_no)} · ${esc(employee.department || "—")}</span><br><span class="muted small">Bu hafta: <strong>${formatDakika(vardiyaDakikasi(employee.id, start, end))}</strong><br>Bu ay: <strong>${formatDakika(vardiyaDakikasi(employee.id, ayBaslangic, ayBitis))}</strong></span></td>${days.map((d) => `<td>${byCell(employee.id, d.iso).map(eventHtml).join("") || '<span class="muted small">—</span>'}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="bos">Çalışan bulunamadı.</div>`;
       };
       const ilk = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-control?from=${fmt(first)}&to=${fmt(first)}`);
@@ -2944,7 +3161,113 @@ tıklanınca kapanır.
       employeeSearch.addEventListener("input", () => { const q = employeeSearch.value.trim().toLocaleLowerCase("tr-TR"); let count = 0; [...employeePicker.querySelectorAll(".calisan-secici-satir")].forEach((row) => { const uygun = !q || row.dataset.arama.includes(q); row.hidden = !uygun; if (uygun) count += 1; }); const sonuc = document.getElementById("shift-control-search-count"); if (sonuc) sonuc.textContent = `${count} çalışan bulundu · seçilen: ${selectedEmployeeIds.length}`; });
       employeePicker.addEventListener("change", () => { selectedEmployeeIds = [...employeePicker.querySelectorAll(".shift-control-option:checked")].map((x) => x.value); const sonuc = document.getElementById("shift-control-search-count"); if (sonuc) sonuc.textContent = `${[...employeePicker.querySelectorAll(".calisan-secici-satir:not([hidden])")].length} çalışan bulundu · seçilen: ${selectedEmployeeIds.length}`; renderWeek(); });
       weekInput.addEventListener("change", renderWeek);
+      document.getElementById("shift-control-table").addEventListener("click", async (event) => {
+        const editButton = event.target.closest("[data-shift-control-edit]");
+        if (editButton) {
+          const assignment = visibleWeekEvents.find((item) => item.assignment_id === editButton.dataset.shiftControlEdit);
+          if (assignment) {
+            await vardiyaAtamaDuzenle(assignment.assignment_id, [{
+              id: assignment.assignment_id,
+              employee_name: assignment.employee,
+              work_date: assignment.date,
+              shift_id: assignment.shift_id,
+              note: assignment.note,
+            }], vardiyalar, () => renderWeek());
+          }
+          return;
+        }
+        const button = event.target.closest("[data-shift-control-delete]");
+        if (!button) return;
+        const assignment = visibleWeekEvents.find((item) => item.assignment_id === button.dataset.shiftControlDelete);
+        if (!assignment || !confirm(`${assignment.employee} için ${assignment.date} tarihindeki ${assignment.title} vardiyası silinsin mi?`)) return;
+        try {
+          await PERSOPYRO_UI.cagir(`/test-ui/api/shift-assignments/${encodeURIComponent(assignment.assignment_id)}/delete`, { method: "POST", body: {} });
+          PERSOPYRO_UI.mesaj("ok", "Vardiya ataması kaldırıldı.");
+          await renderWeek();
+        } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
+      });
       bosDurum("Haftalık vardiya kontrolü için önce çalışan seçin.");
+    }
+    if (altSekme === "rapor") {
+      const donem = document.getElementById("shift-report-period");
+      const tarih = document.getElementById("shift-report-date");
+      const alan = document.getElementById("shift-report-results");
+      const employeePicker = document.getElementById("shift-report-employee-picker");
+      const employeeSearch = document.getElementById("shift-report-employee-search");
+      const employeeCount = document.getElementById("shift-report-employee-count");
+      let selectedEmployeeIds = [];
+      const updateEmployeeCount = () => {
+        const visible = employeePicker.querySelectorAll(".calisan-secici-satir:not([hidden])").length;
+        employeeCount.textContent = `${visible} çalışan bulundu · seçilen: ${(selectedEmployeeIds || []).length}`;
+      };
+      const renderEmployeePicker = (employees) => {
+        employeePicker.innerHTML = employees.map((employee) => {
+          const haystack = `${employee.employee} ${employee.employee_no} ${employee.department || ""}`.toLocaleLowerCase("tr-TR");
+          return `<label class="calisan-secici-satir" data-arama="${esc(haystack)}"><input type="checkbox" class="shift-report-employee-option" value="${esc(employee.id)}"><span><strong>${esc(employee.employee)}</strong><small>${esc(employee.employee_no)} · ${esc(employee.department || "Birim yok")}</small></span></label>`;
+        }).join("") || `<span class="muted small">Kapsamınızda çalışan bulunamadı.</span>`;
+        updateEmployeeCount();
+      };
+      const dakikaMetni = (dakika) => `${Math.floor(dakika / 60)} sa ${dakika % 60} dk`;
+      const raporuYukle = async () => {
+        if (!selectedEmployeeIds.length && employeePicker.querySelector(".shift-report-employee-option")) {
+          alan.innerHTML = '<div class="bos">Raporu görmek için en az bir çalışan seçin.</div>';
+          return;
+        }
+        alan.innerHTML = '<p class="muted">Rapor yükleniyor…</p>';
+        try {
+          const params = new URLSearchParams({ period: donem.value, date: tarih.value });
+          if (selectedEmployeeIds) selectedEmployeeIds.forEach((id) => params.append("employee_id", id));
+          const yanit = await PERSOPYRO_UI.cagir(`/test-ui/api/shift-report?${params}`);
+          if (!employeePicker.querySelector(".shift-report-employee-option")) {
+            renderEmployeePicker(yanit.meta.employees || []);
+            if (!selectedEmployeeIds.length) {
+              alan.innerHTML = '<div class="bos">Raporu görmek için en az bir çalışan seçin.</div>';
+              return;
+            }
+          }
+          const satirlar = yanit.data || [];
+          alan.innerHTML = `<p class="muted small">${esc(yanit.meta.period_label)} · ${esc(yanit.meta.from)} – ${esc(yanit.meta.to)} · Planlı vardiya saatleri mola düşülerek hesaplanır.</p>
+            ${satirlar.length ? `<div class="tablo-kaydir"><table class="data-table zebra"><thead><tr><th>Çalışan</th><th>Birim</th><th>Vardiya günü</th><th>Planlı süre</th><th>Geç kalış</th><th>Günlük vardiyalar / geç kalış bildirimi</th></tr></thead><tbody>${satirlar.map((calisan) => `<tr><td><strong>${esc(calisan.employee)}</strong><br><span class="muted small">${esc(calisan.employee_no)}</span></td><td>${esc(calisan.department || "—")}</td><td>${esc(calisan.shift_days)}</td><td><strong>${dakikaMetni(Number(calisan.planned_minutes || 0))}</strong></td><td>${esc(calisan.late_minutes)} dk</td><td>${calisan.assignments.length ? calisan.assignments.map((atama) => `<div class="form-field-row"><div><strong>${esc(atama.work_date)} · ${esc(atama.shift_name)}</strong><br><span class="muted small">${esc(atama.start_time)}–${esc(atama.end_time)} · ${dakikaMetni(Number(atama.planned_minutes || 0))}${atama.late_minutes !== null ? ` · Geç kalış: ${esc(atama.late_minutes)} dk${atama.late_reported_by ? ` (${esc(atama.late_reported_by)})` : ""}` : " · Geç kalış bildirilmedi"}</span></div>${atama.can_report_late ? `<div class="form-alt"><label for="late-minutes-${esc(atama.id)}">Geç kalış (dk)</label><input id="late-minutes-${esc(atama.id)}" type="number" min="0" max="1440" value="${atama.late_minutes ?? ""}" placeholder="Örn. 10"><button type="button" class="kucuk" data-late-save="${esc(atama.id)}">Bildir</button></div>` : ""}</div>`).join("") : '<span class="muted small">Bu dönemde vardiya ataması yok.</span>'}</td></tr>`).join("")}</tbody></table></div>` : '<div class="bos">Kapsamınızda çalışan bulunamadı.</div>'}`;
+        } catch (hata) {
+          alan.innerHTML = `<div class="bos">${esc(hata.message)}</div>`;
+        }
+      };
+      employeeSearch.addEventListener("input", () => {
+        const q = employeeSearch.value.trim().toLocaleLowerCase("tr-TR");
+        employeePicker.querySelectorAll(".calisan-secici-satir").forEach((row) => { row.hidden = Boolean(q && !row.dataset.arama.includes(q)); });
+        updateEmployeeCount();
+      });
+      employeePicker.addEventListener("change", () => {
+        selectedEmployeeIds = [...employeePicker.querySelectorAll(".shift-report-employee-option:checked")].map((input) => input.value);
+        updateEmployeeCount();
+        raporuYukle();
+      });
+      donem.addEventListener("change", raporuYukle);
+      tarih.addEventListener("change", raporuYukle);
+      document.getElementById("shift-report-excel").addEventListener("click", () => {
+        if (!selectedEmployeeIds.length) {
+          PERSOPYRO_UI.mesaj("error", "Excel raporu için en az bir çalışan seçin.");
+          return;
+        }
+        const params = new URLSearchParams({ period: donem.value, date: tarih.value, download: "xlsx" });
+        (selectedEmployeeIds || []).forEach((id) => params.append("employee_id", id));
+        window.location.href = `/test-ui/api/shift-report?${params}`;
+      });
+      alan.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-late-save]");
+        if (!button) return;
+        const input = document.getElementById(`late-minutes-${button.dataset.lateSave}`);
+        try {
+          await PERSOPYRO_UI.cagir(`/test-ui/api/shift-assignments/${button.dataset.lateSave}/late-report`, {
+            method: "POST", body: { late_minutes: input.value }, onayGerekli: false,
+          });
+          PERSOPYRO_UI.mesaj("ok", "Geç kalış bildirimi kaydedildi.");
+          await raporuYukle();
+        } catch (hata) {
+          PERSOPYRO_UI.mesaj("error", hata.message);
+        }
+      });
+      await raporuYukle();
     }
   }
 
@@ -2959,7 +3282,7 @@ tıklanınca kapanır.
     try { await PERSOPYRO_UI.cagir(`/test-ui/api/shifts/${id}/update`, { method: "POST", body: { name: document.getElementById("shift-edit-name").value.trim(), start_time: document.getElementById("shift-edit-start").value, end_time: document.getElementById("shift-edit-end").value, break_minutes: Number(document.getElementById("shift-edit-break").value || 0), crosses_midnight: document.getElementById("shift-edit-midnight").checked, description: document.getElementById("shift-edit-description").value.trim() } }); PERSOPYRO_UI.mesaj("ok", "Vardiya güncellendi."); await yukleVardiya("tanımlar"); } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
 
-  async function vardiyaAtamaDuzenle(id, atamalar, vardiyalar) {
+  async function vardiyaAtamaDuzenle(id, atamalar, vardiyalar, yenile = () => yukleVardiya("plan")) {
     const atama = atamalar.find((x) => x.id === id);
     if (!atama) return;
     const secenekler = vardiyalar.map((v) => `<option value="${esc(v.id)}"${v.id === atama.shift_id ? " selected" : ""}>${esc(v.name)} · ${esc(v.start_time)}–${esc(v.end_time)}</option>`).join("");
@@ -2980,7 +3303,7 @@ tıklanınca kapanır.
         },
       });
       PERSOPYRO_UI.mesaj("ok", "Vardiya ataması güncellendi.");
-      await yukleVardiya("plan");
+      await yenile();
     } catch (hata) { PERSOPYRO_UI.mesaj("error", hata.message); }
   }
 
@@ -3014,7 +3337,7 @@ tıklanınca kapanır.
       </div>`;
     const onayKok = document.getElementById("tab-approvals");
     onayKok.querySelectorAll("[data-ok]").forEach((d) =>
-      d.addEventListener("click", () => karar(d.dataset.ok, "approved")));
+      d.addEventListener("click", () => karar(d.dataset.ok, "approved", d.dataset.hr === "true")));
     onayKok.querySelectorAll("[data-no]").forEach((d) =>
       d.addEventListener("click", () => karar(d.dataset.no, "rejected")));
     onayKok.querySelectorAll("[data-duzenle]").forEach((d) =>

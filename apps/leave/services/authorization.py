@@ -236,12 +236,12 @@ def current_step(request: LeaveRequest | None) -> ApprovalStep | None:
 
 def can_approve_step(actor, step: ApprovalStep | None, request: LeaveRequest | None) -> bool:
     """
-    `leave.request.approve` ∧ (ASSIGNED ∨ TENANT kapsamı) ∧ SEPARATE_ACTOR ∧ kapsam.
+    `leave.request.approve` ∧ ASSIGNED ∧ SEPARATE_ACTOR ∧ kapsam.
 
     * Adım sahibi (kişi ya da rol kodu + kapsam) onaylayabilir (§6.2E: ŞYT ◐ ASSIGNED,
       DY ◐ UNIT + ASSIGNED).
-    * **Kiracı geneli** onay yetkisi olan rol (§6.2E: ŞİRKET YÖN. ● TENANT) geçerli
-      adımı atanmış olmasa da karara bağlayabilir — sıra kuralı yine geçerlidir.
+    * Normal onay yalnızca kayıtlı adım sahibine açıktır. Yetkili atlama ayrı ve
+      gerekçeli `leave.request.approve.override` yoludur.
     * Primary manager olmak tek başına yetki **üretmez**: izin kodu ve kapsam da
       gerekir (docs/ORGANIZATION.md §5.5).
     """
@@ -252,8 +252,7 @@ def can_approve_step(actor, step: ApprovalStep | None, request: LeaveRequest | N
     if not user_has_permission(actor, "leave.request.approve"):
         return False
     atanmis = is_assigned_to_step(actor, step, request)
-    kiracı_geneli = user_org_scope(actor).tenant_wide
-    if not (atanmis or kiracı_geneli):
+    if not atanmis:
         return False
     if is_own_employee(actor, request.employee):
         return False  # SEPARATE_ACTOR: kendi talebini onaylayamaz

@@ -431,6 +431,59 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .hakedis { display: inline-block; }
     .hakedis-buyuk { font-size: 15px; }
 
+    /* Koyu temada sabit açık yüzeyleri ve kenarlıkları da okunur tut. */
+    :root[data-theme="dark"] .badge.teknik,
+    :root[data-theme="dark"] .hak-kutu,
+    :root[data-theme="dark"] .card.ic,
+    :root[data-theme="dark"] .form-field-row,
+    :root[data-theme="dark"] .calisan-secici,
+    :root[data-theme="dark"] .tree-secim,
+    :root[data-theme="dark"] .bos,
+    :root[data-theme="dark"] .modul,
+    :root[data-theme="dark"] .rol-kart,
+    :root[data-theme="dark"] .detail-panel-head,
+    :root[data-theme="dark"] .detail-box,
+    :root[data-theme="dark"] .option-card,
+    :root[data-theme="dark"] .vardiya-hafta th:first-child,
+    :root[data-theme="dark"] .vardiya-hafta td:first-child { background:#273449; color:var(--fg); }
+    :root[data-theme="dark"] .form-field-row,
+    :root[data-theme="dark"] .calisan-secici-satir:nth-child(even),
+    :root[data-theme="dark"] .calisan-secici-satir:hover,
+    :root[data-theme="dark"] .tree-secim,
+    :root[data-theme="dark"] .tree-secim label:hover,
+    :root[data-theme="dark"] .liste-satir:hover,
+    :root[data-theme="dark"] .izin-kutu:hover,
+    :root[data-theme="dark"] .tabs button:hover,
+    :root[data-theme="dark"] .alt-sekmeler button:hover,
+    :root[data-theme="dark"] .option-card:hover { background:#334155; }
+    :root[data-theme="dark"] button:not(.primary):not(.ghost):not(.danger):not(.theme-trigger):not(.theme-option) {
+      background:#273449; color:var(--fg); border-color:var(--line-strong); }
+    :root[data-theme="dark"] button:not(.primary):not(.ghost):not(.danger):not(.theme-trigger):not(.theme-option):hover {
+      background:#334155; border-color:#64748b; }
+    :root[data-theme="dark"] button.danger { background:#3b2529; border-color:#704047; color:#fca5a5; }
+    :root[data-theme="dark"] button.danger:hover,
+    :root[data-theme="dark"] .detail-box.danger-box { background:#3b2529; border-color:#704047; }
+    :root[data-theme="dark"] input:disabled,
+    :root[data-theme="dark"] select:disabled,
+    :root[data-theme="dark"] textarea:disabled { background:#273449; color:#aab7c8; }
+    :root[data-theme="dark"] th { background:#273449; color:#aebbd0; }
+    :root[data-theme="dark"] td,
+    :root[data-theme="dark"] th,
+    :root[data-theme="dark"] .liste-satir { border-color:#374151; }
+    :root[data-theme="dark"] .pill,
+    :root[data-theme="dark"] .pill.taken,
+    :root[data-theme="dark"] .pill.draft { background:#273449; color:#cbd5e1; border-color:#4b5563; }
+    :root[data-theme="dark"] .pill.approved { background:#153b2b; color:#86efac; border-color:#286344; }
+    :root[data-theme="dark"] .pill.pending { background:#422e12; color:#fcd34d; border-color:#73531f; }
+    :root[data-theme="dark"] .pill.rejected,
+    :root[data-theme="dark"] .pill.canceled { background:#451f24; color:#fca5a5; border-color:#71343b; }
+    :root[data-theme="dark"] .rozet { border-color:#365579; }
+    :root[data-theme="dark"] code { background:#273449; color:#dbeafe; }
+    :root[data-theme="dark"] .vardiya-hucre.olay-free_time { background:#302849; }
+    :root[data-theme="dark"] .salt-okunur { background:#422e12; border-color:#73531f; color:#fcd34d; }
+    :root[data-theme="dark"] .hak-kutu.vurgu { background:#1e3a5f; border-color:#365579; }
+    :root[data-theme="dark"] .theme-trigger { background:var(--card); }
+
     /* DİKKAT (regresyon): `hidden` özniteliği, sınıf seçicili `display` kurallarını
        kaybeder. Bu kural olmadan modal/pencere kapalıyken de görünür kalıyordu
        (giriş sonrası ekranda "Onayla/Vazgeç" duruyordu). */
@@ -441,6 +494,16 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
     .modal { max-width: 560px; width: 92%; border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
       animation: modal-gir .16s ease-out; max-height: 88vh; overflow-y: auto; }
     .modal select, .modal input, .modal textarea { width: 100%; }
+    .modal .approval-choice { display: flex; align-items: flex-start; gap: 12px;
+      margin: 14px 0 4px; padding: 14px 16px; border: 1px solid var(--line-strong);
+      border-radius: var(--r); background: var(--accent-soft); cursor: pointer;
+      transition: border-color .12s ease, box-shadow .12s ease; }
+    .modal .approval-choice:hover { border-color: var(--accent); box-shadow: var(--ring); }
+    .modal .approval-choice input[type="checkbox"] { flex: 0 0 20px; width: 20px; height: 20px;
+      margin: 1px 0 0; accent-color: var(--accent); }
+    .approval-choice-copy { display: grid; gap: 4px; }
+    .approval-choice-copy strong { color: var(--fg); font-size: 14px; }
+    .approval-choice-copy small { color: var(--muted); font-size: 12px; line-height: 1.45; font-weight: 400; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;
       padding-top: 12px; border-top: 1px solid var(--line); }
     @keyframes modal-gir { from { opacity: 0; transform: translateY(8px) scale(.99); }
@@ -643,9 +706,12 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
       // HTTP durum kodlarını kullanıcıya anlaşılır biçimde eşler.
       hata(statusi, govde) {
         const e = (govde && govde.error) || {};
+        const detay = e.message || e.detail || "";
+        if (statusi === 401) {
+          return detay || "Oturum bulunamadı veya süresi doldu. Lütfen yeniden giriş yapın.";
+        }
         const eslesme = {
           400: "Girdi geçersiz: ",
-          401: "Oturum bulunamadı veya süresi doldu. Lütfen yeniden giriş yapın.",
           403: "Bu işlem için yetkiniz veya organizasyon kapsamınız yok.",
           404: "Kayıt bulunamadı (veya kapsamınız dışında).",
           409: "İşlem mevcut durumla çakışıyor: ",
@@ -653,15 +719,14 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
         };
         if (eslesme[statusi] === undefined) return "Beklenmeyen yanıt (" + statusi + ")";
         if (statusi === 500) return eslesme[500];
-        const detay = e.message || e.detail || "";
         return (eslesme[statusi] + detay).trim();
       },
       // DİKKAT (regresyon): CSRF başlığı yalnızca gövde varken değil, **yazma
       // yöntemlerinin hepsinde** gönderilir. Aksi halde gövdesiz POST'lar (ör.
       // çıkış) sessizce 403 alır ve oturum kapanmaz.
-      async cagir(yol, { method = "GET", body = null } = {}) {
+      async cagir(yol, { method = "GET", body = null, onayGerekli = true } = {}) {
         const guvenli = method === "GET" || method === "HEAD";
-        if (!guvenli) {
+        if (!guvenli && onayGerekli) {
           const onaylandi = this.onay
             ? await this.onay("Bu işlem kaydedilecek ve ilgili kayıtları değiştirebilir. Emin misiniz?")
             : window.confirm("Bu işlem kaydedilecek ve ilgili kayıtları değiştirebilir. Emin misiniz?");
@@ -690,7 +755,7 @@ Sayfalar rastgele margin/padding kullanmaz; boşluklar bu sınıflardan gelir.
             this.mesaj("error", (govde && govde.error && govde.error.message) || "Şirket kullanım süresi sona erdi.");
             window.setTimeout(() => window.location.replace("/test-ui/login/"), 30000);
           }
-          if (yanit.status === 401 || kod === "not_authenticated") {
+          if (yol !== "/api/v1/auth/login" && (yanit.status === 401 || kod === "not_authenticated")) {
             // Oturum gerçekten kapalı: korunan sayfada kalma, girişe dön.
             window.location.replace("/test-ui/login/");
           }

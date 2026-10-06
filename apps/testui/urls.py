@@ -93,7 +93,18 @@ urlpatterns = [
         api.ShiftAssignmentUpdateView.as_view(),
         name="test-ui-shift-assignment-update",
     ),
+    path(
+        "api/shift-assignments/<str:assignment_id>/delete",
+        api.ShiftAssignmentDeleteView.as_view(),
+        name="test-ui-shift-assignment-delete",
+    ),
     path("api/shift-control", api.ShiftControlView.as_view(), name="test-ui-shift-control"),
+    path("api/shift-report", api.ShiftReportView.as_view(), name="test-ui-shift-report"),
+    path(
+        "api/shift-assignments/<str:assignment_id>/late-report",
+        api.ShiftLateReportView.as_view(),
+        name="test-ui-shift-late-report",
+    ),
     path("api/roles", api.RoleListView.as_view(), name="test-ui-roles"),
     path("api/roles/create", api.RoleCreateView.as_view(), name="test-ui-role-create"),
     path("api/leave-policies", api.LeavePolicyListView.as_view(), name="test-ui-leave-policies"),

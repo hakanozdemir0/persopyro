@@ -134,7 +134,8 @@ mesajı için).
   içindeki çalışanları izin özetiyle görür (`employee.read` ∧ kapsam).
 - Onay yönlendirmesi: `approval_steps` adımları ya bir **kişiye** (`approver_user_id`)
   ya da bir **role/kapsama** (`approver_role_code` + `UNIT` kapsamı) bağlanır; onaylayan
-  kendi talebini onaylayamaz (`SEPARATE_ACTOR`).
+  kendi talebini onaylayamaz (`SEPARATE_ACTOR`). İzin ve fazla mesai talepleri önce yalnız
+  doğrudan yöneticiye gider; yönetici isterse İK onay adımını ekler.
 
 ### 5.1 Kapsam kararı (OD5 — kapalı) ✅ — **M8/M9 ✅ UYGULANDI (2026-09-11)**
 

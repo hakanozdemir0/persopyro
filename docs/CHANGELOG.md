@@ -3,6 +3,77 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [Çalışma] — 2026-10-06 — Vardiya raporu yetkisi ve isteğe bağlı İK onayı
+
+**DEĞİŞEN**
+
+- Vardiya raporunu görme/Excel indirme için ayrı `shift.report.read` izni eklendi;
+  rapor sekmesi ve API bu izni denetliyor. İzin Yetki Yönetimi'nde atanabilir;
+  varsayılan olarak şirket yöneticisi ve İK yöneticisi rollerine verilir.
+- Yeni izin ve fazla mesai talepleri önce yalnız doğrudan yöneticiye atanır.
+  Yönetici onaylarken İK'dan ek onay isteyebilir; doğrudan yönetici yoksa İK
+  yedek onaycı olur. Eski taleplerin onay adımları korunur.
+- Normal onay artık yalnızca geçerli adımın atanmış sahibi tarafından verilebilir;
+  izin talebindeki gerekçeli override ayrı kalır.
+
+**DOĞRULAMA / KALAN**
+
+- `git diff --check` başarılı. Otomatik test çalıştırılmadı.
+- `rbac.0026_shift_report_permission` yerel veritabanına uygulandı; shift raporu
+  izni şirket yöneticisi ve İK yöneticisi rollerine eklendi.
+
+## [Çalışma] — 2026-10-05 — Vardiya raporu ve geç kalış bildirimi
+
+**DEĞİŞEN**
+
+- Vardiya bölümüne haftalık/aylık planlı saat özeti, günlük atama detayları ve
+  iki sayfalı Excel dışa aktarımı eklendi.
+- `attendance.manage` yetkili doğrudan yöneticiler, bağlı çalışanlarının
+  vardiyaları için geç kalış dakikasını bildirebilir. Bildirim vardiya kaydında
+  saklanır, Excel raporuna eklenir ve çalışanın “Yaşananlar” geçmişinde görünür.
+
+## [Çalışma] — 2026-10-05 — Haftalık / aylık vardiya planı ve çalışan geçmişi
+
+**DEĞİŞEN**
+
+- Vardiya planındaki tekrarlı seçenek “Haftalık / Aylık” olarak adlandırıldı;
+  mevcut tarih aralığı ve hafta günü seçimiyle birden çok aya yayılan atama
+  yapılabilir.
+- Yeni vardiya atamaları ve mevcut atamanın değiştirilmesi çalışan bazında
+  denetim kaydına yazılır ve çalışanın “Yaşananlar” geçmişinde gösterilir.
+
+## [Çalışma] — 2026-10-05 — Çalışan birim ve yönetici ataması
+
+**DEĞİŞEN**
+
+- Çalışan detayına yetkili kullanıcılar için birim ve birincil yönetici
+  değiştirme akışları eklendi. Birim seçenekleri aktörün kapsamıyla sınırlı;
+  yönetici adayı aktif çalışanlardan seçilir.
+- Değişiklikler gerekçe ve başlangıç tarihiyle mevcut geçmiş/audit servislerine
+  kaydedilir. Servisler hem hedef çalışanı hem yeni birim/yönetici adayını
+  organizasyon kapsamı içinde doğrular.
+
+## [Çalışma] — 2026-10-05 — Çalışan unvanı değişikliği
+
+**DEĞİŞEN**
+
+- Çalışan detayında `employee.update` izni ve organizasyon kapsamı olan
+  kullanıcılara unvan değiştirme formu eklendi. Değişiklik gerekçesi alınır ve
+  mevcut atama geçmişi ile denetim kaydı kullanılır.
+- Atama servisi, çalışanı veya hedef birimi aktörün organizasyon kapsamı dışında
+  bırakacak değişiklikleri sunucu tarafında reddeder.
+
+## [Çalışma] — 2026-10-05 — Yerel giriş ekranı sadeleştirmesi
+
+**DEĞİŞEN**
+
+- Giriş ekranındaki teknik oturum açıklaması, demo hesap listesi ve parola
+  açıklaması kaldırıldı; MFA alanı yerel geliştirme girişinden çıkarıldı.
+- `DEBUG=1` oturum girişi parola doğruysa doğrudan oturum açar. Üretimde ve API
+  token girişinde MFA uygulanmaya devam eder.
+- Yanlış parola, bulunmayan, kilitli veya pasif hesap için ortak hata metni
+  `Kullanıcı adı veya şifre yanlış.` oldu.
+
 ## [Çalışma] — 2026-10-02 — Platform şirket ayrıntıları ve yönetimi
 
 **EKLENEN**

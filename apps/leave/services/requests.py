@@ -12,9 +12,8 @@ Gün hesabı (§6):
 Onay akışı (§8–§9):
   * Adımlar `hr.approval_steps` (genel tablo) üzerindedir ve **sıra atlanamaz**
     (DB guard'ı + servis kontrolü).
-  * Sıra (docs'ta kesin sıra tanımlı değildir → güvenli v1):
-    1) **birincil yönetici** (`employee_manager`, varsa; `SEPARATE_ACTOR` ihlali ise atlanır)
-    2) **yetkili rol** (`hr_manager` rol kodu + kapsam)
+  * Birincil yönetici varsa ilk ve tek onaycıdır. Yönetici karar verirken isterse
+    İK adımını ekleyebilir; birincil yönetici yoksa talep İK rolüne düşer.
   * Primary manager olmak yetki **üretmez**: onay için `leave.request.approve` izni,
     kapsam, `ASSIGNED` ve `SEPARATE_ACTOR` koşulları birlikte aranır.
 
@@ -450,7 +449,7 @@ def _onaya_sun(request: LeaveRequest, *, actor) -> LeaveRequest:
 
 def _adimlari_olustur(request: LeaveRequest) -> list[ApprovalStep]:
     """
-    Onay adımlarını kurar (sıra: birincil yönetici → yetkili rol).
+    Onay adımlarını kurar: birincil yönetici; yönetici yoksa İK rolü.
 
     `SEPARATE_ACTOR`: talebi oluşturan kişi birincil yöneticisi ise o adım
     **kurulmaz** (kendi talebini onaylayamaz) → yetkili rol adımı devralır.
@@ -488,16 +487,17 @@ def _adimlari_olustur(request: LeaveRequest) -> list[ApprovalStep]:
             )
             sira += 1
 
-    adimlar.append(
-        ApprovalStep(
-            tenant_id=request.tenant_id,
-            subject_kind=ApprovalSubjectKind.LEAVE_REQUEST,
-            subject_id=request.pk,
-            step_no=sira,
-            approver_role_code=HR_APPROVER_ROLE_CODE,
-            status=ApprovalStepStatus.PENDING,
+    if not adimlar:
+        adimlar.append(
+            ApprovalStep(
+                tenant_id=request.tenant_id,
+                subject_kind=ApprovalSubjectKind.LEAVE_REQUEST,
+                subject_id=request.pk,
+                step_no=sira,
+                approver_role_code=HR_APPROVER_ROLE_CODE,
+                status=ApprovalStepStatus.PENDING,
+            )
         )
-    )
     for adim in adimlar:
         adim.save()
     return adimlar
@@ -651,6 +651,7 @@ def decide_approval_step(
     decision: str,
     reason: str = "",
     override: bool = False,
+    request_hr_review: bool = False,
 ) -> LeaveRequest:
     """
     Geçerli onay adımı için karar verir (`approved` / `rejected`).
@@ -704,6 +705,37 @@ def decide_approval_step(
         if adim.approver_user_id is not None and adim.approver_user_id == kilitli.employee.user_id:
             raise LeaveAuthorizationError("Onaylayan kendi talebini onaylayamaz.")
 
+        if request_hr_review:
+            if decision != ApprovalStepStatus.APPROVED:
+                raise LeaveError("İK onayı yalnız yönetici onayıyla birlikte istenebilir.")
+            if (
+                adim.approver_user_id != getattr(actor, "pk", None)
+                or kilitli.employee_id not in direct_reports(actor)
+            ):
+                raise LeaveAuthorizationError(
+                    "İK onayını yalnız çalışanın doğrudan yöneticisi isteyebilir."
+                )
+            hr_adimi_var = ApprovalStep.objects.filter(
+                subject_kind=ApprovalSubjectKind.LEAVE_REQUEST,
+                subject_id=kilitli.pk,
+                approver_role_code=HR_APPROVER_ROLE_CODE,
+                deleted_at__isnull=True,
+            ).exists()
+            if not hr_adimi_var:
+                son_adim = ApprovalStep.objects.filter(
+                    subject_kind=ApprovalSubjectKind.LEAVE_REQUEST,
+                    subject_id=kilitli.pk,
+                    deleted_at__isnull=True,
+                ).order_by("-step_no").values_list("step_no", flat=True).first() or adim.step_no
+                ApprovalStep.objects.create(
+                    tenant_id=kilitli.tenant_id,
+                    subject_kind=ApprovalSubjectKind.LEAVE_REQUEST,
+                    subject_id=kilitli.pk,
+                    step_no=son_adim + 1,
+                    approver_role_code=HR_APPROVER_ROLE_CODE,
+                    status=ApprovalStepStatus.PENDING,
+                )
+
         simdi = timezone.now()
         adim.status = decision
         adim.decided_at = simdi
@@ -722,7 +754,11 @@ def decide_approval_step(
             user=actor,
             table_name="approval_steps",
             record_id=adim.pk,
-            changes={"step_no": adim.step_no, "request_id": str(kilitli.pk)},
+            changes={
+                "step_no": adim.step_no,
+                "request_id": str(kilitli.pk),
+                "ik_onayi_istendi": bool(request_hr_review),
+            },
         )
         return kilitli
 

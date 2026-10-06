@@ -289,6 +289,7 @@ def assign_shifts(*, actor, shift, employee_ids, mode="daily", dates=None,
     ))
     if existing and not replace_existing:
         raise ShiftError("Seçilen günlerden en az biri zaten planlı. Değiştirmek için mevcut planı değiştir seçeneğini kullanın.")
+    mevcut_haritasi = {(a.employee_id, a.work_date): a for a in existing}
     now = timezone.now()
     if existing:
         ShiftAssignment.objects.filter(pk__in=[x.pk for x in existing]).update(
@@ -300,8 +301,94 @@ def assign_shifts(*, actor, shift, employee_ids, mode="daily", dates=None,
         for employee in employees for day in work_dates
     ]
     ShiftAssignment.objects.bulk_create(assignments)
+    for atama in assignments:
+        onceki = mevcut_haritasi.get((atama.employee_id, atama.work_date))
+        log_action(
+            tenant_id=shift.tenant_id,
+            action="shift.assign",
+            user=actor,
+            table_name="shift_assignments",
+            record_id=atama.pk,
+            changes={
+                "employee_id": str(atama.employee_id),
+                "event": "changed" if onceki else "assigned",
+                "work_date": atama.work_date.isoformat(),
+                "shift_name": shift.name,
+                "old_shift_name": onceki.shift.name if onceki else None,
+                "mode": mode,
+            },
+        )
     log_action(tenant_id=shift.tenant_id, action="shift.assign", user=actor,
                table_name="shift_assignments", record_id=shift.pk,
                changes={"employee_count": len(employees), "day_count": len(work_dates),
                         "mode": mode, "replace_existing": bool(replace_existing)})
     return assignments
+
+
+@transaction.atomic
+def remove_shift_assignment(*, actor, assignment: ShiftAssignment, reason="") -> ShiftAssignment:
+    """Remove one active schedule entry while preserving its audit history."""
+    _actor(actor, "shift.assign")
+    _same_tenant(actor, assignment)
+    if assignment.deleted_at is not None:
+        raise ShiftError("Etkin vardiya ataması bulunamadı.")
+    employee = assignment.employee
+    if not object_in_org_scope(actor, department_id=employee.department_id, owner_user_id=employee.user_id):
+        raise ShiftAuthorizationError("Çalışan organizasyon kapsamınız dışında.")
+    assignment.deleted_at = timezone.now()
+    assignment.save(update_fields=("deleted_at", "updated_at"))
+    log_action(
+        tenant_id=assignment.tenant_id,
+        action="shift.assign",
+        user=actor,
+        table_name="shift_assignments",
+        record_id=assignment.pk,
+        changes={
+            "employee_id": str(employee.pk),
+            "work_date": assignment.work_date.isoformat(),
+            "shift_name": assignment.shift.name,
+            "event": "removed",
+            "reason": (reason or "")[:200],
+        },
+    )
+    return assignment
+
+
+@transaction.atomic
+def report_late_arrival(*, actor, assignment: ShiftAssignment, minutes: int) -> ShiftAssignment:
+    """A direct manager records/corrects a late arrival for a scheduled shift."""
+    if actor is None or not getattr(actor, "is_authenticated", False) or not actor.is_active:
+        raise ShiftAuthorizationError("Aktif bir kullanıcı gerekli.")
+    if not user_has_permission(actor, "attendance.manage"):
+        raise ShiftAuthorizationError("Geç kalış bildirmek için 'attendance.manage' izni gerekir.")
+    _same_tenant(actor, assignment)
+    if assignment.deleted_at is not None:
+        raise ShiftError("Etkin vardiya ataması bulunamadı.")
+    employee = assignment.employee
+    if employee.user_id == actor.pk:
+        raise ShiftAuthorizationError("Kendi geç kalışınızı yönetici olarak bildiremezsiniz.")
+    if not object_in_org_scope(actor, department_id=employee.department_id, owner_user_id=employee.user_id):
+        raise ShiftAuthorizationError("Çalışan organizasyon kapsamınız dışında.")
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or not 0 <= minutes <= 1440:
+        raise ShiftError("Geç kalış 0 ile 1440 dakika arasında olmalıdır.")
+
+    onceki = assignment.late_minutes if assignment.late_reported_at else None
+    assignment.late_minutes = minutes
+    assignment.late_reported_by = actor
+    assignment.late_reported_at = timezone.now()
+    assignment.save(update_fields=("late_minutes", "late_reported_by", "late_reported_at", "updated_at"))
+    log_action(
+        tenant_id=assignment.tenant_id,
+        action="attendance.manual_entry",
+        user=actor,
+        table_name="shift_assignments",
+        record_id=assignment.pk,
+        changes={
+            "employee_id": str(assignment.employee_id),
+            "work_date": assignment.work_date.isoformat(),
+            "shift_name": assignment.shift.name,
+            "old_late_minutes": onceki,
+            "late_minutes": minutes,
+        },
+    )
+    return assignment

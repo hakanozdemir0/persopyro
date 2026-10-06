@@ -133,13 +133,14 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/role-assignments/<uuid>/restore` | POST | Kaldırılmış atamayı açıkça geri alır (OD21) |
 | `/test-ui/api/positions` | POST | Unvan (pozisyon) tanımı oluşturur (`org.position.manage`) |
 | `/test-ui/api/leave-types` | GET / POST | İzin türleri (tümü, pasifler dahil) / kiracıya özel tür ekleme (`leave.type.manage`; sistem kodları rezerve) |
+| `/test-ui/api/leave-types/<uuid>/update` | POST | Saat tabanlı gün ayarını ve bakiye kullanan türün `allow_negative_balance` özelliğini günceller (`leave.type.manage`; politika yoksa eksi bakiye açılırken 0 günlük sabit politika oluşturulur) |
 | `/test-ui/api/leave-types/<uuid>/deactivate` | POST | İzin türünü pasifleştirir (silmez; mevcut talepler korunur) |
 | `/test-ui/api/departments/<uuid>/update` | POST | Birimin adı/kodunu değiştirir (`org.department.manage` ∧ kapsam) |
 | `/test-ui/api/employees?scope=...` | GET | Kapsamdaki çalışanlar; `SELF` kapsamında **yalnız kendi kaydı** (`meta.self_only`), her satırda `izin_durumu` (yeşil/sarı nokta verisi) |
 | `/test-ui/api/employees` | POST | `manager_employee_id` verilirse birincil yönetici atanır (`employee.update` + kapsam; yazmadan önce doğrulanır) |
 | `/test-ui/api/leave-requests?scope=pending` | GET | Onay kuyruğu: satırlarda `talep_sahibi_bakiye` (hak/kullanılan/bekleyen/kalan) ve `kendi_talebi` bayrağı |
 | `/test-ui/api/leave-policies` | GET | İzin politikaları (`leave.type.manage`; yetkisizde `404`) |
-| `/test-ui/api/leave-policies/<uuid>/update` | POST | `allow_negative_balance` / `allow_refund_after_approval` / `fixed_days` günceller (`update_leave_policy`; karar serviste, `leave.type.manage`) |
+| `/test-ui/api/leave-policies/<uuid>/update` | POST | `allow_negative_balance` (uyumluluk), `allow_refund_after_approval` / `fixed_days` günceller (`update_leave_policy`; arayüzde negatif bakiye izin türü özelliklerinden yönetilir) |
 | `/test-ui/api/employees/<uuid>/personal` | GET / POST | Kişisel veriler (K2 **+ K3 kan grubu**) — okuma **ve** yazma `employee.sensitive.read` ∧ kapsam; izinsiz `403`, kapsam dışı `404`; `citizenship ≠ TR` iken izin türü zorunlu (`400`); kan grubu kapalı kümeden değilse `400`; kan grubu **şifreli** saklanır, yanıtta kod (`blood_type`) + etiket (`blood_type_label`) döner |
 | `/test-ui/api/users` | POST | Giriş hesabı açar (`user.manage`): `email` + `password` (+ ad/soyad). Zayıf parola/çakışan e-posta `400`; parola yanıtta **dönmez**, denetimde yalnız e-posta yazılır |
 | `/test-ui/api/roles/create` | POST | Kiracıya özel rol oluşturur (`role.manage`, `create_custom_role`): `name`, `code`, `scope_type` (TENANT/UNIT/UNIT_DIRECT/SELF). Varsayılan/var olan kod veya platform kapsamı `400` |
@@ -151,7 +152,9 @@ eklenmedi), güvenli yöntemlerde **CSRF** zorunludur ve varsayılan olarak **ka
 | `/test-ui/api/shifts/<uuid>/delete` | POST | Ataması olmayan vardiya şablonunu soft-delete eder (`shift.schedule.manage`) |
 | `/test-ui/api/shift-assignments` | GET / POST | Günlük planı listeler; tek gün veya tarih aralığında seçili haftanın günlerine vardiya atar (`shift.read`, `shift.assign`) |
 | `/test-ui/api/shift-assignments/<uuid>/update` | POST | Kapsam içindeki tek günlük vardiya atamasını başka bir vardiya şablonuyla günceller (`shift.assign`; izin çakışması denetlenir) |
+| `/test-ui/api/shift-assignments/<uuid>/delete` | POST | Kapsam içindeki tek günlük vardiya atamasını denetim kaydıyla kaldırır (`shift.assign`; soft delete) |
 | `/test-ui/api/shift-control` | GET | Vardiya planını, onaylı izin/serbest zaman ve onaylı fazla mesai kayıtlarını aynı kontrol akışında listeler (`shift.read` + ilgili kapsam) |
+| `/test-ui/api/shift-report` | GET | Haftalık/aylık vardiya raporunu ve çalışan seçimi listesini döndürür (`shift.report.read`; tekrarlı `employee_id` parametresi raporu daraltır; `download=xlsx` Excel indirir) |
 
 Hata eşlemesi (tek yerde, `apps/testui/api.py`): `400` doğrulama (ör. `UNIT` rolde
 eksik birim kapsamı), `401/403` kimlik ve yetki/kapsam, `404` kapsam dışı veya yok,

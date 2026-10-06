@@ -208,6 +208,8 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
         "employee.department_change": "Birim bilgisi güncellendi",
         "employee.assignment.change": "Görev bilgileri güncellendi",
         "employee.terms.change": "Çalışma koşulları güncellendi",
+        "shift.assign": "Vardiya ataması yapıldı",
+        "attendance.manual_entry": "Geç kalış bildirildi",
         "role.assign": "Rol atandı",
         "role.revoke": "Rol kaldırıldı",
         "role.restore": "Rol geri alındı",
@@ -229,6 +231,60 @@ def employee_history(employee: Employee) -> list[dict]:  # noqa: ANN001
         created_at = timezone.localtime(kayit.created_at)
         etiket = genel_etiketler.get(kayit.action)
         if not etiket:
+            continue
+        if kayit.action == "attendance.manual_entry":
+            degisim = kayit.changes or {}
+            tarih = degisim.get("work_date")
+            try:
+                tarih_gosterim = _ad(dt.date.fromisoformat(tarih)) if tarih else None
+            except (TypeError, ValueError):
+                tarih_gosterim = tarih
+            olaylar.append(
+                {
+                    "date": created_at.date().isoformat(),
+                    "date_display": _ad(created_at.date()),
+                    "time_display": created_at.strftime("%H:%M"),
+                    "type": "attendance_update",
+                    "label": "Geç kalış bildirildi",
+                    "summary": f"{degisim.get('shift_name') or 'Vardiya'} · {tarih_gosterim or ''}".strip(" ·"),
+                    "detail": {
+                        "Yapan": _aktor_etiketi(kayit.user),
+                        "Tarih": tarih_gosterim,
+                        "Geç kalış": f"{degisim.get('late_minutes', 0)} dakika",
+                    },
+                }
+            )
+            continue
+        if kayit.action == "shift.assign":
+            degisim = kayit.changes or {}
+            tarih = degisim.get("work_date")
+            try:
+                tarih_gosterim = _ad(dt.date.fromisoformat(tarih)) if tarih else None
+            except ValueError:
+                tarih_gosterim = tarih
+            degisti = degisim.get("event") == "changed"
+            kaldirildi = degisim.get("event") == "removed"
+            detay = {
+                "Yapan": _aktor_etiketi(kayit.user),
+                "Vardiya": degisim.get("shift_name"),
+                "Atama tarihi": tarih_gosterim,
+            }
+            if degisim.get("old_shift_name"):
+                detay["Önceki vardiya"] = degisim["old_shift_name"]
+            plan_etiketleri = {"daily": "Tek gün", "weekly": "Haftalık", "monthly": "Aylık"}
+            if degisim.get("mode") in plan_etiketleri:
+                detay["Plan türü"] = plan_etiketleri[degisim["mode"]]
+            olaylar.append(
+                {
+                    "date": created_at.date().isoformat(),
+                    "date_display": _ad(created_at.date()),
+                    "time_display": created_at.strftime("%H:%M"),
+                    "type": "shift_assignment",
+                    "label": "Vardiya ataması kaldırıldı" if kaldirildi else "Vardiya ataması değiştirildi" if degisti else "Vardiya atandı",
+                    "summary": f"{degisim.get('shift_name') or 'Vardiya'} · {tarih_gosterim or ''}".strip(" ·"),
+                    "detail": detay,
+                }
+            )
             continue
         degisimler = (kayit.changes or {}).get("alan_degisiklikleri") or {}
         aktor = _aktor_etiketi(kayit.user)

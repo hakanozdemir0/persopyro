@@ -155,6 +155,7 @@ IZIN_ACIKLAMALARI = {
     "shift.read": "Vardiya kayıtlarını görüntülemeye izin verir.",
     "shift.assign": "Çalışanlara vardiya atamaya izin verir.",
     "shift.schedule.manage": "Vardiya planını oluşturmaya ve değiştirmeye izin verir.",
+    "shift.report.read": "Haftalık/aylık vardiya raporlarını ve Excel çıktısını görmeye izin verir.",
     "attendance.read": "Devam/puantaj kayıtlarını görüntülemeye izin verir.",
     "attendance.manage": "Devam/puantaj kayıtlarını düzeltmeye izin verir.",
     "document.read": "Belgeleri görüntülemeye izin verir.",

@@ -120,7 +120,7 @@ class PasswordResetConfirmView(APIView):
 GECERSIZ = {
     "error": {
         "code": "invalid_credentials",
-        "message": "Giriş bilgileri geçersiz.",
+        "message": "Kullanıcı adı veya şifre yanlış.",
     }
 }
 MFA_GEREKLI = {
@@ -164,9 +164,11 @@ def _istemci_ip(request) -> str | None:  # noqa: ANN001
     return request.META.get("REMOTE_ADDR")
 
 
-def _kimlik_dogrula(request, veri: dict, user_agent: str = ""):  # noqa: ANN001, ANN202
+def _kimlik_dogrula(
+    request, veri: dict, user_agent: str = "", *, enforce_mfa: bool = True
+):  # noqa: ANN001, ANN202
     """
-    Kiracıyı çözer, kiracı durumunu doğrular, parolayı doğrular ve MFA'yı uygular.
+    Kiracıyı, erişim durumunu ve parolayı doğrular; istenirse MFA'yı uygular.
 
     Döner: (kullanici, tenant_id, hata_yaniti) — hata varsa kullanıcı None olur.
     """
@@ -212,18 +214,19 @@ def _kimlik_dogrula(request, veri: dict, user_agent: str = ""):  # noqa: ANN001,
     if kullanici is None:
         return None, tenant_id, Response(GECERSIZ, status=status.HTTP_401_UNAUTHORIZED)
 
-    # MFA: parola doğrulandıktan SONRA uygulanır; böylece "MFA açık mı" bilgisi
-    # parolayı bilmeyen birine sızmaz.
-    try:
-        dogrula_totp(kullanici, veri.get("totp_code"))
-    except MfaRequiredError:
-        return None, tenant_id, Response(MFA_GEREKLI, status=status.HTTP_401_UNAUTHORIZED)
-    except MfaInvalidError:
-        _mfa_denetim(tenant_id, kullanici, request, "mfa_gecersiz")
-        return None, tenant_id, Response(MFA_GECERSIZ, status=status.HTTP_401_UNAUTHORIZED)
-    except MfaConfigError:
-        _mfa_denetim(tenant_id, kullanici, request, "mfa_yapilandirma_hatasi")
-        return None, tenant_id, Response(GECERSIZ, status=status.HTTP_401_UNAUTHORIZED)
+    if enforce_mfa:
+        # MFA: parola doğrulandıktan SONRA uygulanır; böylece "MFA açık mı" bilgisi
+        # parolayı bilmeyen birine sızmaz.
+        try:
+            dogrula_totp(kullanici, veri.get("totp_code"))
+        except MfaRequiredError:
+            return None, tenant_id, Response(MFA_GEREKLI, status=status.HTTP_401_UNAUTHORIZED)
+        except MfaInvalidError:
+            _mfa_denetim(tenant_id, kullanici, request, "mfa_gecersiz")
+            return None, tenant_id, Response(MFA_GECERSIZ, status=status.HTTP_401_UNAUTHORIZED)
+        except MfaConfigError:
+            _mfa_denetim(tenant_id, kullanici, request, "mfa_yapilandirma_hatasi")
+            return None, tenant_id, Response(GECERSIZ, status=status.HTTP_401_UNAUTHORIZED)
 
     return kullanici, tenant_id, None
 
@@ -272,7 +275,11 @@ class SessionLoginView(APIView):
         serializer.is_valid(raise_exception=True)
         veri = serializer.validated_data
 
-        kullanici, tenant_id, hata = _kimlik_dogrula(request, veri)
+        # Yerel geliştirmede oturum girişi tek adımlıdır. Üretim ve API token
+        # girişleri MFA politikasını uygulamaya devam eder.
+        kullanici, tenant_id, hata = _kimlik_dogrula(
+            request, veri, enforce_mfa=not settings.DEBUG
+        )
         if hata is not None:
             return hata
 

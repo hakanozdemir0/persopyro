@@ -5,10 +5,6 @@
 <div class="login-wrap">
   <div class="card">
     <h1>Giriş</h1>
-    <p class="muted">
-      Mevcut oturum ucu kullanılır (<code>/api/v1/auth/login</code>); paralel bir
-      kimlik doğrulama yolu yoktur. Kiracı bağlamı girişten sonra oturuma sabitlenir.
-    </p>
     <form id="login-form">
       <label for="tenant">Kiracı (slug)</label>
       <input id="tenant" name="tenant" value="demo" autocomplete="organization" required>
@@ -19,24 +15,8 @@
       <label for="password">Parola</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
 
-      <label for="totp">MFA kodu (varsa)</label>
-      <input id="totp" name="totp_code" inputmode="numeric" autocomplete="one-time-code">
-
       <p><button class="primary" type="submit">Giriş yap</button></p>
     </form>
-    <h3>Demo hesaplar (yalnızca e-posta)</h3>
-    {# E-posta ve rol AYRI gösterilir: "eposta (rol)" metnini kopyalayan kullanıcı
-       girişte 401 alıyordu. E-postaya tıklamak alanı doldurur. #}
-    <ul class="muted">
-      {% for k in demo_users %}
-        <li><a href="#" class="demo-eposta" data-eposta="{{ k.email }}"><code>{{ k.email }}</code></a>
-          <span class="small">{{ k.rol }}</span></li>
-      {% endfor %}
-    </ul>
-    <p class="muted">
-      Parola repoda tutulmaz; demo parolası <code>scripts/_demo_data.py</code> /
-      <code>scripts/smoke.sh</code> çalıştırıldığında terminale yazılır.
-    </p>
   </div>
 </div>
 {% endblock %}
@@ -44,21 +24,17 @@
 {% block script %}
 <script>
   const form = document.getElementById("login-form");
-  document.querySelectorAll(".demo-eposta").forEach((a) =>
-    a.addEventListener("click", (olay) => {
-      olay.preventDefault();
-      document.getElementById("email").value = a.dataset.eposta;
-    }));
   form.addEventListener("submit", async (olay) => {
     olay.preventDefault();
     const govde = {
       tenant: document.getElementById("tenant").value.trim(),
       email: document.getElementById("email").value.trim(),
       password: document.getElementById("password").value,
-      totp_code: document.getElementById("totp").value.trim(),
     };
     try {
-      await PERSOPYRO_UI.cagir("/api/v1/auth/login", { method: "POST", body: govde });
+      await PERSOPYRO_UI.cagir("/api/v1/auth/login", {
+        method: "POST", body: govde, onayGerekli: false,
+      });
       window.location.href = "/test-ui/";
     } catch (hata) {
       PERSOPYRO_UI.mesaj("error", hata.message);

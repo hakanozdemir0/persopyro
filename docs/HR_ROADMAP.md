@@ -738,9 +738,13 @@ Kural: **bir gün için ya `leave` ya `present`** olur.
 
 ## 11. Fazla mesai (overtime) — ayrıntılı tasarım
 
-> **Durum (2026-09-13): V1 (talep + onay temeli) ✅ UYGULANDI.** Uygulanan kısım: yukarıdaki
+> **Durum (2026-10-06):** yeni taleplerde onay varsayılanı yalnızca doğrudan yöneticidir;
+> yönetici isterse karar sırasında İK ek onayı ekler. Doğrudan yönetici yoksa İK rolü
+> yedek onaycıdır. Daha önce açılmış taleplerin kayıtlı onay adımları değiştirilmez.
+> **V1 (talep + onay temeli) ✅ UYGULANDI.** Uygulanan kısım: yukarıdaki
 > talep akışının **1–3** maddeleri (`hr.overtime_requests`, süre **sunucu hesabı**, aynı gün
-> çakışma reddi, mevcut `hr.approval_steps` ile yönetici → İK onay zinciri, iptal, durum
+> çakışma reddi, mevcut `hr.approval_steps` ile doğrudan yönetici onayı (isteğe bağlı İK
+> ek adımı; yönetici yoksa İK yedeği), iptal, durum
 > makinesi + DB `CHECK`/tetikleyici guard'ları, RLS + FORCE, 4 izin kodu). **Uygulanmayan
 > (LATER):** §9.2 kural tabloları (`hr.overtime_rules`, `hr.overtime_entries`, dilimleme),
 > onay anında katsayı/karşılık snapshot'ı (OD34), PAY hesabı (P5b), TIME_OFF kredisi (OD32/OD44),
@@ -1285,7 +1289,7 @@ kod içinde `apps/` paketleri + **servis katmanı** ile korunur. Mikroservis **y
 
 > **V1 ✅ UYGULANDI (2026-09-13) — yalnız "talep + onay temeli" dilimi.** Uygulanan:
 > `hr.overtime_requests` (RLS/FORCE + 8 CHECK + durum/kurum guard tetikleyicileri), sunucu
-> süre hesabı, yönetici → İK onay zinciri (`hr.approval_steps` yeniden kullanıldı),
+> süre hesabı, doğrudan yönetici onayı ve isteğe bağlı İK ek adımı (`hr.approval_steps`),
 > `overtime.request.create|read|approve|cancel` izinleri, ESS bildirim + onay arayüzü,
 > denetim olayları.
 > **LATER (bu faz içinde henüz yok):** `hr.overtime_rules` + `hr.overtime_entries` (katsayı
@@ -1494,7 +1498,7 @@ Bu kararlar **AUTHORIZATION.md**'de açıktır; burada roadmap'e etkisi ölçül
 | ~~OD36~~ | Form yapılandırma izni | **✅ KAPALI (2026-09-13):** yeni kod **`employee.form.manage`**; `tenant_admin` + `hr_manager` |
 | ~~OD37~~ | K3 alanlar dinamik formda zorunlu yapılabilir mi? | **✅ KAPALI (2026-09-13):** **hayır**; sunucu K3 için `is_required=true` yazımını 400 ile reddeder |
 | ~~OD38~~ | Form yapılandırması sürümlenmeli mi? | **✅ KAPALI (2026-09-13):** sürüm tablosu **yok**; audit + türetilmiş "eksik alan" sorgusu; mevcut kayıtlar geçersiz sayılmaz |
-| OD39 | Fazla mesai onay sırası leave ile aynı mı? | Evet, aynı altyapı (önce birincil yönetici, sonra İK) |
+| OD39 | Fazla mesai onay sırası leave ile aynı mı? | **2026-10-06 kararı:** aynı `approval_steps` altyapısı; varsayılan yalnız doğrudan yönetici, İK ek adımını yönetici isterse ekler; yönetici yoksa İK yedek adım olur |
 | OD40 | `attendance_records.overtime_minutes` ile `overtime_requests` ilişkisi | Devam kaydı **hesaplar**, talep **onaylar**; onay tek yerde (`overtime_requests.status`) |
 
 ### 26.2 Bu turda eklenen öneriler

@@ -76,6 +76,16 @@ class ShiftAssignment(TenantScopedModel):
     )
     assignment_source = models.CharField("atama kaynağı", max_length=20, default="daily")
     note = models.TextField("not", blank=True)
+    late_minutes = models.PositiveSmallIntegerField("geç kalınan dakika", default=0)
+    late_reported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reported_late_shift_assignments",
+        verbose_name="geç kalışı bildiren",
+    )
+    late_reported_at = models.DateTimeField("geç kalış bildirim zamanı", null=True, blank=True)
 
     class Meta:
         db_table = "shift_assignments"

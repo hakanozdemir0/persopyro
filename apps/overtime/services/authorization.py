@@ -127,11 +127,10 @@ def can_cancel_overtime(actor, talep: OvertimeRequest | None) -> bool:
 
 def can_approve_overtime(actor, talep: OvertimeRequest | None) -> bool:
     """
-    `overtime.request.approve` ∧ (ASSIGNED ∨ TENANT kapsamı) ∧ SEPARATE_ACTOR ∧ kapsam.
+    `overtime.request.approve` ∧ ASSIGNED ∧ SEPARATE_ACTOR ∧ kapsam.
 
     * Adım sahibi (birincil yönetici ya da İK rol kodu + kapsam) karara bağlar.
-    * Kiracı geneli onay yetkisi olan rol, adım atanmamış olsa da karara bağlayabilir
-      (sıra kuralı yine geçerlidir).
+    * Normal onay yalnızca geçerli adımın kayıtlı sahibine açıktır.
     * **Kendi talebini onaylayamaz** (self-approval yasağı).
     """
     if talep is None or not _ayni_kiracida(actor, talep.tenant_id):
@@ -140,7 +139,7 @@ def can_approve_overtime(actor, talep: OvertimeRequest | None) -> bool:
         return False
     adim = current_step(talep)
     atanmis = is_assigned_to_step(actor, adim, talep)
-    if not (atanmis or user_org_scope(actor).tenant_wide):
+    if not atanmis:
         return False
     if is_own_employee(actor, talep.employee):
         return False

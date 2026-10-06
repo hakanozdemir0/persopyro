@@ -61,23 +61,9 @@ DEBUG = env_bool("DJANGO_DEBUG", False)
 # --- Manuel test arayüzü (`/test-ui/`) — YALNIZCA geliştirme/test -------------
 # Varsayılan olarak DEBUG'a bağlıdır: üretimde yol **kaydedilmez**. Açıkça
 # `PERSOPYRO_TEST_UI=1` verilirse üretimde de açılabilir (bilinçli, geçici karar).
-# Güvenlik: bu arayüz hiçbir kontrolü atlamaz; tüm kararlar servis katmanında ve
-# RLS ile verilir. Ayrıntı: docs/DEVELOPMENT_RULES.md.
+# Yetkilendirme kararları servis katmanında ve RLS ile verilir. DEBUG ortamındaki
+# oturum girişi tek adımlıdır; üretim ve API token girişlerinde MFA korunur.
 TEST_UI_ENABLED = env_bool("PERSOPYRO_TEST_UI", DEBUG)
-
-#: Giriş ekranında **yalnızca örnek e-posta** gösterilir (parola repoda tutulmaz;
-#: demo parolası bootstrap/demo betiği tarafından üretilip terminale yazılır).
-TEST_UI_DEMO_USERS = env_list(
-    "PERSOPYRO_TEST_UI_DEMO_USERS",
-    ",".join(
-        [
-            "demo@persopyro.test (tenant_admin)",
-            "finans.mudur@persopyro.test (dept_manager - Finans)",
-            "personel@persopyro.test (employee - Muhasebe)",
-            "ik.calisan@persopyro.test (employee - İnsan Kaynakları)",
-        ]
-    ),
-)
 
 # Secret koda yazılmaz ve hiçbir ortam için koda gömülü yedek değer bulunmaz.
 # Her ortamda (geliştirme dahil) ortam değişkeninden okunur; tanımsızsa uygulama
@@ -374,6 +360,9 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 52 * 1024 * 1024
 # Yalnızca DEBUG kapalıyken uygulanır; üretimde güvensiz varsayılan bırakılmaz.
 
 if not DEBUG:
+    # TLS Cloudflare'da sonlanır; nginx, güvenilen Tunnel isteğindeki istemci
+    # protokolünü X-Forwarded-Proto üzerinden Gunicorn'a aktarır.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SECURE_SSL_REDIRECT = env_bool("DJANGO_SECURE_SSL_REDIRECT", True)
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True

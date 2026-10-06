@@ -1,7 +1,7 @@
 """
 Fazla mesai (overtime) modülü modelleri — **P5a V1: talep + onay temeli**.
 
-Kaynak kararlar: **OD39** (onay sırası leave ile aynı altyapı), **OD40** (`attendance`
+Kaynak kararlar: **OD39** (izinle aynı adım altyapısı; yönetici varsayılan, İK isteğe bağlı), **OD40** (`attendance`
 hesaplar, talep onaylar; onay tek yerde), **OD21** (soft delete + kısmi benzersizlik),
 **OD5** (izin ∧ kapsam), **OD41+** (ücret/katsayı ileriki faz).
 

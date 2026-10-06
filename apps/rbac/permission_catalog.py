@@ -87,6 +87,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("shift.read", "Vardiyaları görme", "shift"),
     ("shift.assign", "Vardiya atama", "shift"),
     ("shift.schedule.manage", "Vardiya planı yönetimi", "shift"),
+    ("shift.report.read", "Vardiya raporlarını görme ve dışa aktarma", "shift"),
     ("attendance.read", "Devam kayıtlarını görme", "attendance"),
     ("attendance.manage", "Devam kaydı düzeltme", "attendance"),
     # Evrak
@@ -303,7 +304,7 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "leave.request.read",
             "leave.request.approve",
             "leave.type.manage",
-            # P5a/§11: İK, yönetici adımından sonraki onay adımının sahibidir (OD39).
+            # İK, yalnızca doğrudan yönetici ek onay isterse onay adımı olur.
             "overtime.request.read",
             "overtime.request.approve",
             "overtime.request.cancel",
@@ -312,6 +313,7 @@ DEFAULT_ROLE_TEMPLATES: dict[str, dict] = {
             "shift.read",
             "shift.assign",
             "shift.schedule.manage",
+            "shift.report.read",
             "attendance.read",
             "attendance.manage",
             "document.read",

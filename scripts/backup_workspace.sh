@@ -10,6 +10,7 @@ mkdir -p "${OUT_DIR}"
 tar \
   --exclude='./.git' \
   --exclude='./.venv' \
+  --exclude='./ENV.zip' \
   --exclude='./backups' \
   --exclude='./.env' \
   --exclude='*/__pycache__' \

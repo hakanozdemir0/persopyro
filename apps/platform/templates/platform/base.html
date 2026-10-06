@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
   <title>{% block title %}PersoPyro Yönetim Paneli{% endblock %}</title>
   <style>
@@ -137,14 +137,39 @@
     dt { margin-top: .5rem; font-weight: 650; }
     dd { margin-left: 0; overflow-wrap: anywhere; }
     @media (max-width: 700px) {
-      .topbar { padding-inline: 14px; }
-      .page-container { margin-top: 18px; padding-inline: 14px; }
-      .page-nav { padding-inline:14px; }
-      .page-heading { align-items: flex-start; flex-direction: column; }
+      html, body { max-width: 100%; overflow-x: hidden; }
+      body { font-size: 14px; }
+      .topbar {
+        position: sticky; flex-wrap: wrap; gap: 8px; min-height: 56px;
+        padding: 9px max(14px, env(safe-area-inset-right)) 9px max(14px, env(safe-area-inset-left));
+      }
+      .header-actions { width: 100%; justify-content: flex-end; gap: 8px; }
+      .page-container { width: 100%; margin: 14px auto; padding: 0 12px 40px; }
+      .page-nav {
+        width: 100%; margin: 8px auto 0; padding: 0 12px;
+        -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scrollbar-width: thin;
+      }
+      .panel-tabs { width: max-content; min-width: 100%; margin-bottom: 14px; }
+      .panel-tabs a { min-height: 44px; padding: 10px 12px; white-space: nowrap; }
+      .page-heading { align-items: flex-start; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+      .page-heading h1 { font-size: 21px; }
       .user-email { display: none; }
-      .card { padding: 15px; }
-      .company-form-grid, .custom-company-field { grid-template-columns:1fr; }
+      .card { min-width: 0; padding: 14px; }
+      .form-grid, .company-form-grid, .custom-company-field,
+      .detail-grid { grid-template-columns: minmax(0, 1fr); }
+      .custom-company-field { padding: 12px; }
+      .section-head { align-items: flex-start; flex-wrap: wrap; }
+      .row-actions { align-items: stretch; }
+      .row-actions form { flex-wrap: wrap; }
+      .form-actions { justify-content: stretch; }
+      .form-actions button, button, .button { min-height: 44px; touch-action: manipulation; }
+      input, select, textarea { min-height: 44px; font-size: 16px; }
+      textarea { min-height: 96px; }
+      .table-wrap { max-width: 100%; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
       table { min-width: 680px; }
+      .auth-page .page-container { min-height: calc(100dvh - 64px); }
+      .auth-card { padding: 20px 16px; }
+      details { max-width: 100%; }
     }
   </style>
 </head>

@@ -140,7 +140,7 @@ bunu otomatik yapar; `node` yoksa atlanır).
 
 | E-posta | Rol | Kapsam | Ne için |
 |---|---|---|---|
-| `demo@persopyro.test` | `tenant_admin` | kiracı geneli | her şeyi görmek, nihai onay |
+| `demo@persopyro.test` | `tenant_admin` | kiracı geneli | kapsam içi işlemler; normal talep onayı yalnız atanmış adım sahibi, izin override'ı ayrı izinle |
 | `finans.mudur@persopyro.test` | `dept_manager` | **Finans** (+ alt ağaç) | kapsam/onay testi |
 | `personel@persopyro.test` | `employee` | yalnız kendisi | Muhasebe çalışanı; kendi talebi |
 | `ik.calisan@persopyro.test` | `employee` | yalnız kendisi | **kapsam dışı** (İnsan Kaynakları) |

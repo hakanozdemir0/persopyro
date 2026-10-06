@@ -191,9 +191,12 @@ implementasyon
 → docs
 → commit
 
-## 18. Commit en son
+## 18. Commit yalnız açık istekle
 
-Testler yeşil olmadan commit oluşturma.
+İşlem veya mikro görev tamamlandı diye otomatik commit oluşturma.
+Commit ve push yalnızca kullanıcı açıkça istediğinde yapılır.
+Birden çok değişikliği çalışma ağacında birlikte tut; mevcut dirty değişiklikleri
+koru ve kullanıcı istemedikçe commit'e hazırlama.
 
 ## 19. Token disiplini
 

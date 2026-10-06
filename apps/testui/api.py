@@ -31,7 +31,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models import Count, Prefetch, Q
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import exceptions as drf_exceptions
@@ -95,6 +95,7 @@ from apps.leave.services.balances import (
     period_year_for,
     set_leave_entitlement,
 )
+from apps.leave.services.policies import create_leave_policy
 from apps.organization.history import employee_history, timeline_sayfa
 from apps.organization.lifecycle import (
     LifecycleStateError,
@@ -109,6 +110,7 @@ from apps.organization.models import (
     BloodType,
     Department,
     Employee,
+    EmployeeStatus,
     EmployeeDocument,
     EmployeeManager,
     EmployeePersonalData,
@@ -166,6 +168,7 @@ from apps.overtime.services import (
     update_overtime_rule,
 )
 from apps.shifts.models import Shift, ShiftAssignment
+from apps.shifts.reports import StyledCell, workbook_bytes
 from apps.shifts.services import (
     ShiftAuthorizationError,
     ShiftConflictError,
@@ -175,6 +178,8 @@ from apps.shifts.services import (
     create_shift,
     delete_shift,
     ensure_shift_manager_access,
+    remove_shift_assignment,
+    report_late_arrival,
     update_shift,
 )
 from apps.overtime.services import (
@@ -839,6 +844,12 @@ def _talep_ozeti(talep, user, bakiye_dahil: bool = False) -> dict:  # noqa: ANN0
             and can_cancel_leave_request(user, talep)
         ),
         "can_approve": can_approve_step(user, adim, talep),
+        "can_request_hr_review": bool(
+            adim is not None
+            and adim.approver_user_id == getattr(user, "pk", None)
+            and talep.employee.user_id != getattr(user, "pk", None)
+            and talep.employee_id in direct_reports(user)
+        ),
         "can_cancel": can_cancel_leave_request(user, talep),
         "can_view": can_view_leave_request(user, talep),
         # Onay ekranı: onaylayan, talep sahibinin güncel bakiyesini görür
@@ -1263,6 +1274,12 @@ def _fazla_mesai_ozeti(talep, user) -> dict:  # noqa: ANN001
         and str(talep.employee.user_id) == str(getattr(user, "pk", None)),
         "can_cancel": can_cancel_overtime(user, talep),
         "can_decide": adim is not None and can_approve_overtime(user, talep),
+        "can_request_hr_review": bool(
+            adim is not None
+            and adim.approver_user_id == getattr(user, "pk", None)
+            and talep.employee.user_id != getattr(user, "pk", None)
+            and talep.employee_id in direct_reports(user)
+        ),
         "decided_at": talep.decided_at.isoformat() if talep.decided_at else None,
         "karar_veren": (
             _onaylayici_gosterimi(talep.decided_by)["etiket"] if talep.decided_by_id else None
@@ -1357,9 +1374,11 @@ class MeView(TestUiView):
                         "overtime": arayuz_menu("ui.overtime.view", ("overtime.request.read", "overtime.request.create")),
                         "overtime_requests": arayuz_menu("ui.overtime.requests", ("overtime.request.read", "overtime.request.create")),
                         "overtime_rules": arayuz_menu("ui.overtime.rules", "overtime.rule.read"),
-                        "shifts": can_manage_shifts(user, "shift.read"),
+                        "shifts": can_manage_shifts(user, "shift.read")
+                        or user_has_permission(user, "shift.report.read"),
                         "shift_definitions": can_manage_shifts(user, "shift.schedule.manage"),
                         "shift_assignments": can_manage_shifts(user, "shift.assign"),
+                        "shift_report": user_has_permission(user, "shift.report.read"),
                         "approvals": arayuz_menu("ui.approvals.view", ("leave.request.approve", "overtime.request.approve")),
                         "roles_view": arayuz_menu("ui.roles.view", ("role.read", "role.manage")),
                         "departments_manage": user_has_permission(user, "org.department.manage"),
@@ -2796,6 +2815,7 @@ class EmployeeManagerChangeView(TestUiView):
                 pk=_uuid(request.data.get("manager_employee_id"), "manager_employee_id"),
                 tenant_id=request.user.tenant_id,
                 deleted_at__isnull=True,
+                status=EmployeeStatus.ACTIVE,
             )
             iliski = change_manager(
                 actor=request.user,
@@ -3154,6 +3174,9 @@ def _kullanici_secenekleri(actor) -> list[dict]:  # noqa: ANN001
 
 def _izin_turu_ozeti(tur) -> dict:  # noqa: ANN001
     """İzin türü özeti (yönetim kartı + talep formu için)."""
+    politika = tur.policies.filter(
+        deleted_at__isnull=True, status=RecordStatus.ACTIVE
+    ).first()
     return {
         "id": str(tur.pk),
         "code": tur.code,
@@ -3162,6 +3185,8 @@ def _izin_turu_ozeti(tur) -> dict:  # noqa: ANN001
         "category_label": tur.get_category_display(),
         "is_paid": tur.is_paid,
         "uses_balance": tur.uses_balance,
+        "has_balance_policy": politika is not None,
+        "allow_negative_balance": bool(politika and politika.allow_negative_balance),
         "requires_approval": tur.requires_approval,
         "requires_document": tur.requires_document,
         "is_system": tur.is_system,
@@ -3380,6 +3405,7 @@ class LeaveTypeActivateView(TestUiView):
 class LeaveTypeUpdateView(TestUiView):
     """İzin türü ayarlarını, özellikle saat tabanlı gün uzunluğunu günceller."""
 
+    @transaction.atomic
     def post(self, request, leave_type_id: str):  # noqa: ANN001
         tur = LeaveType.objects.filter(pk=_uuid(leave_type_id, "leave_type_id"), deleted_at__isnull=True).first()
         if tur is None:
@@ -3391,6 +3417,31 @@ class LeaveTypeUpdateView(TestUiView):
                 workday_minutes=(int(request.data["workday_minutes"]) if request.data.get("workday_minutes") not in (None, "") else None),
                 workday_hours=(request.data.get("workday_hours") if request.data.get("workday_hours") not in (None, "") else None),
             )
+            if "allow_negative_balance" in request.data:
+                if not tur.uses_balance:
+                    raise LeavePolicyError("Eksi bakiye seçeneği yalnızca bakiye kullanan izin türlerinde açılabilir.")
+                allow_negative = bool(request.data["allow_negative_balance"])
+                politika = LeavePolicy.objects.filter(
+                    leave_type=tur, deleted_at__isnull=True, status=RecordStatus.ACTIVE
+                ).first()
+                if politika is None:
+                    if allow_negative:
+                        if LeavePolicy.objects.filter(leave_type=tur, deleted_at__isnull=True).exists():
+                            raise LeavePolicyError("Bu izin türünün etkin olmayan bir politikası var; önce politikayı aktifleştirin.")
+                        create_leave_policy(
+                            actor=request.user,
+                            leave_type=tur,
+                            accrual_method="fixed",
+                            fixed_days=Decimal("0.0"),
+                            allow_negative_balance=True,
+                        )
+                else:
+                    update_leave_policy(
+                        actor=request.user,
+                        policy=politika,
+                        allow_negative_balance=allow_negative,
+                        reason=str(request.data.get("reason") or "İzin türü özelliklerinden güncellendi"),
+                    )
         except (TypeError, ValueError, LeaveError, LeaveAuthorizationError) as hata:
             return TestUiErrors.cevap(hata)
         return Response({"data": _izin_turu_ozeti(tur)})
@@ -3544,7 +3595,7 @@ class ShiftAssignmentListView(TestUiView):
         atamalar = ShiftAssignment.objects.filter(
             tenant=request.user.tenant_id, deleted_at__isnull=True,
             work_date__range=(baslangic, bitis),
-            employee_id__in=direct_reports(request.user),
+            employee_id__in=kapsamdaki_calisanlar(request.user).values_list("pk", flat=True),
             employee__status__in=("active", "suspended"),
         ).select_related("employee__user", "employee__department", "shift", "assigned_by")
         if request.query_params.get("employee_id"):
@@ -3573,7 +3624,8 @@ class ShiftAssignmentListView(TestUiView):
             assignments = assign_shifts(
                 actor=request.user, shift=shift, employee_ids=employee_ids, mode=mode,
                 dates=dates, start_date=start_date, end_date=end_date,
-                weekdays=request.data.get("weekdays") or [], note=str(request.data.get("note") or ""),
+                weekdays=request.data.get("weekdays") or [],
+                note=str(request.data.get("note") or ""),
                 replace_existing=bool(request.data.get("replace_existing", False)),
             )
         except Exception as hata:  # noqa: BLE001
@@ -3594,7 +3646,7 @@ class ShiftAssignmentUpdateView(TestUiView):
             deleted_at__isnull=True,
             employee__status__in=("active", "suspended"),
         ).select_related("employee", "shift").first()
-        if atama is None or atama.employee_id not in direct_reports(request.user):
+        if atama is None:
             raise Http404("vardiya_atamasi_yok")
         if not object_in_org_scope(
             request.user,
@@ -3622,6 +3674,30 @@ class ShiftAssignmentUpdateView(TestUiView):
         except Exception as hata:  # noqa: BLE001
             return TestUiErrors.cevap(hata)
         return Response({"data": _vardiya_atama_ozeti(assignments[0])})
+
+
+class ShiftAssignmentDeleteView(TestUiView):
+    """Vardiya planındaki tek bir atamayı denetim kaydıyla kaldırır."""
+
+    def post(self, request, assignment_id: str):  # noqa: ANN001
+        ensure_shift_manager_access(request.user)
+        atama = ShiftAssignment.objects.filter(
+            pk=_uuid(assignment_id, "assignment_id"),
+            tenant=request.user.tenant_id,
+            deleted_at__isnull=True,
+            employee__status__in=("active", "suspended"),
+        ).select_related("employee", "shift").first()
+        if atama is None:
+            raise Http404("vardiya_atamasi_yok")
+        try:
+            remove_shift_assignment(
+                actor=request.user,
+                assignment=atama,
+                reason=str(request.data.get("reason") or ""),
+            )
+        except Exception as hata:  # noqa: BLE001
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"id": str(atama.pk), "silindi": True}})
 
 
 class ShiftControlView(TestUiView):
@@ -3676,10 +3752,19 @@ class ShiftControlView(TestUiView):
             vardiya_suresi = max(0, vardiya_suresi - assignment.shift.break_minutes)
             events.append({
                 "kind": "shift", "kind_label": "Vardiya", "date": assignment.work_date.isoformat(),
+                "assignment_id": str(assignment.pk),
                 "employee_id": str(employee.pk), "employee_no": employee.employee_no,
                 "employee": _calisan_etiketi(employee), "department": employee.department.name if employee.department_id else None,
-                "title": assignment.shift.name, "time": f"{assignment.shift.start_time:%H:%M}–{assignment.shift.end_time:%H:%M}",
+                "title": assignment.shift.name, "shift_id": str(assignment.shift_id),
+                "note": assignment.note,
+                "time": f"{assignment.shift.start_time:%H:%M}–{assignment.shift.end_time:%H:%M}",
                 "detail": assignment.shift.code, "duration_minutes": vardiya_suresi,
+                "can_remove": can_manage_shifts(request.user, "shift.assign")
+                    and object_in_org_scope(
+                        request.user,
+                        department_id=employee.department_id,
+                        owner_user_id=employee.user_id,
+                    ),
             })
         izinler = LeaveRequest.objects.filter(
             tenant=request.user.tenant_id, deleted_at__isnull=True,
@@ -3752,6 +3837,221 @@ class ShiftControlView(TestUiView):
         events.sort(key=lambda item: (item["date"], item["employee"], item["time"]))
         return Response({"data": events, "meta": {"from": baslangic.isoformat(), "to": bitis.isoformat(),
                                                     "employees": visible_employees}})
+
+
+class ShiftReportView(TestUiView):
+    """Haftalık/aylık planlı vardiya saati özeti ve Excel dışa aktarımı."""
+
+    def get(self, request):  # noqa: ANN001
+        if not user_has_permission(request.user, "shift.report.read"):
+            return TestUiErrors.cevap(ShiftAuthorizationError("Vardiya raporu için 'shift.report.read' gerekir."))
+        donem = str(request.query_params.get("period") or "weekly")
+        if donem not in {"weekly", "monthly"}:
+            return TestUiErrors.cevap(ShiftError("Rapor dönemi haftalık veya aylık olmalıdır."))
+        try:
+            referans = _tarih(request.query_params.get("date") or timezone.localdate().isoformat(), "date")
+        except LeaveError as hata:
+            return TestUiErrors.cevap(hata)
+        if donem == "weekly":
+            baslangic = referans - timedelta(days=referans.weekday())
+            bitis = baslangic + timedelta(days=6)
+            donem_etiketi = "Haftalık"
+        else:
+            baslangic = date(referans.year, referans.month, 1)
+            sonraki_ay = date(referans.year + (referans.month == 12), referans.month % 12 + 1, 1)
+            bitis = sonraki_ay - timedelta(days=1)
+            donem_etiketi = "Aylık"
+
+        calisan_qs = (
+            kapsamdaki_calisanlar(request.user)
+            .filter(status__in=("active", "suspended"))
+            .select_related("department", "user")
+            .order_by("employee_no")
+        )
+        tum_calisanlar = list(calisan_qs)
+        employee_ids = request.query_params.getlist("employee_id")
+        if len(employee_ids) == 1 and "," in employee_ids[0]:
+            employee_ids = [value for value in employee_ids[0].split(",") if value]
+        if employee_ids:
+            secili_ids = set(employee_ids)
+            calisanlar = [employee for employee in tum_calisanlar if str(employee.pk) in secili_ids]
+            if len(calisanlar) != len(secili_ids):
+                raise Http404("çalışan_yok")
+        else:
+            calisanlar = tum_calisanlar
+        ozetler = {
+            calisan.pk: {
+                "employee_id": str(calisan.pk),
+                "employee_no": calisan.employee_no,
+                "employee": _calisan_etiketi(calisan),
+                "department": calisan.department.name if calisan.department_id else None,
+                "shift_days": 0,
+                "planned_minutes": 0,
+                "late_minutes": 0,
+                "assignments": [],
+            }
+            for calisan in calisanlar
+        }
+        raporla_gec_kalis = user_has_permission(request.user, "attendance.manage")
+        atamalar = ShiftAssignment.objects.filter(
+            tenant_id=request.user.tenant_id,
+            deleted_at__isnull=True,
+            work_date__range=(baslangic, bitis),
+            employee_id__in=ozetler.keys(),
+        ).select_related("employee__user", "employee__department", "shift", "late_reported_by")
+        for atama in atamalar:
+            calisan = atama.employee
+            if not object_in_org_scope(
+                request.user, department_id=calisan.department_id, owner_user_id=calisan.user_id
+            ):
+                continue
+            dakika = (
+                atama.shift.end_time.hour * 60 + atama.shift.end_time.minute
+                - atama.shift.start_time.hour * 60 - atama.shift.start_time.minute
+            )
+            if atama.shift.crosses_midnight:
+                dakika += 24 * 60
+            dakika = max(0, dakika - atama.shift.break_minutes)
+            satir = ozetler[calisan.pk]
+            gecikme = atama.late_minutes if atama.late_reported_at else 0
+            satir["shift_days"] += 1
+            satir["planned_minutes"] += dakika
+            satir["late_minutes"] += gecikme
+            satir["assignments"].append(
+                {
+                    "id": str(atama.pk),
+                    "work_date": atama.work_date.isoformat(),
+                    "shift_name": atama.shift.name,
+                    "start_time": atama.shift.start_time.strftime("%H:%M"),
+                    "end_time": atama.shift.end_time.strftime("%H:%M"),
+                    "planned_minutes": dakika,
+                    "late_minutes": atama.late_minutes if atama.late_reported_at else None,
+                    "late_reported_by": (
+                        atama.late_reported_by.get_full_name().strip()
+                        or atama.late_reported_by.email
+                        if atama.late_reported_by_id
+                        else None
+                    ),
+                    "late_reported_at": atama.late_reported_at.isoformat() if atama.late_reported_at else None,
+                    "can_report_late": bool(
+                        raporla_gec_kalis
+                        and calisan.user_id != request.user.pk
+                        and object_in_org_scope(
+                            request.user,
+                            department_id=calisan.department_id,
+                            owner_user_id=calisan.user_id,
+                        )
+                    ),
+                }
+            )
+        sonuc = sorted(ozetler.values(), key=lambda row: (row["employee"].casefold(), row["employee_no"]))
+        for row in sonuc:
+            row["assignments"].sort(key=lambda item: item["work_date"])
+            row["planned_hours"] = round(row["planned_minutes"] / 60, 2)
+        meta = {
+            "period": donem,
+            "period_label": donem_etiketi,
+            "from": baslangic.isoformat(),
+            "to": bitis.isoformat(),
+            "employees": [
+                {
+                    "id": str(employee.pk),
+                    "employee_no": employee.employee_no,
+                    "employee": _calisan_etiketi(employee),
+                    "department": employee.department.name if employee.department_id else None,
+                }
+                for employee in tum_calisanlar
+            ],
+        }
+        # `format` DRF tarafından renderer seçmek için ayrılmıştır; özel indirme
+        # anahtarı kullanılmazsa xlsx isteği görünüm çalışmadan 404 alır.
+        if request.query_params.get("download") == "xlsx":
+            tarihler = [baslangic + timedelta(days=gun) for gun in range((bitis - baslangic).days + 1)]
+            gunluk_kayitlar = {}
+            for row in sonuc:
+                for item in row["assignments"]:
+                    gunluk_kayitlar[(row["employee_id"], item["work_date"])] = item
+            izinler = LeaveRequest.objects.filter(
+                tenant_id=request.user.tenant_id,
+                deleted_at__isnull=True,
+                employee_id__in=ozetler.keys(),
+                status__in=(LeaveRequestStatus.APPROVED, LeaveRequestStatus.TAKEN),
+                start_date__lte=bitis,
+                end_date__gte=baslangic,
+            ).select_related("leave_type", "employee")
+            izin_gunleri = {}
+            for izin in izinler:
+                if not object_in_org_scope(
+                    request.user,
+                    department_id=izin.employee.department_id,
+                    owner_user_id=izin.employee.user_id,
+                ):
+                    continue
+                gun = max(baslangic, izin.start_date)
+                son_gun = min(bitis, izin.end_date)
+                while gun <= son_gun:
+                    izin_gunleri.setdefault((str(izin.employee_id), gun.isoformat()), []).append(izin)
+                    gun += timedelta(days=1)
+
+            tablo = [[StyledCell("Çalışan no", 1), StyledCell("Çalışan", 1), *[StyledCell(gun.strftime("%d.%m.%Y"), 1) for gun in tarihler]]]
+            for row in sonuc:
+                satir = [row["employee_no"], row["employee"]]
+                for gun in tarihler:
+                    anahtar = (row["employee_id"], gun.isoformat())
+                    atama = gunluk_kayitlar.get(anahtar)
+                    gun_izinleri = izin_gunleri.get(anahtar, [])
+                    metinler = []
+                    style = 0
+                    if gun_izinleri:
+                        izin = gun_izinleri[0]
+                        metinler.append(f"İzin: {izin.leave_type.name}")
+                        if izin.is_half_day and izin.start_time and izin.end_time:
+                            metinler.append(f"{izin.start_time:%H:%M}-{izin.end_time:%H:%M}")
+                        style = 4
+                    if atama:
+                        metinler.append(f"{atama['shift_name']}\n{atama['start_time']}-{atama['end_time']}")
+                        if atama["late_minutes"]:
+                            metinler.append(f"Geç kalış: {atama['late_minutes']} dk")
+                            if not gun_izinleri:
+                                style = 3
+                        elif not gun_izinleri:
+                            style = 2
+                    satir.append(StyledCell("\n".join(metinler), style) if metinler else "")
+                tablo.append(satir)
+            payload = workbook_bytes([(donem_etiketi, tablo)])
+            response = HttpResponse(
+                payload,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            response["Content-Disposition"] = f'attachment; filename="vardiya-raporu-{donem}-{baslangic.isoformat()}.xlsx"'
+            return response
+        return Response({"data": sonuc, "meta": meta})
+
+
+class ShiftLateReportView(TestUiView):
+    """Yöneticinin doğrudan bağlı çalışanı için geç kalış dakikasını kaydeder."""
+
+    def post(self, request, assignment_id: str):  # noqa: ANN001
+        try:
+            atama = ShiftAssignment.objects.filter(
+                pk=_uuid(assignment_id, "assignment_id"),
+                tenant_id=request.user.tenant_id,
+                deleted_at__isnull=True,
+            ).select_related("employee", "shift").first()
+            if atama is None:
+                raise Http404("vardiya_atamasi_yok")
+            raw_minutes = request.data.get("late_minutes")
+            if isinstance(raw_minutes, bool):
+                raise ValueError("Dakika sayısı geçersiz.")
+            dakika = int(raw_minutes)
+            atama = report_late_arrival(actor=request.user, assignment=atama, minutes=dakika)
+        except LeaveError as hata:
+            return TestUiErrors.cevap(hata)
+        except (TypeError, ValueError) as hata:
+            return TestUiErrors.cevap(ShiftError(str(hata)))
+        except (ShiftAuthorizationError, ShiftError) as hata:
+            return TestUiErrors.cevap(hata)
+        return Response({"data": {"late_minutes": atama.late_minutes, "late_reported_at": atama.late_reported_at.isoformat()}})
 
 
 class RoleCreateView(TestUiView):
@@ -4022,8 +4322,11 @@ class LookupView(TestUiView):
                             "employee_no": e.employee_no,
                             "label": _calisan_etiketi(e),
                             "department": e.department.name if e.department_id else None,
+                            "status": e.status,
                         }
-                        for e in kapsamdaki_calisanlar(request.user)
+                        for e in kapsamdaki_calisanlar(request.user).filter(
+                            status=EmployeeStatus.ACTIVE
+                        )
                     ]
                     if user_has_permission(request.user, "employee.update")
                     else [],
@@ -4860,6 +5163,25 @@ class EmployeeDetailView(TestUiView):
             raise
         yil = period_year_for()
         ozet = _calisan_ozeti(calisan)
+        iliskiler = getattr(calisan, "birincil_yonetici_iliskileri", []) or []
+        if iliskiler and ozet.get("manager"):
+            ozet["manager"] = {
+                **ozet["manager"],
+                "id": str(iliskiler[0].manager_employee_id),
+                "effective_from": iliskiler[0].effective_from.isoformat(),
+            }
+        employee_update_izin = user_has_permission(request.user, "employee.update")
+        organizasyon_kapsami = user_org_scope(request.user)
+        atanabilir_birimler = []
+        if employee_update_izin:
+            birimler = Department.objects.filter(
+                deleted_at__isnull=True, status=RecordStatus.ACTIVE
+            ).order_by("code")
+            if not organizasyon_kapsami.tenant_wide:
+                birimler = birimler.filter(pk__in=organizasyon_kapsami.unit_ids)
+            atanabilir_birimler = [
+                {"id": str(birim.pk), "name": birim.name} for birim in birimler
+            ]
         detay = {
             **ozet,
             "annual": _yillik_ozet(calisan, yil),
@@ -4909,6 +5231,24 @@ class EmployeeDetailView(TestUiView):
                 and user_has_permission(request.user, "document.upload")
             ),
             "can_delete_documents": user_has_permission(request.user, "document.delete"),
+            "can_change_assignment": employee_update_izin
+            and object_in_org_scope(
+                request.user,
+                department_id=calisan.department_id,
+                owner_user_id=calisan.user_id,
+            ),
+            "can_change_department": bool(
+                employee_update_izin
+                and (organizasyon_kapsami.tenant_wide or organizasyon_kapsami.unit_ids)
+            ),
+            "can_change_manager": bool(
+                employee_update_izin
+                and (
+                    organizasyon_kapsami.tenant_wide
+                    or calisan.department_id in organizasyon_kapsami.unit_ids
+                )
+            ),
+            "assignable_departments": atanabilir_birimler,
             "can_delete_employee": calisan.user_id != request.user.pk
             and user_has_permission(request.user, "employee.delete"),
         }
@@ -5090,7 +5430,7 @@ class RoleAssignmentRestoreView(TestUiView):
 
 
 class LeaveRequestListView(TestUiView):
-    """İzin talepleri: `mine` (kendi) veya `pending` (kapsamımdaki onay bekleyenler)."""
+    """İzin talepleri: `mine` (kendi) veya `pending` (atanmış güncel onay adımlarım)."""
 
     def get(self, request):  # noqa: ANN001
         kapsam = request.query_params.get("scope", "mine")
@@ -5100,7 +5440,11 @@ class LeaveRequestListView(TestUiView):
         )
         if kapsam == "pending":
             adaylar = temel.filter(status=LeaveRequestStatus.PENDING).order_by("start_date")
-            talepler = [t for t in adaylar if can_view_leave_request(user, t)]
+            talepler = [
+                t for t in adaylar
+                if can_view_leave_request(user, t)
+                and can_approve_step(user, current_step(t), t)
+            ]
             # Onay kuyruğunda talep sahibinin bakiyesi de döner (yetki zaten
             # `can_view_leave_request` süzgecinden geçti).
             return Response(
@@ -5187,6 +5531,7 @@ class LeaveRequestDecisionView(TestUiView):
                 request=talep,
                 decision=karar,
                 reason=str(request.data.get("reason", "")).strip(),
+                request_hr_review=request.data.get("request_hr_review") is True,
             )
         except (LeaveError, LeaveAuthorizationError) as hata:
             return TestUiErrors.cevap(hata)
@@ -5533,6 +5878,7 @@ class OvertimeDecisionView(TestUiView):
                 talep=talep,
                 decision=karar,
                 reason=str(request.data.get("reason", "")).strip(),
+                request_hr_review=request.data.get("request_hr_review") is True,
             )
         except (OvertimeError, OvertimeAuthorizationError, OvertimeValidationError) as hata:
             return TestUiErrors.cevap(hata)
