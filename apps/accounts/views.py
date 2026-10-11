@@ -87,7 +87,12 @@ class PasswordResetConfirmView(APIView):
         confirmation = str(request.data.get("new_password_confirm") or "")
         tenant_id = resolve_tenant_id(tenant_slug)
         invalid = Response(
-            {"error": {"code": "invalid_or_expired_reset_link", "message": "Sıfırlama bağlantısı geçersiz veya süresi dolmuş."}},
+            {
+                "error": {
+                    "code": "invalid_or_expired_reset_link",
+                    "message": "Sıfırlama bağlantısı geçersiz veya süresi dolmuş.",
+                }
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
         if tenant_id is None or not uid or not token or not password or password != confirmation:
@@ -104,18 +109,34 @@ class PasswordResetConfirmView(APIView):
                 validate_password(password, user=user)
             except ValidationError as error:
                 return Response(
-                    {"error": {"code": "invalid_password", "message": "Parola kuralları: " + " ".join(error.messages)}},
+                    {
+                        "error": {
+                            "code": "invalid_password",
+                            "message": "Parola kuralları: " + " ".join(error.messages),
+                        }
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             user.set_password(password)
             user.auth_version += 1
-            user.save(update_fields=["password", "password_changed_at", "auth_version", "updated_at"])
+            user.save(
+                update_fields=["password", "password_changed_at", "auth_version", "updated_at"]
+            )
+            revoked_count = revoke_tokens(
+                reason=TokenRevokeReason.SECURITY_INCIDENT,
+                user=user,
+                tenant_id=tenant_id,
+            )
             log_action(
-                tenant_id=tenant_id, action="user.password.reset", user=user,
-                table_name="users", record_id=user.pk,
-                changes={"password_reset": True},
+                tenant_id=tenant_id,
+                action="user.password.reset",
+                user=user,
+                table_name="users",
+                record_id=user.pk,
+                changes={"password_reset": True, "revoked_api_tokens": revoked_count},
             )
         return Response({"data": {"updated": True}})
+
 
 GECERSIZ = {
     "error": {
@@ -164,9 +185,7 @@ def _istemci_ip(request) -> str | None:  # noqa: ANN001
     return request.META.get("REMOTE_ADDR")
 
 
-def _kimlik_dogrula(
-    request, veri: dict, user_agent: str = "", *, enforce_mfa: bool = True
-):  # noqa: ANN001, ANN202
+def _kimlik_dogrula(request, veri: dict, user_agent: str = "", *, enforce_mfa: bool = True):  # noqa: ANN001, ANN202
     """
     Kiracıyı, erişim durumunu ve parolayı doğrular; istenirse MFA'yı uygular.
 
@@ -182,9 +201,13 @@ def _kimlik_dogrula(
         reason = tenant_block_reason(tenant_id)
         if reason == "tenant_expired":
             with tenant_context(tenant_id):
-                account = get_user_model().objects.filter(
-                    tenant_id=tenant_id, email__iexact=veri["email"], deleted_at__isnull=True
-                ).first()
+                account = (
+                    get_user_model()
+                    .objects.filter(
+                        tenant_id=tenant_id, email__iexact=veri["email"], deleted_at__isnull=True
+                    )
+                    .first()
+                )
                 is_admin = bool(
                     account
                     and UserRole.objects.filter(
@@ -277,9 +300,7 @@ class SessionLoginView(APIView):
 
         # Yerel geliştirmede oturum girişi tek adımlıdır. Üretim ve API token
         # girişleri MFA politikasını uygulamaya devam eder.
-        kullanici, tenant_id, hata = _kimlik_dogrula(
-            request, veri, enforce_mfa=not settings.DEBUG
-        )
+        kullanici, tenant_id, hata = _kimlik_dogrula(request, veri, enforce_mfa=not settings.DEBUG)
         if hata is not None:
             return hata
 

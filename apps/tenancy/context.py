@@ -74,9 +74,7 @@ def tenant_id_by_slug(slug: str) -> uuid.UUID | None:
 
 def tenant_id_by_domain(domain: str) -> uuid.UUID | None:
     """Alan adı → kiracı kimliği (aynı gerekçe; istek hattında kullanılır)."""
-    return _lookup_tenant(
-        "SELECT tenant_id FROM hr.tenant_directory WHERE domain = %s", domain
-    )
+    return _lookup_tenant("SELECT tenant_id FROM hr.tenant_directory WHERE domain = %s", domain)
 
 
 def _lookup_tenant(sql: str, value: str) -> uuid.UUID | None:

@@ -197,6 +197,44 @@ def test_kilitli_kullanici_dogru_parolayla_da_giremez(api_client, tenant_a, user
     assert giris_yap(api_client, tenant_a, user_a).status_code == 401
 
 
+def test_kilit_suresi_bittikten_sonra_hesap_sayaci_yeni_pencereden_baslar(
+    api_client, tenant_a, user_a
+) -> None:
+    from datetime import timedelta  # noqa: PLC0415
+
+    from django.utils import timezone  # noqa: PLC0415
+
+    with tenant_context(tenant_a.id):
+        user_a.failed_login_count = 5
+        user_a.lockout_until = timezone.now() - timedelta(minutes=1)
+        user_a.save(update_fields=["failed_login_count", "lockout_until", "updated_at"])
+
+    yanit = giris_yap(api_client, tenant_a, user_a, sifre="yanlis-parola")
+    assert yanit.status_code == 401
+    with tenant_context(tenant_a.id):
+        user_a.refresh_from_db()
+    assert user_a.failed_login_count == 1
+    assert user_a.lockout_until is None
+
+
+def test_giris_denetime_yazilamazsa_kimlik_dogrulama_basarisiz_olur(
+    tenant_a, user_a, monkeypatch
+) -> None:
+    from apps.accounts.backends import TenantScopedModelBackend  # noqa: PLC0415
+
+    def audit_unavailable(**_kwargs):
+        raise RuntimeError("audit database unavailable")
+
+    monkeypatch.setattr("apps.accounts.backends.log_action", audit_unavailable)
+    with pytest.raises(RuntimeError, match="audit database unavailable"):
+        TenantScopedModelBackend().authenticate(
+            request=None,
+            username=user_a.email,
+            password="Guclu-Parola-123",
+            tenant=tenant_a.id,
+        )
+
+
 def test_oturum_ucu_csrf_korumali(tenant_a, user_a) -> None:  # noqa: ANN001
     """Tarayıcı girişi CSRF korumalıdır."""
     from rest_framework.test import APIClient
@@ -453,6 +491,7 @@ def test_varsayilan_roller_uretiliyor(tenant_a) -> None:  # noqa: ANN001
             "tenant_officer",  # M7: §4.2 hedef kataloğu (şirket yetkilisi)
             "hr_manager",  # şablon rol olarak korunur (§4.2)
             "dept_manager",  # M7: eski `manager` rolünün yerini alır (OD5)
+            "shift_manager",
             "employee",
         }
         # tenant_admin tüm izinlere sahip olmalı.

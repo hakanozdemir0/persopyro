@@ -28,6 +28,10 @@ dependencies = [
     "gunicorn>=23.0",
     # OpenAPI şeması (API sözleşmesi)
     "drf-spectacular>=0.28",
+    # Yapısal doğrulama (PDF, legacy OLE Office) için upload parser'ları
+    "olefile>=0.47",
+    # Office XML içeriğini güvenli biçimde parse etmek için
+    "defusedxml>=0.7.1",
     # Hata izleme (opsiyonel; anahtarsız çalışır)
     "sentry-sdk>=2.20",
 ]

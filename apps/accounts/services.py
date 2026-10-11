@@ -42,8 +42,7 @@ def validate_purpose(purpose: str) -> str:
         raise ValidationError(
             {
                 "purpose": [
-                    f"Amaç (purpose) zorunludur ve en az {PURPOSE_MIN_LENGTH} "
-                    "karakter olmalıdır."
+                    f"Amaç (purpose) zorunludur ve en az {PURPOSE_MIN_LENGTH} karakter olmalıdır."
                 ]
             }
         )
@@ -87,14 +86,10 @@ def validate_scopes(scopes, user) -> list[str]:
     """
     temiz = normalize_scopes(scopes)
 
-    katalog = set(
-        Permission.objects.filter(code__in=temiz).values_list("code", flat=True)
-    )
+    katalog = set(Permission.objects.filter(code__in=temiz).values_list("code", flat=True))
     bilinmeyen = sorted(set(temiz) - katalog)
     if bilinmeyen:
-        raise ValidationError(
-            {"scopes": [f"Bilinmeyen kapsam kodu: {', '.join(bilinmeyen)}"]}
-        )
+        raise ValidationError({"scopes": [f"Bilinmeyen kapsam kodu: {', '.join(bilinmeyen)}"]})
 
     sahip = effective_permission_codes(user)
     fazla = sorted(set(temiz) - sahip)
@@ -262,13 +257,9 @@ def revoke_tenant_tokens(
     olsa bile kiracı durumu istek sırasında kontrol edilir ve erişim reddedilir
     (`apps/tenancy/access.py`).
     """
-    return revoke_tokens(
-        reason=reason, tenant_id=tenant_id, request_id=request_id
-    )
+    return revoke_tokens(reason=reason, tenant_id=tenant_id, request_id=request_id)
 
 
 def revoke_tokens_for_inactive_user(user, *, request_id: str = "") -> int:
     """Sahibi pasif/silinmiş olduğunda token'larını iptal eder (idari temizlik)."""
-    return revoke_tokens(
-        reason=TokenRevokeReason.OWNER_DISABLED, user=user, request_id=request_id
-    )
+    return revoke_tokens(reason=TokenRevokeReason.OWNER_DISABLED, user=user, request_id=request_id)

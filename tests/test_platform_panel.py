@@ -1,13 +1,25 @@
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
+from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.db import connection, connections
 from django.test import Client
+from django.utils import timezone
 
+from apps.accounts.models import ApiToken, TokenRevokeReason
 from apps.organization.models import Department, Employee, EmployeePersonalData
+from apps.platform.access_requests import (
+    PlatformAccessRequestError,
+    create_access_request,
+    decide_access_request,
+    read_employee_people,
+    revoke_access_grant,
+)
 from apps.platform.permissions import bootstrap_assign_role, effective_permissions
+from apps.rbac.models import UserRole
+from apps.rbac.services.roles import create_default_roles
 from apps.tenancy.context import tenant_context
 
 pytestmark = pytest.mark.django_db(databases=["default", "platform"])
@@ -126,6 +138,27 @@ def test_platform_panel_login_accepts_active_superadmin() -> None:
         assert cursor.fetchone() == ("platform.login.succeeded",)
 
 
+def test_platform_login_resets_expired_lockout_counter() -> None:
+    user_id = _platform_user("expired-lockout@persopyro.test")
+    with connections["platform"].cursor() as cursor:
+        cursor.execute(
+            "UPDATE platform.users SET failed_login_count = 5, lockout_until = %s WHERE id = %s",
+            [timezone.now() - timedelta(minutes=1), str(user_id)],
+        )
+
+    response = Client().post(
+        "/platform/login/",
+        {"email": "expired-lockout@persopyro.test", "password": "wrong-password"},
+    )
+    assert response.status_code == 401
+    with connections["platform"].cursor() as cursor:
+        cursor.execute(
+            "SELECT failed_login_count, lockout_until FROM platform.users WHERE id = %s",
+            [str(user_id)],
+        )
+        assert cursor.fetchone() == (1, None)
+
+
 def test_platform_term_rejects_invalid_date_before_company_lookup() -> None:
     user_id = _platform_user("term-panel@persopyro.test")
     client = Client()
@@ -160,7 +193,9 @@ def test_superadmin_profile_form_updates_limits_and_can_send_optional_notice(
         ),
     )
     monkeypatch.setattr(
-        views, "effective_permissions", lambda _user_id: {"platform.settings.manage"}
+        views,
+        "effective_permissions",
+        lambda _user_id: {"platform.settings.manage", "platform.role.assign"},
     )
     monkeypatch.setattr(views, "record_platform_event", lambda **event: logged.append(event))
     monkeypatch.setattr(views, "send_mail", lambda **mail: mailed.append(mail) or 1)
@@ -237,8 +272,19 @@ def test_superadmin_profile_form_updates_limits_and_can_send_optional_notice(
     assert mailed[0]["recipient_list"] == ["firma@ornek.test"]
 
 
-def test_superadmin_company_people_endpoint_masks_personal_data_without_grant(tenant_a) -> None:
+def test_superadmin_company_people_endpoint_masks_personal_data_without_grant(
+    tenant_a, monkeypatch
+) -> None:
+    from apps.platform import views
+
     user_id = _platform_user("people-panel@persopyro.test")
+    # Even a mistakenly assigned persistent permission cannot replace a scoped grant.
+    monkeypatch.setattr(
+        views,
+        "effective_permissions",
+        lambda _user_id: frozenset({"platform.tenant.read", "platform.tenant.pii.read"}),
+    )
+    monkeypatch.setattr(views, "_platform_can_access_tenant", lambda *_args, **_kwargs: True)
     with tenant_context(tenant_a.id):
         department = Department.objects.create(
             tenant=tenant_a,
@@ -278,8 +324,11 @@ def test_superadmin_company_people_endpoint_masks_personal_data_without_grant(te
         assert cursor.fetchone()[0] == 1
 
 
-def test_platform_admin_company_people_view_masks_personal_data(tenant_a) -> None:
+def test_platform_admin_company_people_view_masks_personal_data(tenant_a, monkeypatch) -> None:
     user_id = _platform_user("admin-people@persopyro.test", role="platform_admin")
+    from apps.platform import views
+
+    monkeypatch.setattr(views, "_platform_can_access_tenant", lambda *_args, **_kwargs: True)
     with tenant_context(tenant_a.id):
         department = Department.objects.create(
             tenant=tenant_a,
@@ -366,7 +415,11 @@ def test_company_details_allow_superadmin_to_manage_selected_fields_without_appr
     monkeypatch.setattr(
         views,
         "effective_permissions",
-        lambda _user_id: {"platform.tenant.read", "platform.settings.manage"},
+        lambda _user_id: {
+            "platform.tenant.read",
+            "platform.settings.manage",
+            "platform.role.assign",
+        },
     )
     monkeypatch.setattr(views, "record_platform_event", lambda **_event: None)
     monkeypatch.setattr(views.connections["platform"], "cursor", lambda: Cursor())
@@ -487,3 +540,125 @@ def test_platform_admin_cannot_create_company() -> None:
     )
 
     assert response.status_code == 403
+
+
+def test_platform_admin_password_set_revokes_legacy_api_tokens(tenant_a, user_a) -> None:
+    with tenant_context(tenant_a.id):
+        roles = create_default_roles(tenant_a)
+        UserRole.objects.create(tenant=tenant_a, user=user_a, role=roles["tenant_admin"])
+        token, _ = ApiToken.issue(
+            user_a,
+            purpose="platform password reset security test",
+            scopes=["employee.read"],
+            ttl_hours=24,
+        )
+        token.auth_version_snapshot = None
+        token.save(update_fields=["auth_version_snapshot"])
+
+    actor_id = _platform_user("set-password-revokes-token@persopyro.test")
+    client = Client()
+    session = client.session
+    session["platform_user_id"] = str(actor_id)
+    session.save()
+
+    response = client.post(
+        f"/platform/tenants/{tenant_a.id}/admins/{user_a.id}/credentials/",
+        {"action": "set_password", "password": "New-Admin-Password-52!"},
+    )
+
+    assert response.status_code == 302
+    with tenant_context(tenant_a.id):
+        token.refresh_from_db()
+        assert token.revoked_reason == TokenRevokeReason.SECURITY_INCIDENT
+
+
+@pytest.mark.django_db(
+    databases=["default", "platform"],
+    transaction=True,
+    available_apps=settings.INSTALLED_APPS,
+)
+def test_employee_pii_needs_two_approvals_is_field_scoped_and_revocable(tenant_a) -> None:
+    requester_id = _platform_user("employee-pii-requester@persopyro.test")
+    approver_one = _platform_user("employee-pii-approver-one@persopyro.test")
+    approver_two = _platform_user("employee-pii-approver-two@persopyro.test")
+    with tenant_context(tenant_a.id):
+        department = Department.objects.create(tenant=tenant_a, code="GRANT", name="Grant")
+        employee = Employee.objects.create(
+            tenant=tenant_a,
+            department=department,
+            employee_no="GR-1",
+            hire_date="2026-01-01",
+        )
+        EmployeePersonalData.objects.create(
+            tenant=tenant_a,
+            employee=employee,
+            first_name="Gizli",
+            last_name="Kişi",
+            national_id="12345678901",
+            address="Gizli adres",
+            blood_type="A+",
+        )
+    request_id = create_access_request(
+        requester_id=requester_id,
+        tenant_id=tenant_a.id,
+        operation="read",
+        fields=["employee.identity"],
+        resources=[str(employee.pk)],
+        purpose="Çalışan kimlik alanı incelemesi gerekiyor",
+        ttl_minutes=30,
+    )
+    assert decide_access_request(
+        approver_id=approver_one,
+        tenant_id=tenant_a.id,
+        request_id=request_id,
+        decision="approve",
+    ) is None
+    with pytest.raises(PlatformAccessRequestError, match="Etkin çalışan verisi"):
+        read_employee_people(
+            grant_id=request_id,
+            requester_id=requester_id,
+            tenant_id=tenant_a.id,
+        )
+    grant_id = decide_access_request(
+        approver_id=approver_two,
+        tenant_id=tenant_a.id,
+        request_id=request_id,
+        decision="approve",
+    )
+    assert grant_id is not None
+    data = read_employee_people(
+        grant_id=grant_id,
+        requester_id=requester_id,
+        tenant_id=tenant_a.id,
+    )
+    assert data[0]["details"] == {"employee.identity": "12345678901"}
+    requester_client = Client()
+    requester_session = requester_client.session
+    requester_session["platform_user_id"] = str(requester_id)
+    requester_session.save()
+    granted_page = requester_client.get(
+        f"/platform/tenants/{tenant_a.id}/people/?grant_id={grant_id}"
+    )
+    assert granted_page.status_code == 200
+    assert "12345678901" in granted_page.content.decode()
+    assert "Gizli adres" not in granted_page.content.decode()
+    with pytest.raises(PlatformAccessRequestError, match="Etkin çalışan verisi"):
+        read_employee_people(
+            grant_id=grant_id,
+            requester_id=approver_one,
+            tenant_id=tenant_a.id,
+        )
+    revoke_access_grant(
+        grant_id=grant_id,
+        actor_id=requester_id,
+        tenant_id=tenant_a.id,
+    )
+    assert requester_client.get(
+        f"/platform/tenants/{tenant_a.id}/people/?grant_id={grant_id}"
+    ).status_code == 403
+    with pytest.raises(PlatformAccessRequestError, match="Etkin çalışan verisi"):
+        read_employee_people(
+            grant_id=grant_id,
+            requester_id=requester_id,
+            tenant_id=tenant_a.id,
+        )

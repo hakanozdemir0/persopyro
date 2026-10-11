@@ -642,6 +642,15 @@ kiracı geneli kapsam tek başına onay yetkisi üretmez.
 | `document.share` | — | — | ● (TENANT, süreli bağlantı) | ◐ | — | — |
 | `document.delete` | — | — | ◐ (TENANT, saklama kuralı) ❓OD6 | ◐ (kendi yüklediği) | — | ○ (SELF, taslak) |
 
+**Uygulama notu (2026-10-11):** Çalışan evraklarının tamamı `document.read`
+izni ve bu izni taşıyan rolün organizasyon kapsamıyla korunur. Varsayılan
+çalışan, departman sorumlusu ve şirket operasyon yetkilisi rollerinde bu izin
+bulunmaz; İK yöneticisi ve şirket yöneticisinde bulunur. `document.upload`
+görüntüleme hakkı vermez; kaldırma için hem `document.read` hem
+`document.delete` gerekir. `document.confidential.read` eski, etkisiz bir
+kod olarak rol düzenleyicisinden kaldırılmıştır. Yukarıdaki matrisin bu kodla
+ilgili satırları önceki hedef tasarımı anlatır.
+
 #### H. Süreç ve onay
 
 | İzin kodu | SA | PA | ŞİRKET YÖN. | ŞİRKET YETK. | DEPT. YÖN. | ÇALIŞAN |
@@ -702,7 +711,7 @@ Maskeleme örnekleri: `Ayşe Yılmaz` → `A*** Y***`, `ayse@ornek.com` →
 - Dışa aktarma (Excel/CSV) varsayılan olarak maskelidir; maskesiz dışa aktarma
   `employee.export` + gerekçe + kayıt gerektirir.
 
-### 7.3 Kontrollü erişim akışı (talep → onay → kullanım) 🔜 (OD1/OD4 — KARAR VERİLDİ)
+### 7.3 Kontrollü erişim akışı (talep → onay → kullanım) ✅/🔜 (OD1/OD4 — kısmen uygulandı)
 
 ```
 1. Talep     Kullanıcı: hangi kişi/kayıt, hangi alanlar, hangi amaç, ne kadar süre
@@ -723,6 +732,14 @@ Maskeleme örnekleri: `Ayşe Yılmaz` → `A*** Y***`, `ayse@ornek.com` →
 5. Bitiş     Süre dolunca erişim OTOMATİK kapanır (koşul geçersizleşir);
              iptal edilebilir; uzatma yeni onay gerektirir
 ```
+
+**Uygulama durumu (2026-10-11):** Platform çalışan PII akışı `apps/platform/access_requests.py`
+ve `platform/people.html` üzerinden uygulanmıştır. Talep kişi kimlikleri (en fazla 50), alan
+listesi ve en fazla 60 dakika süreyle sınırlandırılır; çalışan verisi için yalnızca `read`
+işlemi kullanılabilir. İki farklı platform kullanıcısı onaylamadan grant oluşmaz; grant
+talep sahibine, belirtilen çalışanlara ve alanlara bağlanır. Okuma sorgusu yalnızca izin verilen
+PII sütunlarını yükler. Süre bitimi ve erken iptal erişimi kapatır. Talep, karar, kullanım ve
+iptal platform denetim kaydına yazılır. Kiracıya kullanım bildirimi henüz bu akışa bağlı değildir.
 
 Kurallar:
 

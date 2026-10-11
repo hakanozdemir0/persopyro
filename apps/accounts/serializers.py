@@ -14,9 +14,7 @@ class GirisSerializer(serializers.Serializer):
     oturuma sabitlenir ve sonraki isteklerde istemciden okunmaz.
     """
 
-    tenant = serializers.CharField(
-        max_length=190, help_text="Kiracı slug, alan adı veya kimliği"
-    )
+    tenant = serializers.CharField(max_length=190, help_text="Kiracı slug, alan adı veya kimliği")
     email = serializers.EmailField()
     password = serializers.CharField(trim_whitespace=False, write_only=True)
     totp_code = serializers.CharField(

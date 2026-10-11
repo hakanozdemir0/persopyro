@@ -21,7 +21,6 @@ Bu yüzden istek hattında (middleware) kiracı bağlamı, Django'nun
 diliminde eklenecek istek hattı işidir (docs/ARCHITECTURE.md bölüm 22).
 """
 
-import logging
 import uuid
 from datetime import timedelta
 
@@ -33,8 +32,6 @@ from apps.accounts.models import User
 from apps.audit.models import AuditAction
 from apps.audit.services import log_action
 from apps.tenancy.context import tenant_context
-
-logger = logging.getLogger("persopyro.auth")
 
 # Kullanıcı bulunamadığında da aynı maliyette parola doğrulaması yapmak için
 # kullanılan sabit hash (gerçek bir parolaya karşılık gelmez).
@@ -74,10 +71,15 @@ class TenantScopedModelBackend:
                 )
                 return None
 
+            # Kilit penceresi sona erdiyse eski deneme sayacını yeni pencereye
+            # taşımayız; aksi halde tek bir yazım hatası hesabı yeniden kilitler.
+            if user.lockout_until is not None and user.lockout_until <= timezone.now():
+                user.failed_login_count = 0
+                user.lockout_until = None
+                user.save(update_fields=["failed_login_count", "lockout_until", "updated_at"])
+
             if user.is_locked:
-                _log_safe(
-                    request, tenant_id, None, AuditAction.LOGIN_FAILED, {"reason": "kilitli"}
-                )
+                _log_safe(request, tenant_id, None, AuditAction.LOGIN_FAILED, {"reason": "kilitli"})
                 return None
 
             if not user.is_active:
@@ -86,9 +88,7 @@ class TenantScopedModelBackend:
 
             if not user.check_password(password):
                 _register_failed_attempt(user)
-                _log_safe(
-                    request, tenant_id, None, AuditAction.LOGIN_FAILED, {"reason": "parola"}
-                )
+                _log_safe(request, tenant_id, None, AuditAction.LOGIN_FAILED, {"reason": "parola"})
                 return None
 
             _register_successful_login(user)
@@ -137,25 +137,22 @@ def _register_successful_login(user: User) -> None:
 
 
 def _log_safe(request, tenant_id, user, action: str, changes: dict) -> None:
-    """Denetim kaydı yazımı başarısız olsa bile giriş akışı bozulmaz."""
+    """Giriş denetimi yazılamazsa kimlik doğrulamayı fail-closed durdur."""
     ip_address = None
     request_id = ""
     if request is not None:
         ip_address = _client_ip(request)
         request_id = getattr(request, "request_id", "")
-    try:
-        log_action(
-            tenant_id=tenant_id,
-            user=user,
-            action=action,
-            table_name="users",
-            record_id=getattr(user, "pk", None),
-            changes=changes,
-            request_id=request_id,
-            ip_address=ip_address,
-        )
-    except Exception:  # noqa: BLE001 - denetim yazımı girişi engellememeli
-        logger.exception("Denetim kaydı yazılamadı")
+    log_action(
+        tenant_id=tenant_id,
+        user=user,
+        action=action,
+        table_name="users",
+        record_id=getattr(user, "pk", None),
+        changes=changes,
+        request_id=request_id,
+        ip_address=ip_address,
+    )
 
 
 def _client_ip(request) -> str | None:

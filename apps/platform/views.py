@@ -4,8 +4,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import check_password
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
@@ -21,8 +20,18 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.views.decorators.http import require_http_methods, require_POST
 
+from apps.leave.services.types import create_default_leave_types
 from apps.organization.models import Employee
-from apps.platform.access_requests import json_array_value
+from apps.platform.access_requests import (
+    EMPLOYEE_FIELD_CHOICES,
+    PlatformAccessRequestError,
+    create_access_request,
+    decide_access_request,
+    json_array_value,
+    list_tenant_access_requests,
+    read_employee_people,
+    revoke_access_grant,
+)
 from apps.platform.constants import TENANT_PLAN_CHOICES, TENANT_PROFILE_FIELDS
 from apps.platform.permissions import (
     can_view_platform_admins,
@@ -92,8 +101,12 @@ PLATFORM_AUDIT_ACTIONS = {
     "platform.tenant.profile.updated": "Şirket bilgilerini güncelledi",
     "platform.tenant.notification.sent": "Şirket bilgilendirme e-postası gönderdi",
     "platform.tenant.notification.failed": "Şirket bilgilendirme e-postası gönderilemedi",
-    "platform.tenant_admin.reset_link.failed": "Şirket yöneticisine parola bağlantısı gönderilemedi",
-    "platform.tenant_admin.reset_link.sent": "Şirket yöneticisine parola yenileme bağlantısı gönderdi",
+    "platform.tenant_admin.reset_link.failed": (
+        "Şirket yöneticisine parola bağlantısı gönderilemedi"
+    ),
+    "platform.tenant_admin.reset_link.sent": (
+        "Şirket yöneticisine parola yenileme bağlantısı gönderdi"
+    ),
     "platform.tenant_admin.password.set": "Şirket yöneticisinin parolasını değiştirdi",
     "platform.admin.created": "Platform yöneticisi oluşturdu",
     "platform.profile.updated": "Kendi profilini güncelledi",
@@ -103,6 +116,7 @@ PLATFORM_AUDIT_ACTIONS = {
     "platform.access.approved": "Şirket bilgilerine erişim talebini onayladı",
     "platform.access.rejected": "Şirket bilgilerine erişim talebini reddetti",
     "platform.access.used": "Onaylı şirket erişimini kullandı",
+    "platform.access.revoked": "Süreli şirket erişimini iptal etti",
 }
 PLATFORM_AUDIT_FIELDS = {
     "result": "Sonuç",
@@ -190,8 +204,6 @@ PLATFORM_AUDIT_VALUE_LABELS = {
     "max_active_employees": "Aktif çalışan sınırı",
     "max_employee_records": "Çalışan kayıt sınırı",
     "plan_code": "Şirket planı",
-    "tenant.slug": "Şirket kodu",
-    "tenant.name": "Şirket adı",
 }
 
 
@@ -208,21 +220,27 @@ def _platform_audit_event(action, details, tenant_slug, tenant_names):  # noqa: 
     for key, pair in (details.get("changes") or {}).items():
         if not isinstance(pair, dict) or "before" not in pair or "after" not in pair:
             continue
-        field_label = PLATFORM_AUDIT_VALUE_LABELS.get(key, key.removeprefix("custom:").replace("_", " ").capitalize())
-        changes.append({
-            "label": field_label,
-            "before": _audit_value_text(pair["before"], key),
-            "after": _audit_value_text(pair["after"], key),
-        })
+        field_label = PLATFORM_AUDIT_VALUE_LABELS.get(
+            key, key.removeprefix("custom:").replace("_", " ").capitalize()
+        )
+        changes.append(
+            {
+                "label": field_label,
+                "before": _audit_value_text(pair["before"], key),
+                "after": _audit_value_text(pair["after"], key),
+            }
+        )
     if not changes:
         for key in details.get("changed_fields") or []:
-            changes.append({
-                "label": PLATFORM_AUDIT_VALUE_LABELS.get(
-                    str(key), str(key).removeprefix("custom:").replace("_", " ").capitalize()
-                ),
-                "before": "—",
-                "after": "Bu eski kayıtta değer ayrıntısı tutulmamış",
-            })
+            changes.append(
+                {
+                    "label": PLATFORM_AUDIT_VALUE_LABELS.get(
+                        str(key), str(key).removeprefix("custom:").replace("_", " ").capitalize()
+                    ),
+                    "before": "—",
+                    "after": "Bu eski kayıtta değer ayrıntısı tutulmamış",
+                }
+            )
     for key, value in details.items():
         if key in {"changes", "changed_fields"}:
             continue
@@ -260,14 +278,20 @@ def _audit_value_text(value, field_key=""):  # noqa: ANN001, ANN202
     if isinstance(value, bool):
         return "Evet" if value else "Hayır"
     if str(value) == "0" and field_key in {
-        "max_users", "max_active_employees", "max_employee_records", "max_storage_mb"
+        "max_users",
+        "max_active_employees",
+        "max_employee_records",
+        "max_storage_mb",
     }:
         return "Sınırsız"
     if isinstance(value, list):
         if value and isinstance(value[0], dict):
             type_labels = {
-                "text": "Metin", "email": "E-posta", "number": "Sayı",
-                "date": "Tarih", "select": "Seçim listesi",
+                "text": "Metin",
+                "email": "E-posta",
+                "number": "Sayı",
+                "date": "Tarih",
+                "select": "Seçim listesi",
             }
             descriptions = []
             for item in value:
@@ -279,12 +303,18 @@ def _audit_value_text(value, field_key=""):  # noqa: ANN001, ANN202
                     description += f": {options}"
                 descriptions.append(description)
             return "; ".join(descriptions)
-        return ", ".join(PLATFORM_AUDIT_VALUE_LABELS.get(str(item), str(item)) for item in value) or "Yok"
+        return (
+            ", ".join(PLATFORM_AUDIT_VALUE_LABELS.get(str(item), str(item)) for item in value)
+            or "Yok"
+        )
     if isinstance(value, dict):
-        return "; ".join(
-            f"{PLATFORM_AUDIT_VALUE_LABELS.get(str(key), str(key))}: {_audit_value_text(item)}"
-            for key, item in value.items()
-        ) or "Yok"
+        return (
+            "; ".join(
+                f"{PLATFORM_AUDIT_VALUE_LABELS.get(str(key), str(key))}: {_audit_value_text(item)}"
+                for key, item in value.items()
+            )
+            or "Yok"
+        )
     return PLATFORM_AUDIT_VALUE_LABELS.get(str(value), str(value))
 
 
@@ -328,6 +358,13 @@ def platform_login(request):  # noqa: ANN001, ANN201
             )
             user = cursor.fetchone()
             now = timezone.now()
+            if user and user[6] is not None and user[6] <= now:
+                cursor.execute(
+                    "UPDATE platform.users SET failed_login_count = 0, lockout_until = NULL, "
+                    "updated_at = now() WHERE id = %s",
+                    [str(user[0])],
+                )
+                user = (*user[:5], 0, None)
             valid = bool(
                 user
                 and user[2] == "active"
@@ -402,13 +439,20 @@ def platform_dashboard(request):  # noqa: ANN001, ANN201
         tenant_id = row[0]
         with tenant_context(tenant_id):
             storage_used_mb = round(tenant_file_usage_bytes(tenant_id) / (1024 * 1024), 2)
-            company_name = Tenant.objects.filter(pk=tenant_id, deleted_at__isnull=True).values_list(
-                "name", flat=True
-            ).first() or row[1]
+            company_name = (
+                Tenant.objects.filter(pk=tenant_id, deleted_at__isnull=True)
+                .values_list("name", flat=True)
+                .first()
+                or row[1]
+            )
         tenants.append(
             (
-                *row[:5], dict(TENANT_PLAN_CHOICES).get(row[5], row[5]),
-                row[6], row[7], storage_used_mb, company_name,
+                *row[:5],
+                dict(TENANT_PLAN_CHOICES).get(row[5], row[5]),
+                row[6],
+                row[7],
+                storage_used_mb,
+                company_name,
             )
         )
     record_platform_event(
@@ -446,9 +490,9 @@ def tenant_status_toggle(request, tenant_id):  # noqa: ANN001, ANN201
     if "platform.role.assign" not in effective_permissions(actor[0]):
         return HttpResponseForbidden("Şirketi etkinleştirme veya pasifleştirme yetkiniz yok.")
     with tenant_context(tenant_id):
-        tenant = Tenant.objects.select_for_update().filter(
-            pk=tenant_id, deleted_at__isnull=True
-        ).first()
+        tenant = (
+            Tenant.objects.select_for_update().filter(pk=tenant_id, deleted_at__isnull=True).first()
+        )
         if tenant is None:
             return HttpResponseNotFound("Şirket bulunamadı.")
         current = tenant.status
@@ -462,7 +506,8 @@ def tenant_status_toggle(request, tenant_id):  # noqa: ANN001, ANN201
         tenant.status = updated
         tenant.save(update_fields=("status", "updated_at"))
     record_platform_event(
-        action="platform.tenant.status.updated", actor_user_id=actor[0],
+        action="platform.tenant.status.updated",
+        actor_user_id=actor[0],
         tenant_id=tenant_id,
         details={"changes": {"status": {"before": current, "after": updated}}},
         ip_address=request.META.get("REMOTE_ADDR", ""),
@@ -622,7 +667,10 @@ def platform_admins(request):  # noqa: ANN001, ANN201
                         cursor.executemany(
                             "INSERT INTO platform.user_tenant_access "
                             "(platform_user_id, tenant_id, granted_by_id) VALUES (%s, %s, %s)",
-                            [(str(new_id), tenant_id, str(actor[0])) for tenant_id in selected_tenants],
+                            [
+                                (str(new_id), tenant_id, str(actor[0]))
+                                for tenant_id in selected_tenants
+                            ],
                         )
                         cursor.execute(
                             "INSERT INTO platform.user_capabilities "
@@ -634,17 +682,28 @@ def platform_admins(request):  # noqa: ANN001, ANN201
                     action="platform.admin.created",
                     actor_user_id=actor[0],
                     details={
-                        "target_user_id": str(new_id), "email": email,
+                        "target_user_id": str(new_id),
+                        "email": email,
                         "role": selected_role,
-                        "tenant_ids": sorted(selected_tenants) if selected_role == "platform_admin" else [],
-                        "can_view_admins": can_view_admins if selected_role == "platform_admin" else True,
-                        "can_view_audit": can_view_audit if selected_role == "platform_admin" else True,
+                        "tenant_ids": sorted(selected_tenants)
+                        if selected_role == "platform_admin"
+                        else [],
+                        "can_view_admins": can_view_admins
+                        if selected_role == "platform_admin"
+                        else True,
+                        "can_view_audit": can_view_audit
+                        if selected_role == "platform_admin"
+                        else True,
                     },
                     ip_address=request.META.get("REMOTE_ADDR", ""),
                 )
             return redirect("/platform/admins/?created=1")
         except (ValidationError, ValueError, IntegrityError) as exc:
-            error = str(exc) if isinstance(exc, ValueError) and str(exc) else "Bilgileri kontrol edip yeniden deneyin."
+            error = (
+                str(exc)
+                if isinstance(exc, ValueError) and str(exc)
+                else "Bilgileri kontrol edip yeniden deneyin."
+            )
 
     with connections["platform"].cursor() as cursor:
         cursor.execute(
@@ -662,15 +721,22 @@ def platform_admins(request):  # noqa: ANN001, ANN201
                 GROUP BY u.id ORDER BY u.created_at DESC"""
         )
         admins = cursor.fetchall()
-    return render(request, "platform/admins.html", {
-        "email": actor[2], "admins": admins, "companies": companies, "error": error,
-        "selected_tenants": selected_tenants,
-        "selected_role": selected_role,
-        "can_view_admins": can_view_admins,
-        "can_view_audit": can_view_audit,
-        "can_create_admins": can_create_admins,
-        "created": request.GET.get("created") == "1",
-    })
+    return render(
+        request,
+        "platform/admins.html",
+        {
+            "email": actor[2],
+            "admins": admins,
+            "companies": companies,
+            "error": error,
+            "selected_tenants": selected_tenants,
+            "selected_role": selected_role,
+            "can_view_admins": can_view_admins,
+            "can_view_audit": can_view_audit,
+            "can_create_admins": can_create_admins,
+            "created": request.GET.get("created") == "1",
+        },
+    )
 
 
 @require_http_methods(["GET"])
@@ -717,20 +783,37 @@ def platform_audit(request):  # noqa: ANN001, ANN201
         events = []
         for row in rows:
             presentation = _platform_audit_event(row[2], row[3], row[6], tenant_names)
-            events.append({
-                "created_at": row[0], "actor": row[1], "title": presentation["title"],
-                "company": presentation["company"], "details": presentation["details"],
-                "changes": presentation["changes"],
-                "ip_address": row[4],
-            })
+            events.append(
+                {
+                    "created_at": row[0],
+                    "actor": row[1],
+                    "title": presentation["title"],
+                    "company": presentation["company"],
+                    "details": presentation["details"],
+                    "changes": presentation["changes"],
+                    "ip_address": row[4],
+                }
+            )
         if tenant_scope is None:
-            cursor.execute("SELECT id, email FROM platform.users WHERE deleted_at IS NULL ORDER BY email")
+            cursor.execute(
+                "SELECT id, email FROM platform.users WHERE deleted_at IS NULL ORDER BY email"
+            )
         else:
-            cursor.execute("SELECT id, email FROM platform.users WHERE id=%s AND deleted_at IS NULL", [str(actor[0])])
+            cursor.execute(
+                "SELECT id, email FROM platform.users WHERE id=%s AND deleted_at IS NULL",
+                [str(actor[0])],
+            )
         admins = cursor.fetchall()
-    return render(request, "platform/audit.html", {
-        "email": actor[2], "events": events, "admins": admins, "selected_admin": target,
-    })
+    return render(
+        request,
+        "platform/audit.html",
+        {
+            "email": actor[2],
+            "events": events,
+            "admins": admins,
+            "selected_admin": target,
+        },
+    )
 
 
 @require_http_methods(["GET", "POST"])
@@ -750,7 +833,8 @@ def platform_profile(request):  # noqa: ANN001, ANN201
             with connections["platform"].cursor() as cursor:
                 if password:
                     cursor.execute(
-                        "UPDATE platform.users SET full_name=%s, password=%s, password_changed_at=now(), updated_at=now() WHERE id=%s",
+                        "UPDATE platform.users SET full_name=%s, password=%s, "
+                        "password_changed_at=now(), updated_at=now() WHERE id=%s",
                         [full_name, make_password(password), str(actor[0])],
                     )
                 else:
@@ -759,7 +843,8 @@ def platform_profile(request):  # noqa: ANN001, ANN201
                         [full_name, str(actor[0])],
                     )
             record_platform_event(
-                action="platform.profile.updated", actor_user_id=actor[0],
+                action="platform.profile.updated",
+                actor_user_id=actor[0],
                 details={"full_name_changed": True, "password_changed": bool(password)},
                 ip_address=request.META.get("REMOTE_ADDR", ""),
             )
@@ -769,10 +854,16 @@ def platform_profile(request):  # noqa: ANN001, ANN201
     with connections["platform"].cursor() as cursor:
         cursor.execute("SELECT email, full_name FROM platform.users WHERE id=%s", [str(actor[0])])
         profile = cursor.fetchone()
-    return render(request, "platform/profile.html", {
-        "email": actor[2], "full_name": profile[1], "error": error,
-        "saved": request.GET.get("saved") == "1",
-    })
+    return render(
+        request,
+        "platform/profile.html",
+        {
+            "email": actor[2],
+            "full_name": profile[1],
+            "error": error,
+            "saved": request.GET.get("saved") == "1",
+        },
+    )
 
 
 @require_POST
@@ -820,7 +911,9 @@ def update_tenant_profile(request, tenant_id):  # noqa: ANN001, ANN201
         if len(values[field]) > maximum:
             label = dict(TENANT_PROFILE_FIELDS)[field]
             return HttpResponseBadRequest(f"{label} en fazla {maximum} karakter olabilir.")
-    required_fields = set()
+    required_fields = set(request.POST.getlist("required_profile_fields"))
+    if required_fields - optional_fields:
+        return HttpResponseBadRequest("Zorunlu şirket profili alanı geçersiz.")
     if values["email"]:
         try:
             validate_email(values["email"])
@@ -940,7 +1033,7 @@ def update_tenant_profile(request, tenant_id):  # noqa: ANN001, ANN201
     try:
         with tenant_context(tenant_id):
             tenant = Tenant.objects.get(pk=tenant_id, deleted_at__isnull=True)
-            if notify_company and not tenant.email:
+            if notify_company and not values["email"]:
                 return HttpResponseBadRequest(
                     "Bildirim göndermek için şirket e-posta adresi gereklidir."
                 )
@@ -962,7 +1055,10 @@ def update_tenant_profile(request, tenant_id):  # noqa: ANN001, ANN201
                 ("employee_file_extensions", allowed_extensions),
             ):
                 old_value = previous_settings.get(
-                    key, DEFAULT_FILE_MAX_MB if key.endswith("max_mb") else list(DEFAULT_FILE_EXTENSIONS)
+                    key,
+                    DEFAULT_FILE_MAX_MB
+                    if key.endswith("max_mb")
+                    else list(DEFAULT_FILE_EXTENSIONS),
                 )
                 if old_value != value:
                     settings_value[key] = value
@@ -990,7 +1086,9 @@ def update_tenant_profile(request, tenant_id):  # noqa: ANN001, ANN201
                 ("company_profile_fields", normalized_custom_fields),
                 ("company_required_fields", sorted(required_fields)),
             ):
-                old_value = previous_settings.get(key, {} if key == "company_profile_values" else [])
+                old_value = previous_settings.get(
+                    key, {} if key == "company_profile_values" else []
+                )
                 if old_value != value:
                     settings_value[key] = value
                     changed_fields.append(key)
@@ -1000,7 +1098,9 @@ def update_tenant_profile(request, tenant_id):  # noqa: ANN001, ANN201
                             for item in previous_settings.get("company_profile_fields", [])
                             if isinstance(item, dict)
                         }
-                        new_labels = {item["code"]: item["label"] for item in normalized_custom_fields}
+                        new_labels = {
+                            item["code"]: item["label"] for item in normalized_custom_fields
+                        }
                         for code in set(old_value) | set(value):
                             old_item, new_item = old_value.get(code), value.get(code)
                             if old_item != new_item:
@@ -1158,7 +1258,9 @@ def create_tenant(request):  # noqa: ANN001, ANN201
         max_active_employees = int(request.POST.get("max_active_employees", "0"))
         max_employee_records = int(request.POST.get("max_employee_records", "0"))
         max_storage_mb = Decimal(request.POST.get("max_storage_mb", "500"))
-        employee_file_max_mb = Decimal(request.POST.get("employee_storage_max_mb", str(DEFAULT_FILE_MAX_MB)))
+        employee_file_max_mb = Decimal(
+            request.POST.get("employee_storage_max_mb", str(DEFAULT_FILE_MAX_MB))
+        )
         employee_file_extensions = sorted(set(request.POST.getlist("employee_file_extensions")))
         valid_from_raw = request.POST.get("valid_from", "").strip()
         valid_until_raw = request.POST.get("valid_until", "").strip()
@@ -1180,7 +1282,11 @@ def create_tenant(request):  # noqa: ANN001, ANN201
             raise ValueError("Depolama limiti geçersiz.")
         if max_storage_mb.as_tuple().exponent < -2:
             raise ValueError("Depolama limiti en fazla iki ondalık basamak içerebilir.")
-        if not employee_file_max_mb.is_finite() or employee_file_max_mb < Decimal("0.1") or employee_file_max_mb > 50:
+        if (
+            not employee_file_max_mb.is_finite()
+            or employee_file_max_mb < Decimal("0.1")
+            or employee_file_max_mb > 50
+        ):
             raise ValueError("Dosya boyutu sınırı 0,1 ile 50 MB arasında olmalıdır.")
         if set(employee_file_extensions) - set(DEFAULT_FILE_EXTENSIONS):
             raise ValueError("İzin verilen dosya türlerinden biri geçersiz.")
@@ -1240,7 +1346,8 @@ def create_tenant(request):  # noqa: ANN001, ANN201
                     valid_until=valid_until,
                     settings={
                         "employee_storage_max_mb": float(employee_file_max_mb),
-                        "employee_file_extensions": employee_file_extensions or list(DEFAULT_FILE_EXTENSIONS),
+                        "employee_file_extensions": employee_file_extensions
+                        or list(DEFAULT_FILE_EXTENSIONS),
                         "company_required_fields": sorted(required_profile_fields),
                         "company_profile_fields": custom_definitions,
                         "company_profile_values": custom_values,
@@ -1267,6 +1374,7 @@ def create_tenant(request):  # noqa: ANN001, ANN201
                     user=admin,
                     role=roles["tenant_admin"],
                 )
+                create_default_leave_types(actor=admin, tenant=tenant)
             record_platform_event(
                 action="platform.tenant.created",
                 actor_user_id=actor[0],
@@ -1295,7 +1403,7 @@ def create_tenant(request):  # noqa: ANN001, ANN201
     return redirect("platform-dashboard")
 
 
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 def tenant_people(request, tenant_id):  # noqa: ANN001, ANN201
     actor = _current_platform_user(request)
     if actor is None:
@@ -1306,6 +1414,45 @@ def tenant_people(request, tenant_id):  # noqa: ANN001, ANN201
     if not _platform_can_access_tenant(actor[0], tenant_id, permissions):
         return HttpResponseForbidden("Bu şirkete erişim yetkiniz yok.")
 
+    access_error = ""
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        try:
+            if action == "request_access":
+                request_id = create_access_request(
+                    requester_id=actor[0],
+                    tenant_id=tenant_id,
+                    operation="read",
+                    fields=request.POST.getlist("fields"),
+                    resources=request.POST.getlist("resources"),
+                    purpose=request.POST.get("purpose", ""),
+                    ttl_minutes=request.POST.get("ttl_minutes"),
+                    ip_address=request.META.get("REMOTE_ADDR", ""),
+                )
+                return redirect(f"/platform/tenants/{tenant_id}/people/?request={request_id}")
+            if action == "decide_access":
+                grant_id = decide_access_request(
+                    approver_id=actor[0],
+                    tenant_id=tenant_id,
+                    request_id=request.POST.get("request_id", ""),
+                    decision=request.POST.get("decision", ""),
+                    reason=request.POST.get("reason", ""),
+                    ip_address=request.META.get("REMOTE_ADDR", ""),
+                )
+                suffix = f"?grant_id={grant_id}" if grant_id else "?approved=1"
+                return redirect(f"/platform/tenants/{tenant_id}/people/{suffix}")
+            if action == "revoke_access":
+                revoke_access_grant(
+                    grant_id=request.POST.get("grant_id", ""),
+                    actor_id=actor[0],
+                    tenant_id=tenant_id,
+                    ip_address=request.META.get("REMOTE_ADDR", ""),
+                )
+                return redirect(f"/platform/tenants/{tenant_id}/people/?revoked=1")
+            raise PlatformAccessRequestError("Geçersiz erişim işlemi.")
+        except PlatformAccessRequestError as error:
+            access_error = str(error)
+
     with connection.cursor() as cursor:
         cursor.execute(
             "SELECT 1 FROM hr.tenant_directory WHERE tenant_id = %s",
@@ -1314,12 +1461,27 @@ def tenant_people(request, tenant_id):  # noqa: ANN001, ANN201
         if cursor.fetchone() is None:
             return HttpResponseNotFound("Şirket bulunamadı.")
 
-    can_read_pii = "platform.tenant.pii.read" in permissions
+    grant_id = request.GET.get("grant_id", "")
+    granted_people = {}
+    if grant_id:
+        try:
+            granted_people = {
+                person["employee_no"]: person
+                for person in read_employee_people(
+                    grant_id=grant_id,
+                    requester_id=actor[0],
+                    tenant_id=tenant_id,
+                    ip_address=request.META.get("REMOTE_ADDR", ""),
+                )
+            }
+        except PlatformAccessRequestError:
+            return HttpResponseForbidden("Etkin çalışan verisi erişim izni bulunamadı.")
+    can_read_pii = bool(grant_id)
     record_platform_event(
         action="platform.tenant.people.read",
         actor_user_id=actor[0],
         tenant_id=tenant_id,
-        details={"pii": can_read_pii},
+        details={"pii": can_read_pii, "grant_id": grant_id if can_read_pii else None},
         ip_address=request.META.get("REMOTE_ADDR", ""),
     )
 
@@ -1327,68 +1489,46 @@ def tenant_people(request, tenant_id):  # noqa: ANN001, ANN201
     with tenant_context(tenant_id):
         employees = (
             Employee.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True)
-            .select_related("user", "personal_data")
             .order_by("employee_no")
         )
         for employee in employees:
             item = {
                 "employee_no": employee.employee_no,
+                "id": str(employee.pk),
                 "status": employee.get_status_display(),
                 "hire_date": employee.hire_date.isoformat(),
                 "termination_date": (
                     employee.termination_date.isoformat() if employee.termination_date else None
                 ),
                 "has_account": employee.user_id is not None,
+                "personal_data": granted_people.get(employee.employee_no, {}).get("details", {}),
             }
-            if can_read_pii:
-                user = employee.user if employee.user_id else None
-                personal = getattr(employee, "personal_data", None)
-                item["user"] = (
-                    {
-                        "email": user.email,
-                        "first_name": user.first_name,
-                        "last_name": user.last_name,
-                        "phone": user.phone,
-                        "status": user.status,
-                    }
-                    if user
-                    else None
-                )
-                fields = (
-                    "first_name",
-                    "last_name",
-                    "birth_date",
-                    "national_id",
-                    "address",
-                    "personal_email",
-                    "personal_phone",
-                    "iban",
-                    "bank_name",
-                    "emergency_contact_phone",
-                    "emergency_contact_relation",
-                    "citizenship",
-                    "work_permit_type",
-                    "work_permit_valid_until",
-                    "blood_type",
-                    "health_notes",
-                    "disability_status",
-                    "biometric_ref",
-                    "custom_fields",
-                )
-                item["personal_data"] = (
-                    {
-                        field: (value.isoformat() if hasattr(value, "isoformat") else value)
-                        for field in fields
-                        if (value := getattr(personal, field, None)) is not None
-                    }
-                    if personal
-                    else None
-                )
             people.append(item)
+    own_and_pending_requests = list_tenant_access_requests(
+        tenant_id=tenant_id,
+        requester_id=actor[0],
+        include_pending="platform.tenant.manage" in permissions,
+    )
+    employee_labels = {item["id"]: item["employee_no"] for item in people}
+    for access_request in own_and_pending_requests:
+        access_request["resource_labels"] = [
+            employee_labels.get(resource_id, "Kayıt artık etkin değil")
+            for resource_id in access_request["resources"]
+        ]
     return render(
         request,
         "platform/people.html",
-        {"people": people, "can_read_pii": can_read_pii, "tenant_id": tenant_id},
+        {
+            "people": people,
+            "can_read_pii": can_read_pii,
+            "tenant_id": tenant_id,
+            "employee_field_choices": EMPLOYEE_FIELD_CHOICES,
+            "requestable_employees": people,
+            "access_requests": own_and_pending_requests,
+            "can_approve_access": "platform.tenant.manage" in permissions,
+            "access_error": access_error,
+            "actor_id": str(actor[0]),
+        },
     )
 
 
@@ -1404,22 +1544,33 @@ def tenant_admin_credentials(request, tenant_id, user_id):  # noqa: ANN001, ANN2
         return HttpResponseForbidden("Bu şirkete erişim yetkiniz yok.")
 
     with tenant_context(tenant_id):
-        assignment = UserRole.objects.select_related("user", "role").filter(
-            tenant_id=tenant_id, user_id=user_id, role__code="tenant_admin",
-            user__tenant_id=tenant_id, user__deleted_at__isnull=True,
-        ).first()
+        assignment = (
+            UserRole.objects.select_related("user", "role")
+            .filter(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                role__code="tenant_admin",
+                user__tenant_id=tenant_id,
+                user__deleted_at__isnull=True,
+            )
+            .first()
+        )
         if assignment is None:
             return HttpResponseNotFound("Şirket yöneticisi bulunamadı.")
         user = assignment.user
         action = request.POST.get("action")
+        revoked_count = 0
         if action == "reset_link":
             try:
                 from apps.accounts.views import send_password_reset_link
+
                 send_password_reset_link(request, user)
             except Exception:
                 record_platform_event(
-                    action="platform.tenant_admin.reset_link.failed", actor_user_id=actor[0],
-                    tenant_id=tenant_id, details={"user_id": str(user.pk)},
+                    action="platform.tenant_admin.reset_link.failed",
+                    actor_user_id=actor[0],
+                    tenant_id=tenant_id,
+                    details={"user_id": str(user.pk)},
                     ip_address=request.META.get("REMOTE_ADDR", ""),
                 )
                 return redirect(f"/platform/tenants/{tenant_id}/?admin_action=mail_failed")
@@ -1433,15 +1584,28 @@ def tenant_admin_credentials(request, tenant_id, user_id):  # noqa: ANN001, ANN2
                 return redirect(f"/platform/tenants/{tenant_id}/?admin_action=invalid_password")
             user.set_password(password)
             user.auth_version += 1
-            user.save(update_fields=["password", "password_changed_at", "auth_version", "updated_at"])
+            user.save(
+                update_fields=["password", "password_changed_at", "auth_version", "updated_at"]
+            )
+            from apps.accounts.models import TokenRevokeReason
+            from apps.accounts.services import revoke_tokens
+
+            revoked_count = revoke_tokens(
+                reason=TokenRevokeReason.SECURITY_INCIDENT,
+                user=user,
+                tenant_id=tenant_id,
+            )
             event = "platform.tenant_admin.password.set"
             result = "password_set"
         else:
             return HttpResponseBadRequest("İşlem geçersiz.")
 
     record_platform_event(
-        action=event, actor_user_id=actor[0], tenant_id=tenant_id,
-        details={"user_id": str(user.pk)}, ip_address=request.META.get("REMOTE_ADDR", ""),
+        action=event,
+        actor_user_id=actor[0],
+        tenant_id=tenant_id,
+        details={"user_id": str(user.pk), "revoked_api_tokens": revoked_count},
+        ip_address=request.META.get("REMOTE_ADDR", ""),
     )
     return redirect(f"/platform/tenants/{tenant_id}/?admin_action={result}")
 
@@ -1496,10 +1660,14 @@ def tenant_detail(request, tenant_id):  # noqa: ANN001, ANN201
         storage_used_bytes = tenant_file_usage_bytes(tenant_id)
         company_admins = [
             assignment.user
-            for assignment in UserRole.objects.select_related("user", "role").filter(
-                tenant_id=tenant_id, role__code="tenant_admin",
-                user__tenant_id=tenant_id, user__deleted_at__isnull=True,
-            ).order_by("user__email")
+            for assignment in UserRole.objects.select_related("user", "role")
+            .filter(
+                tenant_id=tenant_id,
+                role__code="tenant_admin",
+                user__tenant_id=tenant_id,
+                user__deleted_at__isnull=True,
+            )
+            .order_by("user__email")
         ]
 
     profile_labels = dict(TENANT_PROFILE_FIELDS)
@@ -1576,8 +1744,12 @@ def tenant_detail(request, tenant_id):  # noqa: ANN001, ANN201
         "valid_until": registry[9],
         "max_active_employees": registry[10],
         "max_employee_records": registry[11],
-        "employee_file_max_mb": (company.settings or {}).get("employee_storage_max_mb", DEFAULT_FILE_MAX_MB),
-        "employee_file_extensions": (company.settings or {}).get("employee_file_extensions", list(DEFAULT_FILE_EXTENSIONS)),
+        "employee_file_max_mb": (company.settings or {}).get(
+            "employee_storage_max_mb", DEFAULT_FILE_MAX_MB
+        ),
+        "employee_file_extensions": (company.settings or {}).get(
+            "employee_file_extensions", list(DEFAULT_FILE_EXTENSIONS)
+        ),
         "storage_used_mb": round(storage_used_bytes / (1024 * 1024), 2),
     }
     can_manage = "platform.settings.manage" in permissions

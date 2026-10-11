@@ -237,8 +237,10 @@ SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", "43200"))  # 12 sa
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-     "OPTIONS": {"min_length": 10}},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 10},
+    },
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -299,9 +301,7 @@ Q_CLUSTER = {
 # --- E-posta ----------------------------------------------------------------
 # Geliştirmede konsola yazılır; üretimde sağlayıcı bağımsız SMTP relay kullanılır.
 
-EMAIL_BACKEND = os.environ.get(
-    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
-)
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
 EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
@@ -320,6 +320,12 @@ STORAGE_S3_BUCKET = os.environ.get("S3_BUCKET", "")
 STORAGE_S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "")
 STORAGE_S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
 STORAGE_SIGNED_URL_TTL_SECONDS = int(os.environ.get("S3_SIGNED_URL_TTL_SECONDS", "300"))
+
+# Production file uploads fail closed unless ClamAV's clamd service is configured.
+FILE_SCANNING_REQUIRED = env_bool("FILE_SCANNING_REQUIRED", not DEBUG)
+CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "")
+CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
+CLAMAV_TIMEOUT_SECONDS = float(os.environ.get("CLAMAV_TIMEOUT_SECONDS", "30"))
 
 # --- Cache -------------------------------------------------------------------
 # Karar (docs/ARCHITECTURE.md bölüm 6.1): Redis yok. Paylaşımlı cache, veritabanı

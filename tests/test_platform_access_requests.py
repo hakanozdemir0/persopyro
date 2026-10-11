@@ -55,3 +55,30 @@ def test_access_request_rejects_duration_above_one_hour() -> None:
             purpose="Şirket yöneticisi unvan düzeltmesi talep etti",
             ttl_minutes=module.MAX_ACCESS_TTL_MINUTES + 1,
         )
+
+
+def test_employee_access_request_requires_bounded_record_scope() -> None:
+    module = _access_requests()
+    employee_id = "7ab54bf8-d81c-4a87-8459-09ceaa30e96a"
+    with pytest.raises(module.PlatformAccessRequestError, match="çalışan kaydı seçilmelidir"):
+        module.validate_access_request(
+            operation="read",
+            fields=["employee.identity"],
+            purpose="Çalışan kimlik alanı doğrulaması gerekiyor",
+        )
+
+    request = module.validate_access_request(
+        operation="read",
+        fields=["employee.identity"],
+        resources=[employee_id],
+        purpose="Çalışan kimlik alanı doğrulaması gerekiyor",
+    )
+    assert request.resources == (employee_id,)
+
+    with pytest.raises(module.PlatformAccessRequestError, match="yalnızca okuma"):
+        module.validate_access_request(
+            operation="update",
+            fields=["employee.identity"],
+            resources=[employee_id],
+            purpose="Çalışan kimlik alanı düzeltmesi isteniyor",
+        )

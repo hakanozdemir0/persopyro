@@ -3,6 +3,184 @@
 Kayıt biçimi: en yeni sürüm en üstte. Her giriş tarih, sürüm, eklenen /
 değişen / doğrulanan / kalan başlıklarını içerir.
 
+## [Güvenlik] — 2026-10-11 — Süreli çalışan PII erişimi ve belge doğrulaması
+
+**DEĞİŞEN**
+
+- Platform çalışan PII talepleri en fazla 50 çalışan ve seçilen alanlarla
+  sınırlandırıldı; iki farklı onaylayıcı, tek talep sahibi, en fazla 60 dakika ve
+  erken iptal kuralları AccessGrant kullanımında zorlanıyor.
+- Çalışan PII yalnızca grant sahibi tarafından, grantteki çalışanlar ve alanlar
+  için okunuyor; onaysız sorguda veri tabanından PII sütunları yüklenmiyor.
+- PDF/Office belge yapısı upload öncesi doğrulanıyor; ZIP boyut/oran sınırları,
+  XML parse, OLE ana akış, PDF parse ve RTF/CSV/metin biçimleri kontrol ediliyor.
+- `platform.access_requests` ve `platform.access_grants` kayıtlarına kaynak
+  çalışan kimliklerini saklayan alan eklendi.
+
+**DOĞRULAMA / İŞLETİM**
+
+- Ubuntu systemd ClamAV kurulum betiği `scripts/setup_clamav.sh` eklendi; daemon
+  TCP yalnızca loopback `127.0.0.1:3310` üzerinde dinler. Preview servisi
+  `FILE_SCANNING_REQUIRED=1` ile yapılandırıldı.
+- `olefile` kilit dosyasına eklendi; PDF doğrulaması Poppler `pdfinfo` kullanır.
+- AccessGrant iki-onay/kapsam/iptal ve PDF/OOXML/RTF/CSV regresyon testleri eklendi.
+
+**KALAN**
+
+- Daemon kurulumu root yetkisi istediğinden bu ortamda çalıştırılamadı; canlı
+  ClamAV/EICAR doğrulaması için `sudo bash scripts/setup_clamav.sh` çalıştırılmalı,
+  ardından `persopyro-web` yeniden başlatılmalıdır.
+- Kiracıya platform erişim bildirimi bu değişiklikte eklenmedi.
+
+## [Güvenlik] — 2026-10-11 — Kimlik bilgisi, platform PII ve dosya yükleme kontrolleri
+
+**DEĞİŞEN**
+
+- Parola sıfırlama ve değiştirme tüm API tokenlarını iptal eder; eski tokenlarda
+  `auth_version_snapshot` boş olsa bile iptal uygulanır. İşlem audit kaydına
+  iptal edilen token sayısı eklenir.
+- Platform çalışan görünümü `platform.tenant.pii.read` izni tek başına verilse
+  bile kişisel veriyi göstermiyor; çalışan verisi için süreli AccessGrant akışı
+  tamamlanana kadar fail-closed kalıyor.
+- Üretimde dosya yüklemeleri ClamAV `clamd` INSTREAM taraması gerektiriyor.
+  Tarayıcı yoksa yükleme 503, zararlı dosya 400 ile reddedilir. Geliştirme
+  ortamında tarama varsayılan olarak kapalıdır.
+- Giriş denetim kaydı yazılamazsa kimlik doğrulama başarısız olur. Tenant ve
+  platform girişinde süresi dolan kilit penceresi sayacı sıfırlanır.
+
+**DOĞRULAMA / İŞLETİM**
+
+- Parola sıfırlama/değiştirme, kilit sayacı, audit fail-closed, platform PII ve
+  ClamAV protokolü/yükleme kapısı için regresyon testleri eklendi.
+- Üretimde `CLAMAV_HOST`, `CLAMAV_PORT` ve `FILE_SCANNING_REQUIRED=1`
+  yapılandırılmalıdır; tarama altyapısı erişilemezse yükleme bilinçli olarak
+  kapalı kalır.
+
+## [Çalışma] — 2026-10-07 — Ortak ekran düzeni ve mobil kullanım
+
+**DEĞİŞEN**
+
+- Çalışan ve platform panellerinin ortak CSS stillerinde form/satır aralıkları,
+  dar alana sığma, tablo kaydırma ve menü düzeni iyileştirildi.
+- Test arayüzünün ana ve çalışan/vardiya/rapor alt sekmeleri mobil hamburger
+  menüsüne dönüştürüldü; sekmeye girince menü kapanır. Masaüstü sekme görünümü
+  korunur ve yetkisi olmayan sekmeler menüde gösterilmez.
+- Mobil checkbox/radio boyutları düzeltildi; tema ve bilgi düğmeleri dokunmaya
+  uygun hale getirildi. Detay ve onay pencerelerinde kaydırma ve güvenli ekran
+  boşlukları düzenlendi.
+- Değişiklikten önce test arayüzünün iki şablonu ve platform kabuğu
+  `/tmp/persopyro-mobile-menu-backup-2026-10-07/` konumuna kopyalandı.
+
+**DOĞRULAMA / KALAN**
+
+- Chrome ile ortak CSS kullanan örnek ekranlar 360, 390, 768 ve 1440 pikselde
+  kontrol edildi: sayfa taşması yok; form alanları sığıyor, tablolar kaydırılıyor,
+  kapalı modal gizli kalıyor. Tüm canlı ekranlar tek tek denenmedi.
+- Chrome mobil etkileşim örneğinde ana menü ve alt menü açıldı, seçimle alt menü
+  kapandı; 390 pikselde sayfa taşması olmadı.
+- Seçili beş giriş/profil/yönlendirme testi geçti. Test veritabanı temizliğinde
+  başka açık oturum uyarısı alındı.
+- Daha geniş arayüz testi çalışması 7 geçişten sonra
+  `test_ui_manager_onay_verir_bakiye_guncellenir` testinde durdu: `pending`
+  beklenirken `approved` döndü. Onay akışı bu CSS çalışmasında değiştirilmedi;
+  tüm testlerin geçtiği iddia edilmez. `git diff --check` temiz.
+
+## [Çalışma] — 2026-10-07 — Yıllık izin raporunda hak ediş tarihleri
+
+**DEĞİŞEN**
+
+- Yıllık izin bakiyesi raporuna ve Excel çıktısına işe giriş tarihi ile seçilen
+  yıldaki işe giriş yıl dönümü (hak ediş tarihi) eklendi. İlk yıl dönümünden önce
+  veya işten ayrıldıktan sonraki tarihler hak ediş tarihi olarak gösterilmez.
+
+**DOĞRULAMA**
+
+- Python/JavaScript sözdizimi ve `git diff --check` kontrol edildi. Otomatik test
+  çalıştırılmadı.
+
+## [Çalışma] — 2026-10-07 — Raporlarda yıl, pasif çalışan ve onaylayan
+
+**DEĞİŞEN**
+
+- Yıllık izin bakiyesi yıl seçimiyle görüntülenir; geçmiş yıllar yıl sonu, mevcut
+  yıl bugünkü bakiye durumunu gösterir.
+- Dört rapora “Pasif çalışanları göster” seçeneği eklendi. Varsayılan olarak
+  yalnız aktif çalışanlar listelenir ve sorgulanır; seçim Excel çıktısına da uygulanır.
+- Fazla mesai raporunun ekranına ve Excel çıktısına “Onaylayan” adı eklendi.
+
+**DOĞRULAMA**
+
+- Python/JavaScript sözdizimi ve `git diff --check` kontrol edildi. Otomatik test
+  çalıştırılmadı.
+
+## [Çalışma] — 2026-10-07 — Raporlarda çalışan ve dönem seçimi
+
+**DEĞİŞEN**
+
+- Dört raporda çalışan arama/çoklu seçim ile “Tümünü seç” ve “Tümünü kaldır”
+  düğmeleri eklendi. Seçim sunucuda yetki ve çalışan kapsamıyla doğrulanır; Excel
+  çıktısı da aynı seçimi kullanır.
+- Serbest zaman, fazla mesai ve yıllık izin raporları haftalık/aylık dönem ve
+  referans tarih seçer. Bakiye raporları seçilen dönemin sonundaki durumu tarihli
+  bakiye hareketlerinden hesaplar; fazla mesai kayıtları dönem tarihine süzülür.
+
+**DOĞRULAMA**
+
+- Python/JavaScript sözdizimi ve `git diff --check` kontrol edildi. Otomatik test
+  çalıştırılmadı.
+
+## [Çalışma] — 2026-10-07 — Raporlar sekmesi
+
+**EKLENEN / DEĞİŞEN**
+
+- Vardiya raporu Vardiya sekmesinden Raporlar sekmesine taşındı; haftalık/aylık
+  ekran ve Excel çıktısı korundu.
+- Raporlar'a serbest zaman bakiyesi (saat), fazla mesai (durum ve süre) ve yıllık
+  izin bakiyesi (gün) raporları eklendi. Yıl seçimi ve Excel indirme sağlandı.
+- Rapor başlığı ile dört alt sekme ayrı `ui.reports.*` izinleriyle Yetki
+  Yönetimi'nden atanabilir. Veri uçları mevcut `shift.report.read`,
+  `leave.balance.read`, `overtime.request.read` izinlerini ve çalışan kapsamını
+  denetler.
+
+**DOĞRULAMA**
+
+- `rbac.0029_report_menu_permissions` yerel veritabanına uygulandı.
+- Python ve JavaScript sözdizimi ile `git diff --check` başarılı. Otomatik test
+  çalıştırılmadı.
+
+## [Çalışma] — 2026-10-07 — Yetki ekranı düzeni
+
+**DEĞİŞEN**
+
+- Yetkiler daha sıkı aralıklarla gösterilir. Teknik kodlar ve açıklamalar satırda
+  görünmez; açıklama yetki adının yanındaki bilgi düğmesiyle açılır.
+- Yeni rol oluşturma formu kapalı bir bölümde tutulur; üst açıklama kısaltıldı.
+
+**DOĞRULAMA**
+
+- JavaScript sözdizimi ve `git diff --check` başarılı. Otomatik test çalıştırılmadı.
+
+## [Çalışma] — 2026-10-07 — Resmi tatiller ve yeni şirket izinleri
+
+**EKLENEN / DEĞİŞEN**
+
+- Şirket bazlı resmi tatil tarihleri eklendi. `holiday.read`, `holiday.manage` ve
+  `ui.shift.holidays` Yetki Yönetimi'nden atanabilir. Şirket yöneticisi ve İK
+  yöneticisi varsayılan olarak bu yetkilere sahiptir. Ekleme ve kaldırma denetim
+  kaydına yazılır; tablo RLS ile şirket bazında korunur.
+- Resmi tatil günlerinde vardiya ataması yapılabilir. Vardiya raporunda tatil adı
+  görünür; gün ekranda ve Excel'de mavi işaretlenir. Fazla mesai bildirimi mevcut
+  `overtime.request.create` izniyle çalışır.
+- Yeni şirket kurulumunda demo hesabındaki gerçek izin türleri varsayılan olarak
+  açılır. Doğum ve Evlilik İzni kataloğa eklendi; `deneme-belge` eklenmedi.
+  Yeni rollerin menü izinleri işlem izinlerinden üretilir.
+
+**DOĞRULAMA / KALAN**
+
+- `rbac.0027`, `rbac.0028` ve `shifts.0004` yerel veritabanına uygulandı.
+- Python derleme, JavaScript sözdizimi ve `git diff --check` başarılı. Otomatik
+  test çalıştırılmadı.
+
 ## [Çalışma] — 2026-10-06 — Vardiya raporu yetkisi ve isteğe bağlı İK onayı
 
 **DEĞİŞEN**

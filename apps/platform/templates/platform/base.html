@@ -51,7 +51,7 @@
     .card-intro { margin: 4px 0 16px; color: var(--muted); }
     .section-head { display: flex; align-items: center; justify-content: space-between;
       gap: 12px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
       gap: 10px 16px; align-items: end; }
     .field label { display: block; margin: 0 0 5px; color: var(--fg-soft);
       font-size: 12.5px; font-weight: 600; }
@@ -79,7 +79,8 @@
       border-top: 1px dashed var(--line-strong); color: var(--muted); font-size: 12px;
       font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
     .form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; margin-top: 4px; }
-    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-sm); }
+    .table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; scrollbar-width: thin;
+      overscroll-behavior-x: contain; border: 1px solid var(--line); border-radius: var(--r-sm); }
     table { width: 100%; border-collapse: collapse; background: var(--card); }
     th, td { padding: 10px 12px; border-bottom: 1px solid #eef1f6; text-align: left;
       vertical-align: middle; }
@@ -136,6 +137,21 @@
     details { max-width: 32rem; }
     dt { margin-top: .5rem; font-weight: 650; }
     dd { margin-left: 0; overflow-wrap: anywhere; }
+    .card, .form-grid > *, .company-form-grid > *, .custom-company-field > *,
+    .detail-grid > *, .page-heading > *, .section-head > * { min-width: 0; }
+    .page-heading, .section-head, .header-actions { flex-wrap: wrap; }
+    .form-actions { gap: 8px; flex-wrap: wrap; }
+    .panel-tabs a { flex-shrink: 0; white-space: nowrap; }
+    td { overflow-wrap: break-word; line-height: 1.5; }
+    textarea { resize: vertical; }
+    input[type="checkbox"], input[type="radio"] {
+      width: 16px; height: 16px; min-height: 16px; flex-shrink: 0; accent-color: var(--accent);
+    }
+    @media (min-width: 701px) and (max-width: 980px) {
+      .topbar { flex-wrap: wrap; gap: 8px; }
+      .header-actions { gap: 8px; }
+      .company-form-grid { gap: 12px; }
+    }
     @media (max-width: 700px) {
       html, body { max-width: 100%; overflow-x: hidden; }
       body { font-size: 14px; }
@@ -150,6 +166,7 @@
         -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scrollbar-width: thin;
       }
       .panel-tabs { width: max-content; min-width: 100%; margin-bottom: 14px; }
+      .panel-tabs.page-nav { width: 100%; min-width: 0; }
       .panel-tabs a { min-height: 44px; padding: 10px 12px; white-space: nowrap; }
       .page-heading { align-items: flex-start; flex-direction: column; gap: 8px; margin-bottom: 14px; }
       .page-heading h1 { font-size: 21px; }
@@ -164,12 +181,18 @@
       .form-actions { justify-content: stretch; }
       .form-actions button, button, .button { min-height: 44px; touch-action: manipulation; }
       input, select, textarea { min-height: 44px; font-size: 16px; }
+      input[type="checkbox"], input[type="radio"] { width: 18px; height: 18px; min-height: 18px; }
+      .check-field { min-height: 44px; }
+      .form-actions > button, .form-actions > .button { flex: 1 1 140px; }
       textarea { min-height: 96px; }
       .table-wrap { max-width: 100%; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
       table { min-width: 680px; }
       .auth-page .page-container { min-height: calc(100dvh - 64px); }
       .auth-card { padding: 20px 16px; }
       details { max-width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
     }
   </style>
 </head>

@@ -1,6 +1,7 @@
 [Unit]
 Description=PersoPyro Django web application (Gunicorn)
-After=network.target postgresql.service
+After=network.target postgresql.service clamav-daemon.service
+Wants=clamav-daemon.service
 
 [Service]
 Type=simple

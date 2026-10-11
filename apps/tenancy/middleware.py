@@ -27,10 +27,15 @@ TENANT_SESSION_KEY = "tenant_id"
 
 # Kiracı durumu uygun olmadığında bile erişilebilen yollar: yalnızca sağlık uçları.
 # Bunlar kiracı verisi döndürmez ve kimlik doğrulama gerektirmez (F11 istisnası).
-TENANT_EXEMPT_PATHS = frozenset({
-    "/api/health", "/api/ready", "/api/v1/auth/login", "/api/v1/auth/token",
-    "/test-ui/login/",
-})
+TENANT_EXEMPT_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/ready",
+        "/api/v1/auth/login",
+        "/api/v1/auth/token",
+        "/test-ui/login/",
+    }
+)
 
 
 class RequestIdMiddleware:
@@ -128,7 +133,8 @@ class TenantContextMiddleware:
                         "code": "tenant_expired" if expired else "tenant_unavailable",
                         "message": (
                             "Şirketinizin kullanım süresi sona erdi. Oturumunuz kapatılıyor."
-                            if expired else "Kiracının erişimi kapalı."
+                            if expired
+                            else "Kiracının erişimi kapalı."
                         ),
                     }
                 },

@@ -13,7 +13,6 @@ Kritik kararlar (docs/ARCHITECTURE.md bölüm 7, docs/AUTHORIZATION.md):
   * Parola hash'leme çerçeveye bırakılır (Argon2id birincil; bkz. settings).
 """
 
-
 from datetime import timedelta
 
 from django.conf import settings
@@ -316,8 +315,7 @@ class User(UUIDModel, AbstractBaseUser):
         blank=True,
         editable=False,
         help_text=(
-            "OD25: <kiracı-prefix>-<8×Crockford>; DB tetikleyicisi üretir, "
-            "sonradan değiştirilemez."
+            "OD25: <kiracı-prefix>-<8×Crockford>; DB tetikleyicisi üretir, sonradan değiştirilemez."
         ),
     )
     first_name = models.CharField("ad", max_length=100)
@@ -378,9 +376,7 @@ class User(UUIDModel, AbstractBaseUser):
         verbose_name = "kullanıcı"
         verbose_name_plural = "kullanıcılar"
         constraints = [
-            models.UniqueConstraint(
-                fields=["tenant", "email"], name="users_tenant_email_uniq"
-            ),
+            models.UniqueConstraint(fields=["tenant", "email"], name="users_tenant_email_uniq"),
             # OD19 (kapalı): Django Admin yolu kaldırıldı; `is_staff` hiçbir
             # Persopyro yetkisi vermez ve üretimde True olamaz. Kural hem uygulama
             # katmanında (`User.save`) hem veritabanında (son savunma hattı)

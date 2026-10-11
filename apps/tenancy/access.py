@@ -32,8 +32,7 @@ from apps.tenancy.context import tenant_context
 ALLOWED_TENANT_STATUSES = frozenset({"active", "trial"})
 
 _TENANT_STATE_SQL = (
-    "SELECT status, deleted_at, valid_from, valid_until "
-    "FROM hr.tenants WHERE id = %s"
+    "SELECT status, deleted_at, valid_from, valid_until FROM hr.tenants WHERE id = %s"
 )
 
 

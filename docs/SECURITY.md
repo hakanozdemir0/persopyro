@@ -33,9 +33,9 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 | T3 | Kimlik bilgisi sızması (parola, token) | Yüksek | Argon2id, hash'li süreli token, MFA (TOTP) ✅ |
 | T4 | Evrak dosyalarına yetkisiz erişim | Yüksek | Kısa ömürlü imzalı bağlantı, erişim kaydı, sınıflandırma ✅/🔜 |
 | T5 | Denetim kaydının manipüle edilmesi/eksik kalması | Orta-Yüksek | Append-only tablo, uygulama rolüne UPDATE/DELETE yasağı ✅; zincirleme 🔜 |
-| T6 | Dosya yükleme üzerinden zararlı içerik | Orta | MIME/boyut/checksum doğrulaması ✅; içerik taraması ❓ |
+| T6 | Dosya yükleme üzerinden zararlı içerik | Orta | Boyut/uzantı doğrulaması + üretimde zorunlu ClamAV taraması; tarayıcı yoksa yükleme reddedilir ✅ |
 | T7 | Yatay/dikey yetki yükseltme (IDOR) | Yüksek | Her kayıt erişiminde kiracı + kapsam kontrolü ✅/🔜 — **kapsam tarafı M7–M13 ile çalışır durumda** (alt ağaç çözümleyici + `can_access_employee()`: kapsam içi ALLOW, kardeş birim/başka kiracı DENY) |
-| T8 | Kişisel verinin gereğinden fazla gösterilmesi/sızması | Orta-Yüksek | Varsayılan maskeleme, en az veri, amaca bağlama 🔜 |
+| T8 | Kişisel verinin gereğinden fazla gösterilmesi/sızması | Orta-Yüksek | Varsayılan maskeleme; platform çalışan PII'si için kişi/alan kapsamlı, gerekçeli, çift onaylı ve süreli AccessGrant ✅; kiracı görünürlüğü 🔜 |
 | T9 | Secret'ın depoya veya loglara düşmesi | Yüksek | Ortam değişkeni, log temizleme, tarama ✅ |
 | T10 | Brute force / parola deneme saldırısı | Orta | Deneme sınırı, hesap kilitleme, hız sınırlama ✅ |
 | **T11** | **İçeriden kötüye kullanım (insider): yetkili bir kişinin gereksiz kişisel veri bakması** | **Yüksek** | **Maskeleme + amaç zorunluluğu + erişim kaydı + kiracı görünürlüğü** 🔜 |
@@ -78,8 +78,9 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
 - **API token** ✅: opak, yalnızca **SHA-256 özeti** saklanır, varsayılan ömrü
   30 gündür, cihaz bazlı iptal edilir; geçersiz/süresi geçmiş token 401 döner.
   JWT kullanılmaz — iptal edilebilirlik güvenlik gereğidir.
-- Parola sıfırlama 🔜: tek kullanımlık, süreli, hash'li token; kullanıcı
-  numaralandırmasına karşı her durumda aynı yanıt.
+- Parola sıfırlama ✅: Django tek kullanımlık, süreli token; tenant ve kullanıcı
+  birlikte doğrulanır. Sıfırlama ve parola değişikliği bütün API tokenlarını
+  iptal eder; oturum sürümü de artırılır.
 - MFA zorunluluğu rollerle ilişkilendirilir ❓OD10.
 - **Django Admin kapısı KAPATILDI (OD19 — kapalı, uygulandı ✅):** üretimde `/admin/`
   yolu **yoktur** ve `django.contrib.admin` uygulama listesinde **tutulmaz** (route +
@@ -157,7 +158,7 @@ kontrolleri tanımlar. Yetkilendirme modelinin ayrıntısı
   ama uygulama rolüne **yalnızca okuma** yetkisi verilmiştir (yazma
   tetikleyiciyle yapılır); gerekçesi `docs/DATABASE.md` bölüm 3.4'tedir.
 
-### 4.2 Platform erişimi: ayrı ve kontrollü katman 🔜 KARAR (OD1/OD3 — kapalı)
+### 4.2 Platform erişimi: ayrı ve kontrollü katman (OD1/OD3 — kısmen uygulanmış)
 
 Platform erişimi kiracı izolasyonunu **gevşetmez**. Karar (2026-09-11):
 
@@ -175,6 +176,15 @@ Platform erişimi kiracı izolasyonunu **gevşetmez**. Karar (2026-09-11):
   sonra, **tek bir işlem** için yapar.
 - **Kiracı barındırma yasağı:** platform kullanıcıları kiracı kullanıcı
   tablosunda barındırılmaz, birleştirilmez.
+
+Platform çalışan listesi varsayılan olarak asgari iş verisi gösterir. Kalıcı
+`platform.tenant.pii.read` rol izni tek başına kişisel veriyi açmaz. Kişisel veri
+görüntüleme için talep, en fazla 50 çalışan kimliği ve izin verilen alanlarla
+sınırlandırılır; gerekçe ve en fazla 60 dakika süre zorunludur. İki farklı
+platform kullanıcısının onayı gerekir; talep sahibi onaylayamaz. Grant yalnızca
+talep sahibine, seçilen çalışan kayıtlarına ve alanlara uygulanır; süresi dolunca
+veya iptal edilince erişim reddedilir. Sorgular yalnızca onaylanan kişisel veri
+sütunlarını yükler. Kiracıya bildirim/görünürlük adımı ayrıca tamamlanmalıdır.
 
 Aşağıdaki koşulların **tümü** sağlanmadan erişim yoktur:
 
@@ -436,21 +446,8 @@ kiracıda yeni giriş `403`; mevcut token/oturum `403` (`tenant_unavailable`); t
 doğrulama katmanı ayrıca doğrudan `401` verir (katman testi). `scripts/smoke.sh`
 gerçek HTTP üzerinden askıdaki kiracı girişinde **403** doğrular.
 
-**F12 — Kilit süresi dolduğunda `failed_login_count` sıfırlanmıyor (Düşük, AÇIK).**
-Ölçüm (2026-09-13, gerçek kullanıcı testi): `apps/accounts/backends.py` içindeki kilit
-kontrolü `lockout_until` geçmişse girişe izin veriyor, ancak **`failed_login_count`
-sıfırlanmıyor**. Sonuç: 15 dakikalık kilit dolduktan sonra **tek** hatalı parola denemesi
-sayaç eşiği (5) yeniden aştığı için hesap **anında yeniden 15 dakika** kilitlenir; ayrıca
-kullanıcı kilitli olduğunu **ayırt edemez** (kilitli hesap ile hatalı parola aynı `401
-{"code":"invalid_credentials"}` yanıtını verir — bu, hesap numaralandırmasını önlemek için
-**bilinçli** bir tasarımdır ve değiştirilmesi ayrı bir karar gerektirir).
-- **Etki:** kullanılabilirlik/operasyonel (kullanıcı 1 hatalı denemede tekrar kilitlenir);
-  gizlilik etkisi yoktur, kilit mekanizması fiilen **sıkılaşır** (bypass yoktur).
-- **Bu pakete (P5a V1) alınmadı:** davranış değişikliği giriş akışına ve muhtemelen
-  kullanıcıya "kilitli" bilgisinin açılmasına dokunur → ayrı karar + ayrı paket gerekir.
-- **Öneri (kapatma yolu):** `lockout_until` süresi geçmişse `failed_login_count`'u **0'a
-  çek** (kilit penceresi kapandığında pencere sıfırlanır) ve testi ekle; "kilitli" bilgisinin
-  kullanıcıya gösterilmesi ise ayrı OD olarak değerlendirilir.
+**F12 — Kilit süresi dolduğunda başarısız giriş sayacı sıfırlanmıyordu (Düşük, kapatıldı).**
+Tenant ve platform girişlerinde kilit penceresi dolunca eski sayaç sıfırlanır; yeni başarısız denemeler yeni pencereden sayılır. Regresyon testleri her iki giriş yolunu da kapsar.
 
 ## 6. Ayrıcalıklı erişim güvenliği (platform ve destek)
 
@@ -583,30 +580,27 @@ Ayrıntı: `docs/AUTHORIZATION.md` bölüm 8.
 
 ## 9. Evrak ve dosya güvenliği
 
-> **Uygulama durumu (2026-09-12 ölçümü):** bu bölümdeki ✅ işaretleri **tasarım kararını**
-> gösterir; **belge modülü henüz kodlanmamıştır** (`hr.documents` / `hr.document_access`
-> `docs/DATABASE.md` M16'da tasarlı, uygulama yok; `apps/` altında belge uygulaması yok).
-> Modülün uygulama planı, yükleme güvenliği kuralları (sistem/tenant MB tavanı, MIME allowlist,
-> uzantı doğrulaması, karantina, kota, retention) ve kabul kriterleri: **`docs/HR_ROADMAP.md` §8**.
+Çalışan evrakı ve fotoğraf uçları `apps/testui/api.py` içindedir; erişim çalışan
+kapsamı ve izinle denetlenir, indirme kimlik doğrulamalıdır ve denetim kaydı
+yazılır. Genel veya imzalı indirme bağlantısı üretilmez.
 
-- Dosyalar nesne depolamada tutulur; veritabanı yalnızca üst veri saklar ✅.
-- `checksum_sha256` ile bütünlük doğrulanır ✅.
-- Doğrudan genel URL verilmez; **kısa ömürlü imzalı bağlantı** üretilir ✅.
-- Yüklemede boyut, MIME türü ve uzantı doğrulanır ✅; içerik taraması
-  (zararlı yazılım) ❓ karar bekliyor.
-- **Yükleme anında sınıflandırma 🔜:** "Bu evrak kişisel veri içeriyor mu?"
-  işareti + gizlilik düzeyi + saklama süresi zorunludur. "Emin değilim"
-  seçilirse evrak **en kısıtlayıcı** politikayla başlar ve sınıflandırma onayı
-  bekler ❓OD9 (işaretin kim tarafından doğrulanacağı).
-- **Erişim politikası 🔜:** kişisel veri içeren evraklar yalnızca yetki +
-  gerekçe (+ gerekiyorsa süreli izin) ile açılır; K3 evrakı için varsayılan
-  erişim **reddedilir**.
-- **Varlık ≠ içerik 🔜:** "evrak var" bilgisi ile "içeriğini gör/indir" farklı
-  izinlerdir.
-- Görüntüleme/indirme/paylaşım/silme işlemleri denetim kaydına yazılır 🔜.
-- Paylaşım bağlantıları süreli, tek amaçlı ve iptal edilebilirdir 🔜.
-- Silme, mantıksal silme + saklama süresi sonunda gerçek silme şeklindedir;
-  hukuki saklama gerektiren evraklar kullanıcı tarafından silinemez ❓OD6.
+- Boyut ve uzantı allowlist'i sunucuda doğrulanır. Fotoğraflarda temel dosya imzası
+  kontrol edilir.
+- `FILE_SCANNING_REQUIRED` üretimde varsayılan olarak açıktır. ClamAV `clamd`
+  `INSTREAM` protokolüyle temiz sonuç vermedikçe dosya saklanmaz; bulaşma 400,
+  tarayıcı eksik/erişilemez/geçersiz yanıt verirse 503 döner. Ortam değişkenleri
+  `.env.example` içinde belgelenmiştir. Ubuntu systemd deployment'ı için
+  `sudo bash scripts/setup_clamav.sh` servisi loopback `127.0.0.1:3310` ile kurar;
+  kurulumdan sonra `persopyro-web` yeniden başlatılmalıdır.
+- PDF, Poppler `pdfinfo` ile yapısal olarak açılır; OOXML/ODF ZIP üyeleri, ana XML
+  ve boyut/sıkıştırma sınırları kontrol edilir; eski DOC/XLS/PPT dosyaları OLE
+  yapısı ve ana akış adına göre doğrulanır. RTF, CSV ve metin dosyaları da biçim
+  kontrollerinden geçer. Geçersiz içerik 400, PDF doğrulayıcısı yoksa 503 döner.
+- **Kalan risk:** Office/PDF içerik türü ve yapısal doğrulaması ayrıca yapılmaz;
+  ClamAV imzalarının güncelliği ve tarayıcının özel ağda çalıştırılması işletim
+  sorumluluğundadır. Yerel geliştirmede tarama varsayılan olarak kapalıdır.
+- Dosya sınıflandırması, saklama/gerçek silme politikası ve platform erişiminin
+  kiracıya görünür kaydı henüz tam uygulanmamıştır.
 
 ---
 
@@ -796,10 +790,9 @@ Açık olanlar:
 | **Custom alan yok (v1)** | Serbest alan tanımı P9+'a bırakıldı; geldiğinde **K sınıflandırması zorunlu** ve dosya tipi yasak (dosya P3 documents). Bu karar, sınıflandırma dışına veri kaçışını engeller |
 | **Genel kimlik ile arama yok** | OD14 (LATER) gereği P1 araması `employee_no` + ad (kiracı içi) ile sınırlıdır; e-posta/telefon ile arama P1'de **eklenmez** |
 
-**Yeni açıklık (güvenlik bulgusu) — P1 turunda üretilmedi:** ölçümde P1 kararları **yeni bir
-açıklık yaratmıyor**; aksine iki bilinen boşluğu kapatıyor (PII yazma izni ayrımı, erişim kesme).
-Açık kalan güvenlik konuları **P1 kapsamı dışıdır**: MFA (OD10, LATER), ülke/veri yurt dışı aktarım
-kuralları (P7), belge zararlı yazılım taraması (P3).
+**Tarihsel not (P1 turu):** Bu bölüm P1 incelemesinin durumunu kaydeder; dosya zararlı yazılım
+tarama kontrolü 2026-10-11'de üretim için ClamAV entegrasyonuyla eklendi (güncel yapılandırma
+§9'da). MFA ve ülke/veri yurt dışı aktarım kuralları hâlâ ayrı çalışma başlıklarıdır.
 
 ---
 
@@ -820,8 +813,7 @@ kuralları (P7), belge zararlı yazılım taraması (P3).
 | **Denetim izi** | Oluşturma/karar/iptal `log_action` ile yazılır (`overtime.request.create`, `.approve_step`, `.approve`, `.reject`, `.cancel`); serbest metin ve PII **yazılmaz** |
 | **Hesap numaralandırma** | Fazla mesai ve hak yönetimi uçları, mevcut kimlik doğrulama/CSRF/oturum davranışını değiştirmez; kapsam dışı kaynaklar **404** döner |
 
-**Yeni açıklık (güvenlik bulgusu) — bu turda üretilmedi:** P1-B ölçümlerinde (43 lifecycle testi,
-fresh-install 6g invariantları, gerçek HTTP smoke) yeni bir açıklık **bulunmadı**. `auth_version`
-enforcement ve token snapshot doğrulamaları `scripts/verify_fresh_install.sh` (6g) adımıyla her
-kurulumda otomatik doğrulanır. Bu paket dışında bırakılan bilinen açıklık: **F12** (§5.1 — kilit
-sayacı sıfırlanmıyor; P1-B'ye karıştırılmadı, AÇIK kalıyor).
+**Tarihsel not (P1-B turu):** Bu bölüm P1-B ölçümlerinin durumunu kaydeder. F12 kilit sayacının
+süresi dolunca sıfırlanmaması 2026-10-11'de tenant ve platform girişlerinde düzeltildi; yeni
+başarısız parola denemesi sayaç değerini 1'den başlatır. `auth_version` enforcement ve token
+snapshot doğrulamaları `scripts/verify_fresh_install.sh` (6g) adımıyla her kurulumda doğrulanır.

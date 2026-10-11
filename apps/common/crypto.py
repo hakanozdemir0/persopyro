@@ -36,8 +36,8 @@ def _fernet() -> Fernet:
     except (ValueError, TypeError) as exc:
         raise ImproperlyConfigured(
             f"{_ENV_KEY} geçersiz. Fernet anahtarı 32 baytlık base64 olmalıdır "
-            "(üretimi: python3 -c \"import base64,os;print("
-            "base64.urlsafe_b64encode(os.urandom(32)).decode())\")."
+            '(üretimi: python3 -c "import base64,os;print('
+            'base64.urlsafe_b64encode(os.urandom(32)).decode())").'
         ) from exc
 
 

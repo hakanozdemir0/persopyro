@@ -16,7 +16,70 @@
   </section>
 
   {% if can_read_pii %}
-    <div class="card"><p class="card-intro">Kişisel veriler görüntüleniyor; bu erişim denetim kaydına yazıldı.</p></div>
+    <div class="card"><p class="card-intro">Kişisel veriler onaylı, süreli erişim kapsamında görüntüleniyor; erişim denetim kaydına yazıldı.</p></div>
+  {% endif %}
+
+  {% if access_error %}<div class="card"><p class="card-intro">{{ access_error }}</p></div>{% endif %}
+
+  {% if not can_read_pii %}
+  <section class="card" aria-label="Süreli çalışan verisi erişim talebi">
+    <h2>Süreli kişisel veri erişimi iste</h2>
+    <p class="card-intro">Seçilen alanlar en fazla 60 dakika açılır ve iki farklı platform yöneticisinin onayını gerektirir. K3 sağlık verileri ayrıca açıkça seçilmelidir.</p>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="request_access">
+      <fieldset>
+        <legend>İstenen alanlar</legend>
+        {% for code, label in employee_field_choices %}
+        <label class="check-row"><input type="checkbox" name="fields" value="{{ code }}"> {{ label }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>Erişilecek çalışan kayıtları (en fazla 50)</legend>
+        {% for person in requestable_employees %}
+        <label class="check-row"><input type="checkbox" name="resources" value="{{ person.id }}"> {{ person.employee_no }}</label>
+        {% empty %}<p>Seçilebilecek etkin çalışan kaydı yok.</p>{% endfor %}
+      </fieldset>
+      <label>İş gerekçesi (en az 20 karakter ve 3 kelime)
+        <textarea name="purpose" minlength="20" required></textarea>
+      </label>
+      <label>Erişim süresi (dakika)
+        <input type="number" name="ttl_minutes" min="1" max="60" value="30" required>
+      </label>
+      <button type="submit">İki onaya gönder</button>
+    </form>
+  </section>
+  {% endif %}
+
+  {% if access_requests %}
+  <section class="card" aria-label="Kişisel veri erişim talepleri">
+    <h2>Erişim talepleri</h2>
+    {% for access_request in access_requests %}
+    <article class="card">
+      <p><strong>{{ access_request.purpose }}</strong></p>
+      <p>İşlem: {{ access_request.operation }} · Durum: {{ access_request.status }} · Süre: {{ access_request.ttl_minutes }} dk · Onay: {{ access_request.approval_count }}/2</p>
+      <p>Alanlar: {% for field in access_request.fields %}{% for code, label in employee_field_choices %}{% if code == field %}{{ label }}{% endif %}{% endfor %}{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+      {% if access_request.resource_labels %}<p>Çalışanlar: {{ access_request.resource_labels|join:", " }}</p>{% endif %}
+      {% if access_request.grant_id and access_request.requester_id == actor_id %}
+        {% if access_request.grant_active %}
+          <a class="button" href="{% url 'platform-tenant-people' tenant_id %}?grant_id={{ access_request.grant_id }}">Onaylı verileri aç ({{ access_request.expires_at }})</a>
+          <form method="post" class="inline-form">
+            {% csrf_token %}<input type="hidden" name="action" value="revoke_access"><input type="hidden" name="grant_id" value="{{ access_request.grant_id }}">
+            <button type="submit" class="danger">Erişimi şimdi iptal et</button>
+          </form>
+        {% else %}<p>Erişim süresi sona erdi veya iptal edildi.</p>{% endif %}
+      {% endif %}
+      {% if can_approve_access and access_request.status == "pending" and access_request.requester_id != actor_id %}
+      <form method="post">
+        {% csrf_token %}<input type="hidden" name="action" value="decide_access"><input type="hidden" name="request_id" value="{{ access_request.id }}">
+        <label>Karar açıklaması <input name="reason" maxlength="500"></label>
+        <button type="submit" name="decision" value="approve">Onayla</button>
+        <button type="submit" name="decision" value="reject" class="danger">Reddet</button>
+      </form>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </section>
   {% endif %}
 
   <section class="card" aria-label="Çalışan listesi">
@@ -35,8 +98,7 @@
             <td>{% if person.has_account %}Var{% else %}Yok{% endif %}</td>
             {% if can_read_pii %}
             <td>
-              {% if person.user %}<strong>{{ person.user.first_name }} {{ person.user.last_name }}</strong><br>{{ person.user.email }}<br>{{ person.user.phone }}{% endif %}
-              {% if person.personal_data %}<details><summary>Kişisel / hassas alanları göster</summary><dl>{% for key, value in person.personal_data.items %}<dt>{{ key }}</dt><dd>{{ value|default:"—" }}</dd>{% endfor %}</dl></details>{% endif %}
+              {% if person.personal_data %}<details open><summary>Onaylı kişisel alanlar</summary><dl>{% for key, value in person.personal_data.items %}<dt>{% for code, label in employee_field_choices %}{% if code == key %}{{ label }}{% endif %}{% endfor %}</dt><dd>{% if value.items %}{% for subkey, subvalue in value.items %}{{ subkey }}: {{ subvalue|default:"—" }}{% if not forloop.last %}<br>{% endif %}{% endfor %}{% else %}{{ value|default:"—" }}{% endif %}</dd>{% endfor %}</dl></details>{% endif %}
             </td>
             {% endif %}
           </tr>

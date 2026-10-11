@@ -54,12 +54,9 @@ class Command(BaseCommand):
             self.stdout.write(f"  {slug}: aktif_kullanici={aktif} is_staff_true={staff}")
 
         self.stdout.write(
-            f"kiracı={len(kiraclar)} aktif_kullanici={aktif_toplam} "
-            f"is_staff_true={len(ihlaller)}"
+            f"kiracı={len(kiraclar)} aktif_kullanici={aktif_toplam} is_staff_true={len(ihlaller)}"
         )
-        self.stdout.write(
-            f"DB kısıtı {KISIT_ADI}: {'var' if kisit_var else 'YOK (uygulanmamış!)'}"
-        )
+        self.stdout.write(f"DB kısıtı {KISIT_ADI}: {'var' if kisit_var else 'YOK (uygulanmamış!)'}")
 
         if ihlaller:
             for slug, email in ihlaller:
